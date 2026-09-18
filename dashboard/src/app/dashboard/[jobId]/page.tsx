@@ -147,9 +147,11 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
         statusRef.current = "queued";
         try {
             // Only the job id is sent — the API re-reads the stored URL/config.
+            // A retry reuses the saved transcription checkpoint (4.2) when the
+            // pipeline recorded one, skipping straight back to clip preparation.
             const res = await fetch("/api/trigger-pipeline", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ job_id: job.id }),
+                body: JSON.stringify({ job_id: job.id, resume: Boolean(job.checkpoint_url) }),
             });
             if (!res.ok) {
                 const payload = await res.json().catch(() => null);
