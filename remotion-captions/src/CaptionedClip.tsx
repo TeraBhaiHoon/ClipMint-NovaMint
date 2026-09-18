@@ -1,13 +1,28 @@
 /**
- * CaptionedClip — ClipMint's professional animated caption renderer.
+ * CaptionedClip — ClipMint's animated caption renderer.
  *
- * Skills applied:
- * ├── fonts.md          → @remotion/google-fonts (Inter loaded, render-blocking)
- * ├── display-captions  → createTikTokStyleCaptions() for smart page grouping
- * ├── timing.md         → Easing.bezier() curves for premium animation feel
- * ├── audio-viz.md      → visualizeAudio() for bass-reactive caption effects
- * ├── silence-detect.md → trimStartSec / trimEndSec props for clean clip edges
- * └── videos.md         → @remotion/media <Video> with trimBefore / trimAfter
+ * Design rules this file follows (learned from production failures):
+ *
+ * 1. Page grouping is DONE HERE, deterministically. We do not depend on
+ *    `createTikTokStyleCaptions`, whose page breaks require each caption token
+ *    to start with a space. Our transcription pipeline strips whitespace from
+ *    every word, so that helper collapsed an entire clip into a single page and
+ *    captions disappeared after ~1.2s. Grouping by word count / character count /
+ *    silence gap / sentence end is independent of whitespace and can never fail
+ *    that way.
+ *
+ * 2. Every animation duration is expressed in SECONDS and converted with the
+ *    composition fps — never as a raw frame count — so a 60fps render behaves
+ *    like a 30fps render.
+ *
+ * 3. Page exit animations use the PAGE's duration, not the composition's.
+ *
+ * 4. Captions respect platform safe areas, so nothing lands under the Reels /
+ *    Shorts / TikTok UI chrome.
+ *
+ * 5. Audio reactivity is opt-in (`audioReactive`). `useWindowedAudioData`
+ *    cancels the whole render when it cannot decode a track, which silently
+ *    killed every clip that had no audio stream.
  */
 import React, { useMemo } from "react";
 import {
@@ -17,55 +32,62 @@ import {
     Sequence,
     interpolate,
     Easing,
-    spring,
     staticFile,
 } from "remotion";
 import { Video } from "@remotion/media";
 import { z } from "zod";
 import { zColor } from "@remotion/zod-types";
-import {
-    type Caption,
-    type TikTokPage,
-    createTikTokStyleCaptions,
-} from "@remotion/captions";
+import { type Caption } from "@remotion/captions";
 import { loadFont } from "@remotion/google-fonts/Inter";
-import {
-    useWindowedAudioData,
-    visualizeAudio,
-} from "@remotion/media-utils";
+import { useWindowedAudioData, visualizeAudio } from "@remotion/media-utils";
 
 // ---------------------------------------------------------------------------
-// Font Loading — blocks render until Inter is available (fonts.md skill)
+// Fonts — loaded render-blocking so CI output matches the Studio preview
 // ---------------------------------------------------------------------------
 const { fontFamily: interFont } = loadFont("normal", {
-    weights: ["400", "500", "700", "800", "900"],
+    weights: ["400", "500", "600", "700", "800", "900"],
     subsets: ["latin"],
 });
 
 // ---------------------------------------------------------------------------
-// Constants
+// Safe areas
+//
+// Platform UI covers the bottom and right of a vertical video. Captions placed
+// inside those regions get hidden behind the app's own chrome, so every style
+// anchors above the reserved strip.
 // ---------------------------------------------------------------------------
+const SAFE_AREAS = {
+    tiktok: { bottom: 340, right: 150, top: 140, left: 60 },
+    reels: { bottom: 320, right: 140, top: 140, left: 60 },
+    shorts: { bottom: 280, right: 110, top: 110, left: 60 },
+} as const;
 
-/** How often captions should switch pages (ms). Lower = fewer words per page.
- *  1200ms ≈ 2-4 words, respects silence boundaries automatically. */
-const SWITCH_CAPTIONS_EVERY_MS = 1200;
+// ---------------------------------------------------------------------------
+// Timing (seconds — converted to frames per composition)
+// ---------------------------------------------------------------------------
+const ENTER_SEC = 0.18;
+const EXIT_SEC = 0.14;
+const MIN_PAGE_SEC = 0.35;
+const HOLD_AFTER_LAST_WORD_SEC = 0.18;
+/** Shortest observable blank window between two caption pages. Below this the
+ *  previous page is held until the next one starts, so captions never flicker. */
+const BLANK_TOLERANCE_MS = 700;
 
-/** Bezier curves from timing.md skill — copy-paste ready */
+/** Bezier curves tuned for a crisp, premium feel. */
 const EASE_CRISP_ENTER = Easing.bezier(0.16, 1, 0.3, 1);
 const EASE_EDITORIAL = Easing.bezier(0.45, 0, 0.55, 1);
 const EASE_PLAYFUL_OVERSHOOT = Easing.bezier(0.34, 1.56, 0.64, 1);
 
 // ---------------------------------------------------------------------------
-// Schema — defines props that can be set from CLI / Remotion Studio
+// Schema
 // ---------------------------------------------------------------------------
 export const captionedClipSchema = z.object({
-    /** Path to the source video clip (relative to public/). Empty = captions-only. */
+    /** File name inside public/ of the clip to caption. Empty = captions only. */
     videoSrc: z.string().default(""),
-    /** Composition duration in frames. Overridden by calculateMetadata at render time. */
+    /** Composition length in frames. Also the length of the visible clip portion. */
     durationInFrames: z.number().int().min(1).default(300),
-    /** JSON string of Caption[] — per-word timestamps from Groq verbose_json. */
+    /** JSON string of Caption[] (per-word timestamps). */
     captionsData: z.string(),
-    /** Caption animation style preset. */
     captionStyle: z.enum([
         "hormozi",
         "bounce",
@@ -77,39 +99,199 @@ export const captionedClipSchema = z.object({
         "colorful",
         "minimal",
     ]),
-    /** Background color (used only when videoSrc is empty). */
+    /** Background colour, used only when videoSrc is empty. */
     backgroundColor: zColor(),
-    /** Accent color for highlights. */
+    /** Accent colour for highlighted words, progress bar and glows. */
     accentColor: zColor(),
-    /** Base font size in pixels. */
-    fontSize: z.number().min(24).max(120),
-    /** Seconds of leading silence to trim from clip start (silence-detection.md). */
+    /** Base caption size in px. Auto-shrinks per page if a word would overflow. */
+    fontSize: z.number().min(24).max(140).default(68),
+
+    // ── Clip trimming ──────────────────────────────────────────────────────
+    // Both are offsets into the SOURCE clip in seconds. The composition shows
+    // `durationInFrames` frames starting at trimStartSec.
+    /** Seconds of leading silence/lead-in to skip. */
     trimStartSec: z.number().min(0).default(0),
-    /** Seconds to trim from clip end (silence-detection.md). 0 = no trim. */
+    /** Seconds of trailing silence/lead-out to skip. */
     trimEndSec: z.number().min(0).default(0),
+
+    // ── Framing ────────────────────────────────────────────────────────────
+    /**
+     * cover  — the clip already fills 9:16 (pre-reframed pipeline output). Best
+     *          quality: one decoder, no blur.
+     * fill   — landscape/other source: blurred cover background + contained
+     *          foreground so nothing is cropped away.
+     */
+    layout: z.enum(["cover", "fill"]).default("cover"),
+
+    // ── Layout / pacing ────────────────────────────────────────────────────
+    platform: z.enum(["tiktok", "reels", "shorts"]).default("tiktok"),
+    /** Hard cap on words shown at once. */
+    maxWordsPerPage: z.number().int().min(1).max(8).default(4),
+    /** Hard cap on characters per page, which drives line wrapping. */
+    maxCharsPerPage: z.number().int().min(8).max(60).default(26),
+    /** A pause longer than this starts a new page. */
+    pageBreakGapMs: z.number().int().min(50).max(2000).default(420),
+
+    // ── Overlays ───────────────────────────────────────────────────────────
+    showWatermark: z.boolean().default(true),
+    brandText: z.string().default("CLIPMINT"),
+    showProgressBar: z.boolean().default(true),
+    /**
+     * Whether the source clip actually contains an audio stream. ffprobe
+     * result, supplied by the pipeline.
+     *
+     * This is a SAFETY interlock, not a hint. `useWindowedAudioData` calls
+     * `cancelRender()` — which cannot be caught — when it cannot find a track,
+     * so mounting the audio analyser on a silent clip aborts the entire render.
+     * The analyser is therefore only mounted when the caller asserts BOTH
+     * `audioReactive` and `hasAudio`.
+     */
+    hasAudio: z.boolean().default(false),
+    /** Pulse captions with the audio. Requires `hasAudio: true` to take effect. */
+    audioReactive: z.boolean().default(false),
 });
 
 export type CaptionedClipProps = z.infer<typeof captionedClipSchema>;
 
 // ---------------------------------------------------------------------------
-// Bass-Reactive Hook (audio-visualization.md skill)
+// Caption page model
 // ---------------------------------------------------------------------------
-function useBassIntensity(videoSrc: string): number {
+type WordToken = {
+    text: string;
+    fromMs: number;
+    toMs: number;
+};
+
+type CaptionPage = {
+    tokens: WordToken[];
+    startMs: number;
+    endMs: number;
+};
+
+const isSentenceEnd = (text: string) => /[.!?…]"?$/.test(text.trim());
+
+/**
+ * Deterministic word grouping. A page is closed when ANY of these is true:
+ * the next word would exceed the word cap, the character cap, or the maximum
+ * page duration; the next word starts after a noticeable pause; or the previous
+ * word ended a sentence.
+ *
+ * Unlike `createTikTokStyleCaptions`, this never inspects leading whitespace,
+ * so it is immune to the whitespace-stripping that broke production captions.
+ */
+export function buildCaptionPages(
+    tokens: WordToken[],
+    opts: {
+        maxWords: number;
+        maxChars: number;
+        gapMs: number;
+        maxPageMs: number;
+    },
+): CaptionPage[] {
+    const pages: CaptionPage[] = [];
+    let current: CaptionPage | null = null;
+    let currentChars = 0;
+
+    const flush = () => {
+        if (current && current.tokens.length > 0) pages.push(current);
+        current = null;
+        currentChars = 0;
+    };
+
+    for (const token of tokens) {
+        const text = token.text.trim();
+        if (!text) continue;
+
+        const word: WordToken = {
+            text,
+            fromMs: token.fromMs,
+            // Guarantee forward progress even if upstream emitted a bad range.
+            toMs: Math.max(token.toMs, token.fromMs + 80),
+        };
+
+        if (current) {
+            const gap = word.fromMs - current.endMs;
+            const prevLast = current.tokens[current.tokens.length - 1];
+            const wouldOverflowWords = current.tokens.length + 1 > opts.maxWords;
+            const wouldOverflowChars = currentChars + word.text.length + 1 > opts.maxChars;
+            const wouldOverflowTime = word.toMs - current.startMs > opts.maxPageMs;
+            const afterSentence = isSentenceEnd(prevLast.text);
+
+            if (
+                gap > opts.gapMs ||
+                wouldOverflowWords ||
+                wouldOverflowChars ||
+                wouldOverflowTime ||
+                afterSentence
+            ) {
+                flush();
+            }
+        }
+
+        if (!current) {
+            current = { tokens: [], startMs: word.fromMs, endMs: word.toMs };
+        }
+        current.tokens.push(word);
+        current.endMs = Math.max(current.endMs, word.toMs);
+        currentChars += word.text.length + 1;
+    }
+
+    flush();
+    return pages;
+}
+
+/**
+ * Shrink the base size when a page contains a word long enough to overflow the
+ * caption column. Prevents "CRYPTOCURRENCY" from running off a 1080px frame.
+ */
+export function fitFontSize(
+    tokens: WordToken[],
+    baseSize: number,
+    maxWidth: number,
+    uppercase: boolean,
+): number {
+    let longest = 0;
+    for (const t of tokens) longest = Math.max(longest, t.text.length);
+    if (longest === 0) return baseSize;
+
+    // Advance-width estimate for Inter (black weight, uppercase is wider).
+    const perChar = uppercase ? 0.62 : 0.55;
+    const widest = longest * baseSize * perChar;
+    if (widest <= maxWidth) return baseSize;
+
+    const scaled = Math.floor((baseSize * maxWidth) / widest);
+    return Math.max(30, scaled);
+}
+
+// ---------------------------------------------------------------------------
+// Audio reactivity — opt-in, provided through context.
+//
+// `useWindowedAudioData` calls cancelRender() when it cannot decode a track, so
+// calling it for a silent clip aborts the whole render (this is what used to
+// kill every clip without an audio stream). Because hooks cannot be called
+// conditionally, the hook lives in a provider that is mounted ONLY when
+// `audioReactive` is on. Every style then reads the value from context, which
+// is 0 when the provider is absent.
+// ---------------------------------------------------------------------------
+const BassContext = React.createContext(0);
+const useBass = () => React.useContext(BassContext);
+
+const BassProvider: React.FC<{ src: string; children: React.ReactNode }> = ({
+    src,
+    children,
+}) => {
     const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
 
-    const audioSrc = videoSrc ? staticFile(videoSrc) : undefined;
-
     const { audioData, dataOffsetInSeconds } = useWindowedAudioData({
-        src: audioSrc ?? staticFile("silence.mp3"),
+        src,
         frame,
         fps,
-        windowInSeconds: 10,
-        enabled: Boolean(audioSrc),
+        windowInSeconds: 2,
     });
 
-    return useMemo(() => {
-        if (!audioData || !audioSrc) return 0;
+    const value = useMemo(() => {
+        if (!audioData) return 0;
         try {
             const frequencies = visualizeAudio({
                 fps,
@@ -119,20 +301,185 @@ function useBassIntensity(videoSrc: string): number {
                 optimizeFor: "speed",
                 dataOffsetInSeconds,
             });
-            // Bass = lowest 16 frequency bins
-            const lowFreqs = frequencies.slice(0, 16);
-            return lowFreqs.reduce((sum, v) => sum + v, 0) / lowFreqs.length;
+            const low = frequencies.slice(0, 16);
+            return low.reduce((sum, v) => sum + v, 0) / low.length;
         } catch {
             return 0;
         }
-    }, [audioData, audioSrc, frame, fps, dataOffsetInSeconds]);
-}
+    }, [audioData, frame, fps, dataOffsetInSeconds]);
+
+    return <BassContext.Provider value={value}>{children}</BassContext.Provider>;
+};
 
 // ---------------------------------------------------------------------------
-// Main Composition
+// Shared word renderer — consistent stroke/shadow/karaoke across all styles
+// ---------------------------------------------------------------------------
+const WordTokenSpan: React.FC<{
+    token: WordToken;
+    fontSize: number;
+    weight: number;
+    color: string;
+    activeColor: string;
+    isActive: boolean;
+    karaokeProgress: number;
+    accentColor: string;
+    uppercase: boolean;
+    strokeWidth: number;
+    scale: number;
+    glow?: number;
+    letterSpacing?: number;
+    dimmed?: boolean;
+}> = ({
+    token,
+    fontSize,
+    weight,
+    color,
+    activeColor,
+    isActive,
+    karaokeProgress,
+    accentColor,
+    uppercase,
+    strokeWidth,
+    scale,
+    glow = 0,
+    letterSpacing = 0,
+    dimmed = false,
+}) => {
+    const common: React.CSSProperties = {
+        fontSize,
+        fontFamily: interFont,
+        fontWeight: weight,
+        textTransform: uppercase ? "uppercase" : "none",
+        letterSpacing,
+        // paintOrder keeps the outline behind the glyph instead of eating into it
+        WebkitTextStroke: strokeWidth > 0 ? `${strokeWidth}px rgba(0,0,0,0.85)` : undefined,
+        paintOrder: "stroke fill",
+        whiteSpace: "pre",
+    };
+
+    const shadow = [
+        glow > 0 ? `0 0 ${glow}px ${accentColor}` : null,
+        glow > 0 ? `0 0 ${glow * 2}px ${accentColor}66` : null,
+        "0 4px 10px rgba(0,0,0,0.65)",
+    ]
+        .filter(Boolean)
+        .join(", ");
+
+    // Karaoke: a coloured copy clipped from the left so the fill sweeps the
+    // word exactly in time with the voice.
+    const useKaraoke = isActive && karaokeProgress > 0 && karaokeProgress < 1;
+
+    return (
+        <span
+            style={{
+                ...common,
+                display: "inline-block",
+                position: "relative",
+                transform: `scale(${scale})`,
+                textShadow: shadow,
+                color: isActive ? activeColor : color,
+                opacity: dimmed ? 0.55 : 1,
+            }}
+        >
+            {useKaraoke ? (
+                <>
+                    <span style={{ color, WebkitTextStroke: common.WebkitTextStroke }}>
+                        {token.text}
+                    </span>
+                    <span
+                        aria-hidden
+                        style={{
+                            ...common,
+                            position: "absolute",
+                            left: 0,
+                            top: 0,
+                            color: activeColor,
+                            clipPath: `inset(0 ${(1 - karaokeProgress) * 100}% 0 0)`,
+                        }}
+                    >
+                        {token.text}
+                    </span>
+                </>
+            ) : (
+                token.text
+            )}
+        </span>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// Caption column — anchored inside the platform safe area
+// ---------------------------------------------------------------------------
+const CaptionColumn: React.FC<{
+    children: React.ReactNode;
+    platform: keyof typeof SAFE_AREAS;
+    width: number;
+}> = ({ children, platform, width }) => {
+    const safe = SAFE_AREAS[platform];
+    return (
+        <AbsoluteFill
+            style={{
+                justifyContent: "flex-end",
+                alignItems: "center",
+                paddingBottom: safe.bottom,
+                paddingLeft: safe.left,
+                paddingRight: safe.right,
+            }}
+        >
+            <div
+                style={{
+                    maxWidth: width - safe.left - safe.right,
+                    textAlign: "center",
+                    // Explicit line height: the default ~1.2 makes multi-line
+                    // captions collide with the outline.
+                    lineHeight: 1.14,
+                }}
+            >
+                {children}
+            </div>
+        </AbsoluteFill>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// Progress bar — retention cue + polish
+// ---------------------------------------------------------------------------
+const ProgressBar: React.FC<{
+    frame: number;
+    durationInFrames: number;
+    accentColor: string;
+    bottom: number;
+}> = ({ frame, durationInFrames, accentColor, bottom }) => {
+    const progress = Math.min(1, Math.max(0, frame / Math.max(1, durationInFrames - 1)));
+    return (
+        <div
+            style={{
+                position: "absolute",
+                left: 0,
+                right: 0,
+                bottom,
+                height: 6,
+                backgroundColor: "rgba(255,255,255,0.16)",
+            }}
+        >
+            <div
+                style={{
+                    width: `${progress * 100}%`,
+                    height: "100%",
+                    backgroundColor: accentColor,
+                    boxShadow: `0 0 12px ${accentColor}`,
+                }}
+            />
+        </div>
+    );
+};
+
+// ---------------------------------------------------------------------------
+// Main composition
 // ---------------------------------------------------------------------------
 export const CaptionedClip: React.FC<CaptionedClipProps> = ({
     videoSrc,
+    durationInFrames,
     captionsData,
     captionStyle,
     backgroundColor,
@@ -140,42 +487,61 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
     fontSize,
     trimStartSec,
     trimEndSec,
+    layout,
+    platform,
+    maxWordsPerPage,
+    maxCharsPerPage,
+    pageBreakGapMs,
+    showWatermark,
+    brandText,
+    showProgressBar,
+    hasAudio,
+    audioReactive,
 }) => {
     const { width, height, fps } = useVideoConfig();
     const frame = useCurrentFrame();
 
-    // Parse Caption[] from JSON prop
-    const captions = useMemo<Caption[]>(() => {
+    // ── Trim maths (frames are ABSOLUTE positions in the source clip) ──────
+    // `trimAfter` is an end position, not a length. Passing the trailing
+    // silence duration here (the previous behaviour) truncated every clip to
+    // its first ~1.5 seconds.
+    const trimBeforeFrames = Math.max(0, Math.floor(trimStartSec * fps));
+    const trimAfterFrames = trimBeforeFrames + durationInFrames;
+
+    // ── Parse captions ────────────────────────────────────────────────────
+    const tokens = useMemo<WordToken[]>(() => {
         try {
             const parsed = JSON.parse(captionsData);
             if (!Array.isArray(parsed)) return [];
-            return parsed as Caption[];
+            return (parsed as Caption[])
+                .filter((c) => c && typeof c.text === "string" && typeof c.startMs === "number")
+                .map((c) => ({
+                    // Preserve the original spacing intent but normalise the
+                    // value we group on; grouping never depends on it.
+                    text: c.text,
+                    fromMs: c.startMs,
+                    toMs: typeof c.endMs === "number" ? c.endMs : c.startMs + 200,
+                }))
+                .sort((a, b) => a.fromMs - b.fromMs);
         } catch {
             return [];
         }
     }, [captionsData]);
 
-    // Smart page grouping using official API (display-captions.md skill)
-    // Replaces the manual MAX_WORDS=3 loop. Handles silence gaps, natural
-    // phrase boundaries, and whitespace preservation automatically.
+    // ── Group into pages (failsafe: never one giant page) ─────────────────
     const pages = useMemo(() => {
-        if (captions.length === 0) return [];
-        const { pages: tikTokPages } = createTikTokStyleCaptions({
-            captions,
-            combineTokensWithinMilliseconds: SWITCH_CAPTIONS_EVERY_MS,
+        if (tokens.length === 0) return [];
+        return buildCaptionPages(tokens, {
+            maxWords: maxWordsPerPage,
+            maxChars: maxCharsPerPage,
+            gapMs: pageBreakGapMs,
+            maxPageMs: 3800,
         });
-        return tikTokPages;
-    }, [captions]);
+    }, [tokens, maxWordsPerPage, maxCharsPerPage, pageBreakGapMs]);
 
-    // Bass-reactive intensity for styles that pulse with the beat
-    const bassIntensity = useBassIntensity(videoSrc);
+    const maxCaptionWidth = width - SAFE_AREAS[platform].left - SAFE_AREAS[platform].right;
 
-    // Trim frames from silence-detection.md skill
-    const trimBeforeFrames = Math.floor(trimStartSec * fps);
-    const trimAfterFrames =
-        trimEndSec > 0 ? Math.ceil(trimEndSec * fps) : undefined;
-
-    return (
+    const content = (
         <AbsoluteFill
             style={{
                 backgroundColor: videoSrc ? "#000000" : backgroundColor,
@@ -184,122 +550,171 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
                 alignItems: "center",
             }}
         >
-            {/* Source video — blurred background + full-frame foreground */}
-            {/* Uses @remotion/media <Video> with trim support (videos.md skill) */}
             {videoSrc ? (
-                <>
-                    {/* Background: blurred & zoomed to fill 9:16 frame */}
+                layout === "fill" ? (
+                    <>
+                        {/* Landscape source: blurred backdrop. Muted so the audio
+                            track is not mixed in twice and doubled in volume. */}
+                        <AbsoluteFill>
+                            <Video
+                                src={staticFile(videoSrc)}
+                                trimBefore={trimBeforeFrames}
+                                trimAfter={trimAfterFrames}
+                                muted
+                                style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "cover",
+                                    filter: "blur(24px) brightness(0.65)",
+                                    transform: "scale(1.18)",
+                                }}
+                            />
+                        </AbsoluteFill>
+                        <AbsoluteFill
+                            style={{
+                                display: "flex",
+                                justifyContent: "center",
+                                alignItems: "center",
+                            }}
+                        >
+                            <Video
+                                src={staticFile(videoSrc)}
+                                trimBefore={trimBeforeFrames}
+                                trimAfter={trimAfterFrames}
+                                style={{ width: "100%", height: "100%", objectFit: "contain" }}
+                            />
+                        </AbsoluteFill>
+                    </>
+                ) : (
+                    /* Clip already fills 9:16 — single decoder, no letterbox. */
                     <AbsoluteFill>
                         <Video
                             src={staticFile(videoSrc)}
                             trimBefore={trimBeforeFrames}
                             trimAfter={trimAfterFrames}
-                            style={{
-                                width: "100%",
-                                height: "100%",
-                                objectFit: "cover",
-                                filter: "blur(20px)",
-                                transform: "scale(1.15)",
-                            }}
+                            style={{ width: "100%", height: "100%", objectFit: "cover" }}
                         />
                     </AbsoluteFill>
-                    {/* Foreground: original video at full visibility */}
-                    <AbsoluteFill
-                        style={{
-                            display: "flex",
-                            justifyContent: "center",
-                            alignItems: "center",
-                        }}
-                    >
-                        <Video
-                            src={staticFile(videoSrc)}
-                            trimBefore={trimBeforeFrames}
-                            trimAfter={trimAfterFrames}
-                            style={{
-                                width: "100%",
-                                height: "100%",
-                                objectFit: "contain",
-                            }}
-                        />
-                    </AbsoluteFill>
-                </>
+                )
             ) : null}
 
-            {/* Radial vignette — darkens edges so text pops */}
+            {/* Scrim behind the caption band so text stays legible over bright
+                footage. Bottom-weighted rather than a full-frame vignette. */}
             <AbsoluteFill
                 style={{
-                    background: `radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.45) 70%)`,
+                    background: `linear-gradient(to top, rgba(0,0,0,0.68) 0%, rgba(0,0,0,0.35) ${
+                        (SAFE_AREAS[platform].bottom + 340) / height * 100
+                    }%, transparent 62%)`,
                 }}
             />
 
-            {/* ClipMint branding watermark */}
-            <div
-                style={{
-                    position: "absolute",
-                    top: 40,
-                    right: 40,
-                    color: "rgba(255,255,255,0.15)",
-                    fontSize: 24,
-                    fontFamily: interFont,
-                    fontWeight: 700,
-                    letterSpacing: 2,
-                }}
-            >
-                CLIPMINT
-            </div>
+            {showWatermark && brandText ? (
+                <div
+                    style={{
+                        position: "absolute",
+                        top: SAFE_AREAS[platform].top * 0.35,
+                        left: 0,
+                        right: 0,
+                        textAlign: "center",
+                        color: "rgba(255,255,255,0.22)",
+                        fontSize: 22,
+                        fontFamily: interFont,
+                        fontWeight: 700,
+                        letterSpacing: 4,
+                        textTransform: "uppercase",
+                    }}
+                >
+                    {brandText}
+                </div>
+            ) : null}
 
-            {/* Caption pages — each rendered as a Sequence (display-captions.md) */}
+            {showProgressBar ? (
+                <ProgressBar
+                    frame={frame}
+                    durationInFrames={durationInFrames}
+                    accentColor={accentColor}
+                    bottom={0}
+                />
+            ) : null}
+
             {pages.map((page, pageIndex) => {
                 const nextPage = pages[pageIndex + 1] ?? null;
-                const startFrame = Math.round((page.startMs / 1000) * fps);
-                const endFrame = Math.min(
-                    nextPage
-                        ? Math.round((nextPage.startMs / 1000) * fps)
-                        : Infinity,
-                    startFrame +
-                        Math.round((SWITCH_CAPTIONS_EVERY_MS / 1000) * fps),
+
+                const startFrame = Math.max(0, Math.round((page.startMs / 1000) * fps));
+                const nextStartMs = nextPage ? nextPage.startMs : Number.POSITIVE_INFINITY;
+
+                // A page normally clears a beat after its last word. When the next
+                // page follows almost immediately, clearing first opens a visible
+                // blank window (measured at ~130ms in a real render). In that case
+                // the page stays up until the next one arrives. Across a real pause
+                // there is nothing being said, so clearing is correct.
+                const holdEndMs = page.endMs + HOLD_AFTER_LAST_WORD_SEC * 1000;
+                const gapToNextMs = nextStartMs - holdEndMs;
+                const bridgeShortGap =
+                    nextPage !== null && gapToNextMs > 0 && gapToNextMs < BLANK_TOLERANCE_MS;
+
+                const desiredEndMs = bridgeShortGap
+                    ? nextStartMs
+                    : Math.min(nextStartMs, holdEndMs);
+                const endMs = Math.max(desiredEndMs, page.startMs + MIN_PAGE_SEC * 1000);
+                const endFrame = Math.max(
+                    startFrame + 1,
+                    Math.round((endMs / 1000) * fps),
                 );
-                const durationInFrames = Math.max(1, endFrame - startFrame);
+
+                const pageFrames = Math.max(1, endFrame - startFrame);
+                const sized = fitFontSize(page.tokens, fontSize, maxCaptionWidth, true);
 
                 return (
                     <Sequence
-                        key={`page-${pageIndex}`}
+                        key={`page-${pageIndex}-${page.startMs}`}
                         from={startFrame}
-                        durationInFrames={durationInFrames}
+                        durationInFrames={pageFrames}
                     >
                         <PageRenderer
                             page={page}
+                            pageFrames={pageFrames}
                             style={captionStyle}
                             accentColor={accentColor}
-                            fontSize={fontSize}
-                            pageIndex={pageIndex}
+                            fontSize={sized}
                             width={width}
-                            bassIntensity={bassIntensity}
+                            maxWidth={maxCaptionWidth}
+                            platform={platform}
                         />
                     </Sequence>
                 );
             })}
         </AbsoluteFill>
     );
+
+    // Interlock: the audio analyser mounts only when the caller asserts the
+    // clip has audio AND asked for reactivity. Either flag alone keeps the
+    // audio APIs completely untouched, so a silent clip can never abort a render.
+    const mountBassAnalyser = audioReactive && hasAudio && Boolean(videoSrc);
+    return mountBassAnalyser ? (
+        <BassProvider src={staticFile(videoSrc)}>{content}</BassProvider>
+    ) : (
+        content
+    );
 };
 
 // ---------------------------------------------------------------------------
-// PageRenderer — routes to the correct style component
+// Style router
 // ---------------------------------------------------------------------------
 interface PageRendererProps {
-    page: TikTokPage;
+    page: CaptionPage;
+    /** Duration of THIS page, not the composition. */
+    pageFrames: number;
     style: CaptionedClipProps["captionStyle"];
     accentColor: string;
     fontSize: number;
-    pageIndex: number;
     width: number;
-    bassIntensity: number;
+    maxWidth: number;
+    platform: keyof typeof SAFE_AREAS;
 }
 
 const PageRenderer: React.FC<PageRendererProps> = (props) => {
     switch (props.style) {
-        case "hormozi":
-            return <HormoziPage {...props} />;
         case "bounce":
             return <BouncePage {...props} />;
         case "fade":
@@ -316,97 +731,84 @@ const PageRenderer: React.FC<PageRendererProps> = (props) => {
             return <ColorfulPage {...props} />;
         case "minimal":
             return <MinimalPage {...props} />;
+        case "hormozi":
         default:
             return <HormoziPage {...props} />;
     }
 };
 
 // ---------------------------------------------------------------------------
-// Shared wrapper — positions captions in the lower third
+// Shared hooks
 // ---------------------------------------------------------------------------
-const CaptionWrapper: React.FC<{ children: React.ReactNode; width: number }> = ({
-    children,
-    width,
-}) => (
-    <AbsoluteFill
-        style={{
-            justifyContent: "flex-end",
-            alignItems: "center",
-            paddingBottom: 200,
-            paddingLeft: 60,
-            paddingRight: 60,
-        }}
-    >
-        <div style={{ maxWidth: width - 120, textAlign: "center" }}>{children}</div>
-    </AbsoluteFill>
-);
 
-// ---------------------------------------------------------------------------
-// Helper: active token detection using official pattern (display-captions.md)
-// Uses absolute time comparison instead of index-based matching.
-// ---------------------------------------------------------------------------
-function useActiveTokenIndex(page: TikTokPage): number {
+/** Absolute timeline position of the current frame (page-local → clip time). */
+function useAbsoluteTimeMs(page: CaptionPage): number {
     const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
-    // Current time relative to the start of the Sequence
-    const currentTimeMs = (frame / fps) * 1000;
-    // Convert to absolute time by adding the page start
-    const absoluteTimeMs = page.startMs + currentTimeMs;
+    return page.startMs + (frame / fps) * 1000;
+}
 
+function useActiveTokenIndex(page: CaptionPage): number {
+    const now = useAbsoluteTimeMs(page);
     let active = -1;
     for (let i = 0; i < page.tokens.length; i++) {
-        if (
-            page.tokens[i].fromMs <= absoluteTimeMs &&
-            page.tokens[i].toMs > absoluteTimeMs
-        ) {
-            active = i;
-            break;
-        }
+        if (page.tokens[i].fromMs <= now && page.tokens[i].toMs > now) return i;
     }
-    // Fallback: if no token is precisely active, find the most recent one
-    if (active === -1) {
-        for (let i = 0; i < page.tokens.length; i++) {
-            if (page.tokens[i].fromMs <= absoluteTimeMs) {
-                active = i;
-            }
-        }
+    // Between words, keep the most recently spoken word lit.
+    for (let i = 0; i < page.tokens.length; i++) {
+        if (page.tokens[i].fromMs <= now) active = i;
     }
     return active;
 }
 
+/** 0 → 1 progress through the active word, for the karaoke fill. */
+function useKaraokeProgress(page: CaptionPage, activeIdx: number): number {
+    const now = useAbsoluteTimeMs(page);
+    if (activeIdx < 0) return 0;
+    const token = page.tokens[activeIdx];
+    const span = Math.max(1, token.toMs - token.fromMs);
+    return Math.min(1, Math.max(0, (now - token.fromMs) / span));
+}
+
+const pageEnterFrames = (fps: number) => Math.max(1, Math.round(ENTER_SEC * fps));
+const pageExitFrames = (fps: number) => Math.max(1, Math.round(EXIT_SEC * fps));
+
 // ===========================================================================
-// STYLE 1: HORMOZI — word-by-word highlight with bass-reactive pop
+// 1. HORMOZI — word-by-word karaoke highlight with a scale pop
 // ===========================================================================
 const HormoziPage: React.FC<PageRendererProps> = ({
     page,
+    pageFrames,
     accentColor,
     fontSize,
     width,
-    bassIntensity,
+    maxWidth,
+    platform,
 }) => {
+    const bassIntensity = useBass();
     const { fps } = useVideoConfig();
     const frame = useCurrentFrame();
     const activeIdx = useActiveTokenIndex(page);
+    const karaoke = useKaraokeProgress(page, activeIdx);
+    const enter = pageEnterFrames(fps);
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
                     display: "flex",
                     flexWrap: "wrap",
                     justifyContent: "center",
-                    gap: 12,
+                    alignItems: "center",
+                    gap: `${Math.round(fontSize * 0.16)}px`,
                 }}
             >
                 {page.tokens.map((token, i) => {
                     const isActive = i === activeIdx;
-                    const tokenStartFrame = Math.round(
-                        ((token.fromMs - page.startMs) / 1000) * fps,
-                    );
-                    // Crisp entrance with playful overshoot (timing.md)
+                    const tokenStart = Math.round(((token.fromMs - page.startMs) / 1000) * fps);
                     const entrance = interpolate(
-                        Math.max(0, frame - tokenStartFrame),
-                        [0, 8],
+                        Math.max(0, frame - tokenStart),
+                        [0, enter],
                         [0, 1],
                         {
                             easing: EASE_PLAYFUL_OVERSHOOT,
@@ -414,351 +816,444 @@ const HormoziPage: React.FC<PageRendererProps> = ({
                             extrapolateRight: "clamp",
                         },
                     );
-                    // Bass-reactive extra scale on active word (audio-viz.md)
-                    const bassBoost = isActive ? bassIntensity * 0.15 : 0;
-                    const scale = isActive ? 1 + entrance * 0.15 + bassBoost : 1;
+                    const pop = isActive ? 1 + entrance * 0.13 + bassIntensity * 0.12 : 1;
 
                     return (
-                        <span
-                            key={i}
-                            style={{
-                                fontSize,
-                                fontFamily: interFont,
-                                fontWeight: 900,
-                                color: isActive ? accentColor : "#FFFFFF",
-                                textTransform: "uppercase",
-                                WebkitTextStroke: isActive
-                                    ? "0px"
-                                    : "2px rgba(0,0,0,0.8)",
-                                paintOrder: "stroke fill",
-                                transform: `scale(${scale})`,
-                                display: "inline-block",
-                                textShadow: isActive
-                                    ? `0 0 ${30 + bassIntensity * 20}px ${accentColor}66, 0 4px 8px rgba(0,0,0,0.5)`
-                                    : "0 4px 8px rgba(0,0,0,0.5)",
-                                whiteSpace: "pre",
-                            }}
-                        >
-                            {token.text}
-                        </span>
+                        <WordTokenSpan
+                            key={`${i}-${token.fromMs}`}
+                            token={token}
+                            fontSize={fontSize}
+                            weight={900}
+                            color="#FFFFFF"
+                            activeColor={accentColor}
+                            isActive={isActive}
+                            karaokeProgress={karaoke}
+                            accentColor={accentColor}
+                            uppercase
+                            strokeWidth={isActive ? 0 : 2}
+                            scale={pop}
+                            glow={isActive ? 26 + bassIntensity * 26 : 0}
+                        />
                     );
                 })}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 2: BOUNCE — playful overshoot entrance (timing.md)
+// 2. BOUNCE — per-word spring pop with a staggered page rise
 // ===========================================================================
 const BouncePage: React.FC<PageRendererProps> = ({
     page,
+    pageFrames,
     accentColor,
     fontSize,
     width,
-    bassIntensity,
+    platform,
 }) => {
-    const frame = useCurrentFrame();
+    const bassIntensity = useBass();
     const { fps } = useVideoConfig();
-    const text = page.tokens.map((t) => t.text).join("");
+    const frame = useCurrentFrame();
+    const activeIdx = useActiveTokenIndex(page);
+    const karaoke = useKaraokeProgress(page, activeIdx);
+    const enter = pageEnterFrames(fps);
+    const exit = pageExitFrames(fps);
 
-    // Playful overshoot curve instead of basic spring
-    const entrance = interpolate(frame, [0, 15], [0, 1], {
+    const rise = interpolate(frame, [0, enter], [0, 1], {
         easing: EASE_PLAYFUL_OVERSHOOT,
         extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
     });
-    const translateY = interpolate(entrance, [0, 1], [80, 0]);
-    const scale = interpolate(entrance, [0, 1], [0.5, 1]) + bassIntensity * 0.05;
+    // The exit window must be a strictly increasing range. Deriving it as
+    // `pageFrames - exit + 6` produced a DESCENDING range on short pages
+    // (e.g. [48, 46]), and Remotion throws
+    // "inputRange must be strictly monotonically increasing".
+    const exitStart = Math.max(0, pageFrames - exit);
+    const exitEnd = Math.max(exitStart + 1, pageFrames);
+    const settle = interpolate(frame, [exitStart, exitEnd], [1, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+    });
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
-                    fontSize,
-                    fontFamily: interFont,
-                    fontWeight: 900,
-                    color: "#FFFFFF",
-                    textTransform: "uppercase",
-                    transform: `translateY(${translateY}px) scale(${scale})`,
-                    textShadow: `0 0 20px ${accentColor}88, 0 6px 12px rgba(0,0,0,0.6)`,
-                    WebkitTextStroke: "2px rgba(0,0,0,0.6)",
-                    paintOrder: "stroke fill",
-                    whiteSpace: "pre",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    justifyContent: "center",
+                    transform: `translateY(${(1 - rise) * 60}px) scale(${0.86 + rise * 0.14})`,
+                    opacity: settle,
                 }}
             >
-                {text}
+                {page.tokens.map((token, i) => {
+                    const isActive = i === activeIdx;
+                    const tokenStart = Math.round(((token.fromMs - page.startMs) / 1000) * fps);
+                    const wordIn = interpolate(
+                        Math.max(0, frame - tokenStart),
+                        [0, Math.max(2, enter + 4)],
+                        [0, 1],
+                        {
+                            easing: EASE_PLAYFUL_OVERSHOOT,
+                            extrapolateLeft: "clamp",
+                            extrapolateRight: "clamp",
+                        },
+                    );
+                    return (
+                        <WordTokenSpan
+                            key={`${i}-${token.fromMs}`}
+                            token={token}
+                            fontSize={fontSize}
+                            weight={900}
+                            color="#FFFFFF"
+                            activeColor={accentColor}
+                            isActive={isActive}
+                            karaokeProgress={karaoke}
+                            accentColor={accentColor}
+                            uppercase
+                            strokeWidth={2}
+                            scale={(0.7 + wordIn * 0.3) * (isActive ? 1.08 + bassIntensity * 0.1 : 1)}
+                            glow={isActive ? 22 : 0}
+                        />
+                    );
+                })}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 3: FADE — editorial ease-in-out (timing.md)
+// 3. FADE — soft editorial cross-fade, exits on its OWN duration
 // ===========================================================================
-const FadePage: React.FC<PageRendererProps> = ({ page, fontSize, width }) => {
+const FadePage: React.FC<PageRendererProps> = ({ page, pageFrames, fontSize, width, platform }) => {
     const frame = useCurrentFrame();
-    const { durationInFrames } = useVideoConfig();
-    const text = page.tokens.map((t) => t.text).join("");
+    const { fps } = useVideoConfig();
+    const enter = pageEnterFrames(fps);
+    const exit = pageExitFrames(fps);
 
-    // Editorial ease-in-out curve for smooth fade
-    const fadeIn = interpolate(frame, [0, 12], [0, 1], {
+    const fadeIn = interpolate(frame, [0, enter + 4], [0, 1], {
         easing: EASE_EDITORIAL,
         extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
     });
-    const fadeOut = interpolate(
-        frame,
-        [durationInFrames - 12, durationInFrames],
-        [1, 0],
-        {
-            easing: EASE_EDITORIAL,
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-        },
-    );
+    // pageFrames, NOT the composition duration — the old code used
+    // useVideoConfig().durationInFrames, so the fade-out never fired.
+    const fadeOut = interpolate(frame, [pageFrames - exit, pageFrames], [1, 0], {
+        easing: EASE_EDITORIAL,
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+    });
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
-                    fontSize: fontSize * 0.9,
-                    fontFamily: interFont,
-                    fontWeight: 700,
-                    color: "#FFFFFF",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    justifyContent: "center",
+                    gap: `${Math.round(fontSize * 0.16)}px`,
                     opacity: fadeIn * fadeOut,
-                    textShadow: "0 4px 12px rgba(0,0,0,0.6)",
-                    whiteSpace: "pre",
+                    transform: `translateY(${(1 - fadeIn) * 14}px)`,
                 }}
             >
-                {text}
+                {page.tokens.map((token, i) => (
+                    <span
+                        key={`${i}-${token.fromMs}`}
+                        style={{
+                            fontSize: fontSize * 0.94,
+                            fontFamily: interFont,
+                            fontWeight: 600,
+                            color: "#FFFFFF",
+                            whiteSpace: "pre",
+                            paintOrder: "stroke fill",
+                            WebkitTextStroke: "1.5px rgba(0,0,0,0.75)",
+                            textShadow: "0 4px 14px rgba(0,0,0,0.7)",
+                            display: "inline-block",
+                        }}
+                    >
+                        {token.text}
+                    </span>
+                ))}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 4: GLOW — pulsing glow with bass-reactive intensity
+// 4. GLOW — bass-reactive bloom on the active word
 // ===========================================================================
 const GlowPage: React.FC<PageRendererProps> = ({
     page,
     accentColor,
     fontSize,
     width,
-    bassIntensity,
+    platform,
 }) => {
+    const bassIntensity = useBass();
     const frame = useCurrentFrame();
-    const pulse = Math.sin(frame * 0.15) * 0.3 + 0.7;
+    const { fps } = useVideoConfig();
     const activeIdx = useActiveTokenIndex(page);
-    // Bass boosts the glow radius
-    const glowMultiplier = pulse + bassIntensity * 0.5;
+    const karaoke = useKaraokeProgress(page, activeIdx);
+    // Pulse is time-based, not frame-index based, so it looks identical at 30
+    // and 60 fps.
+    const pulse = Math.sin((frame / fps) * 3.2) * 0.25 + 0.75;
+    const bloom = pulse + bassIntensity * 0.6;
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
                     display: "flex",
                     flexWrap: "wrap",
                     justifyContent: "center",
-                    gap: 10,
+                    gap: `${Math.round(fontSize * 0.16)}px`,
                 }}
             >
                 {page.tokens.map((token, i) => {
                     const isActive = i === activeIdx;
                     return (
-                        <span
-                            key={i}
-                            style={{
-                                fontSize,
-                                fontFamily: interFont,
-                                fontWeight: 800,
-                                color: isActive ? accentColor : "#FFFFFF",
-                                textShadow: isActive
-                                    ? `0 0 ${20 * glowMultiplier}px ${accentColor}, 0 0 ${40 * glowMultiplier}px ${accentColor}88`
-                                    : "0 4px 8px rgba(0,0,0,0.5)",
-                                textTransform: "uppercase",
-                                display: "inline-block",
-                                whiteSpace: "pre",
-                            }}
-                        >
-                            {token.text}
-                        </span>
+                        <WordTokenSpan
+                            key={`${i}-${token.fromMs}`}
+                            token={token}
+                            fontSize={fontSize}
+                            weight={800}
+                            color="#FFFFFF"
+                            activeColor={accentColor}
+                            isActive={isActive}
+                            karaokeProgress={karaoke}
+                            accentColor={accentColor}
+                            uppercase
+                            strokeWidth={isActive ? 0 : 1.5}
+                            scale={isActive ? 1 + bassIntensity * 0.1 : 1}
+                            glow={isActive ? 30 * bloom : 0}
+                        />
                     );
                 })}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 5: TYPEWRITER — character reveal with eased speed (timing.md)
+// 5. TYPEWRITER — reveals in time with the page, not the whole clip
 // ===========================================================================
-const TypewriterPage: React.FC<PageRendererProps> = ({ page, fontSize, width }) => {
+const TypewriterPage: React.FC<PageRendererProps> = ({
+    page,
+    pageFrames,
+    fontSize,
+    width,
+    platform,
+}) => {
     const frame = useCurrentFrame();
-    const { durationInFrames } = useVideoConfig();
-    const fullText = page.tokens.map((t) => t.text).join("");
+    const { fps } = useVideoConfig();
+    const fullText = page.tokens.map((t) => t.text).join(" ");
 
-    // Eased reveal speed — starts fast, slows down naturally
-    const progress = interpolate(frame, [0, durationInFrames * 0.6], [0, 1], {
+    // Reveal relative to the page length (the old code used the composition
+    // duration, so a 45s clip revealed ~1 character per page).
+    const revealFrames = Math.max(2, Math.min(pageFrames - 2, Math.round(1.1 * fps)));
+    const progress = interpolate(frame, [0, revealFrames], [0, 1], {
         easing: Easing.out(Easing.cubic),
+        extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
     });
     const charsToShow = Math.floor(progress * fullText.length);
-    const visibleText = fullText.slice(0, charsToShow);
-    const showCursor = frame % 16 < 10;
+    const visible = fullText.slice(0, charsToShow);
+    const showCursor = frame % Math.round(fps * 0.5) < Math.round(fps * 0.3);
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
-                    fontSize: fontSize * 0.85,
-                    fontFamily: "'Courier New', 'Fira Code', monospace",
+                    fontSize: fontSize * 0.82,
+                    fontFamily: interFont, // was monospace → DejaVu fallback in CI
                     fontWeight: 700,
-                    color: "#00FF88",
-                    textShadow:
-                        "0 0 10px rgba(0,255,136,0.4), 0 4px 8px rgba(0,0,0,0.5)",
+                    color: "#FFFFFF",
                     textAlign: "left",
                     whiteSpace: "pre-wrap",
+                    lineHeight: 1.2,
+                    textShadow: "0 0 18px rgba(0,0,0,0.85), 0 4px 10px rgba(0,0,0,0.7)",
+                    paintOrder: "stroke fill",
+                    WebkitTextStroke: "1.5px rgba(0,0,0,0.7)",
                 }}
             >
-                {visibleText}
-                {showCursor && (
-                    <span style={{ color: "#00FF88", opacity: 0.8 }}>▌</span>
-                )}
+                {visible}
+                {showCursor ? <span style={{ opacity: 0.65 }}>▌</span> : null}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 6: GLITCH — crisp entrance with RGB split
+// 6. GLITCH — RGB split with a deterministic, fps-normalised cadence
 // ===========================================================================
 const GlitchPage: React.FC<PageRendererProps> = ({
     page,
     accentColor,
     fontSize,
     width,
-    bassIntensity,
+    platform,
 }) => {
+    const bassIntensity = useBass();
     const frame = useCurrentFrame();
-    const text = page.tokens.map((t) => t.text).join("");
+    const { fps } = useVideoConfig();
+    const enter = pageEnterFrames(fps);
+    const activeIdx = useActiveTokenIndex(page);
+    const karaoke = useKaraokeProgress(page, activeIdx);
 
-    // Crisp entrance curve (timing.md) instead of basic spring
-    const entrance = interpolate(frame, [0, 10], [0, 1], {
+    // Deterministic: sin-based, and expressed in seconds so the cadence does
+    // not change with fps.
+    const seconds = frame / fps;
+    const glitchActive = Math.floor(seconds * 7) % 3 === 0;
+    const strength = glitchActive ? 2.5 + bassIntensity * 7 : 0;
+    const offset = glitchActive ? Math.sin(seconds * 62) * strength : 0;
+
+    const entrance = interpolate(frame, [0, enter], [0, 1], {
         easing: EASE_CRISP_ENTER,
         extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
     });
-    // Glitch intensity increases with bass (audio-viz.md)
-    const glitchActive = frame % 8 < 2;
-    const glitchStrength = glitchActive ? 3 + bassIntensity * 8 : 0;
-    const glitchOffset = glitchActive ? (Math.sin(frame * 17) * glitchStrength) : 0;
 
     return (
-        <CaptionWrapper width={width}>
-            <div style={{ position: "relative" }}>
-                {/* Red channel offset */}
+        <CaptionColumn platform={platform} width={width}>
+            <div style={{ position: "relative", transform: `scale(${entrance})` }}>
+                <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center" }}>
+                    {page.tokens.map((token, i) => (
+                        <WordTokenSpan
+                            key={`${i}-${token.fromMs}`}
+                            token={token}
+                            fontSize={fontSize}
+                            weight={900}
+                            color="#FFFFFF"
+                            activeColor={accentColor}
+                            isActive={i === activeIdx}
+                            karaokeProgress={karaoke}
+                            accentColor={accentColor}
+                            uppercase
+                            strokeWidth={2}
+                            scale={1}
+                        />
+                    ))}
+                </div>
+                {/* Chromatic ghosts, offset in opposite directions */}
                 <div
+                    aria-hidden
                     style={{
                         position: "absolute",
-                        fontSize,
-                        fontFamily: interFont,
-                        fontWeight: 900,
+                        inset: 0,
+                        display: "flex",
+                        flexWrap: "wrap",
+                        justifyContent: "center",
                         color: "#FF0040",
-                        textTransform: "uppercase",
-                        transform: `translate(${glitchOffset}px, ${-glitchOffset}px)`,
-                        opacity: glitchActive ? 0.7 : 0,
-                        clipPath: "inset(10% 0 40% 0)",
-                        whiteSpace: "pre",
+                        mixBlendMode: "screen",
+                        opacity: glitchActive ? 0.55 : 0,
+                        transform: `translate(${offset}px, ${-offset * 0.5}px)`,
+                        pointerEvents: "none",
                     }}
                 >
-                    {text}
+                    {page.tokens.map((token, i) => (
+                        <span
+                            key={`r-${i}-${token.fromMs}`}
+                            style={{
+                                fontSize,
+                                fontFamily: interFont,
+                                fontWeight: 900,
+                                textTransform: "uppercase",
+                                whiteSpace: "pre",
+                            }}
+                        >
+                            {token.text}
+                        </span>
+                    ))}
                 </div>
-                {/* Cyan channel offset */}
                 <div
+                    aria-hidden
                     style={{
                         position: "absolute",
-                        fontSize,
-                        fontFamily: interFont,
-                        fontWeight: 900,
+                        inset: 0,
+                        display: "flex",
+                        flexWrap: "wrap",
+                        justifyContent: "center",
                         color: "#00FFFF",
-                        textTransform: "uppercase",
-                        transform: `translate(${-glitchOffset}px, ${glitchOffset}px)`,
-                        opacity: glitchActive ? 0.7 : 0,
-                        clipPath: "inset(50% 0 10% 0)",
-                        whiteSpace: "pre",
+                        mixBlendMode: "screen",
+                        opacity: glitchActive ? 0.55 : 0,
+                        transform: `translate(${-offset}px, ${offset * 0.5}px)`,
+                        pointerEvents: "none",
                     }}
                 >
-                    {text}
-                </div>
-                {/* Main white text */}
-                <div
-                    style={{
-                        fontSize,
-                        fontFamily: interFont,
-                        fontWeight: 900,
-                        color: "#FFFFFF",
-                        textTransform: "uppercase",
-                        transform: `scale(${entrance})`,
-                        textShadow: "0 4px 8px rgba(0,0,0,0.5)",
-                        whiteSpace: "pre",
-                    }}
-                >
-                    {text}
+                    {page.tokens.map((token, i) => (
+                        <span
+                            key={`c-${i}-${token.fromMs}`}
+                            style={{
+                                fontSize,
+                                fontFamily: interFont,
+                                fontWeight: 900,
+                                textTransform: "uppercase",
+                                whiteSpace: "pre",
+                            }}
+                        >
+                            {token.text}
+                        </span>
+                    ))}
                 </div>
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 7: NEON — bass-reactive flicker intensity
+// 7. NEON — layered bloom with a real ignition flicker
 // ===========================================================================
 const NeonPage: React.FC<PageRendererProps> = ({
     page,
     accentColor,
     fontSize,
     width,
-    bassIntensity,
+    platform,
 }) => {
+    const bassIntensity = useBass();
     const frame = useCurrentFrame();
-    const text = page.tokens.map((t) => t.text).join("");
+    const { fps } = useVideoConfig();
+    const seconds = frame / fps;
 
-    // Neon flicker entrance — bass makes it more intense
-    const baseFlicker = frame < 6 ? (frame % 3 === 0 ? 0.3 : 1) : 1;
-    const flicker = baseFlicker + bassIntensity * 0.2;
-    const glowSize = 42 + bassIntensity * 30;
+    // Ignition: a brief irregular flicker for the first ~0.35s, then steady.
+    const igniting = seconds < 0.35;
+    const flicker = igniting
+        ? Math.sin(seconds * 90) > -0.3
+            ? 1
+            : 0.35
+        : 1;
+    const bloom = 1 + bassIntensity * 0.5;
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
                     fontSize,
                     fontFamily: interFont,
-                    fontWeight: 300,
-                    color: accentColor,
-                    opacity: Math.min(1, flicker),
-                    textShadow: `
-                        0 0 7px ${accentColor},
-                        0 0 10px ${accentColor},
-                        0 0 21px ${accentColor},
-                        0 0 ${glowSize}px ${accentColor}88,
-                        0 0 82px ${accentColor}44,
-                        0 0 92px ${accentColor}22
-                    `,
+                    fontWeight: 700, // 300 was never loaded — it silently fell back
+                    color: "#FFFFFF",
+                    opacity: flicker,
                     textTransform: "uppercase",
-                    letterSpacing: 4,
+                    letterSpacing: 3,
                     whiteSpace: "pre",
+                    textShadow: `
+                        0 0 ${5 * bloom}px ${accentColor},
+                        0 0 ${11 * bloom}px ${accentColor},
+                        0 0 ${22 * bloom}px ${accentColor},
+                        0 0 ${44 * bloom}px ${accentColor}aa,
+                        0 0 ${80 * bloom}px ${accentColor}55
+                    `,
                 }}
             >
-                {text}
+                {page.tokens.map((t) => t.text).join(" ")}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 8: COLORFUL — rainbow word-by-word with overshoot entrance
+// 8. COLORFUL — rainbow words, spoken words at full strength
 // ===========================================================================
 const RAINBOW_COLORS = [
     "#FF6B6B",
@@ -773,33 +1268,32 @@ const RAINBOW_COLORS = [
 
 const ColorfulPage: React.FC<PageRendererProps> = ({
     page,
+    accentColor,
     fontSize,
     width,
-    bassIntensity,
+    platform,
 }) => {
+    const bassIntensity = useBass();
     const frame = useCurrentFrame();
     const { fps } = useVideoConfig();
     const activeIdx = useActiveTokenIndex(page);
+    const enter = pageEnterFrames(fps);
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
                     display: "flex",
                     flexWrap: "wrap",
                     justifyContent: "center",
-                    gap: 10,
+                    gap: `${Math.round(fontSize * 0.14)}px`,
                 }}
             >
                 {page.tokens.map((token, i) => {
-                    const tokenStartFrame = Math.round(
-                        ((token.fromMs - page.startMs) / 1000) * fps,
-                    );
-                    const delay = Math.max(0, tokenStartFrame);
-                    // Playful overshoot entrance per word (timing.md)
+                    const tokenStart = Math.round(((token.fromMs - page.startMs) / 1000) * fps);
                     const entrance = interpolate(
-                        Math.max(0, frame - delay),
-                        [0, 12],
+                        Math.max(0, frame - tokenStart),
+                        [0, enter + 4],
                         [0, 1],
                         {
                             easing: EASE_PLAYFUL_OVERSHOOT,
@@ -807,24 +1301,23 @@ const ColorfulPage: React.FC<PageRendererProps> = ({
                             extrapolateRight: "clamp",
                         },
                     );
-                    const rotation = (1 - entrance) * -10;
-                    const scale = entrance + (i <= activeIdx ? bassIntensity * 0.05 : 0);
-
+                    const isActive = i === activeIdx;
+                    // Previously un-spoken words were permanently dimmed to 0.5,
+                    // which reads as a rendering bug. They now animate in fully.
                     return (
                         <span
-                            key={i}
+                            key={`${i}-${token.fromMs}`}
                             style={{
                                 fontSize,
                                 fontFamily: interFont,
                                 fontWeight: 900,
-                                color: RAINBOW_COLORS[i % RAINBOW_COLORS.length],
-                                transform: `scale(${scale}) rotate(${rotation}deg)`,
+                                color: isActive ? accentColor : RAINBOW_COLORS[i % RAINBOW_COLORS.length],
+                                transform: `scale(${entrance * (isActive ? 1.07 + bassIntensity * 0.08 : 1)}) rotate(${(1 - entrance) * -8}deg)`,
                                 display: "inline-block",
-                                textShadow: "0 4px 8px rgba(0,0,0,0.4)",
-                                WebkitTextStroke: "1px rgba(0,0,0,0.3)",
-                                paintOrder: "stroke fill",
-                                opacity: i <= activeIdx + 1 ? 1 : 0.5,
                                 whiteSpace: "pre",
+                                paintOrder: "stroke fill",
+                                WebkitTextStroke: "1.5px rgba(0,0,0,0.55)",
+                                textShadow: "0 4px 10px rgba(0,0,0,0.6)",
                             }}
                         >
                             {token.text}
@@ -832,60 +1325,75 @@ const ColorfulPage: React.FC<PageRendererProps> = ({
                     );
                 })}
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };
 
 // ===========================================================================
-// STYLE 9: MINIMAL — glass card with crisp entrance/exit (timing.md)
+// 9. MINIMAL — frosted glass card, exit timed to the page
 // ===========================================================================
-const MinimalPage: React.FC<PageRendererProps> = ({ page, fontSize, width }) => {
+const MinimalPage: React.FC<PageRendererProps> = ({
+    page,
+    pageFrames,
+    fontSize,
+    width,
+    platform,
+}) => {
     const frame = useCurrentFrame();
-    const { durationInFrames } = useVideoConfig();
-    const text = page.tokens.map((t) => t.text).join("");
+    const { fps } = useVideoConfig();
+    const enter = pageEnterFrames(fps);
+    const exit = pageExitFrames(fps);
 
-    // Crisp UI entrance (timing.md) — no spring, clean deceleration
-    const entrance = interpolate(frame, [0, 12], [0, 1], {
+    const entrance = interpolate(frame, [0, enter + 2], [0, 1], {
         easing: EASE_CRISP_ENTER,
         extrapolateLeft: "clamp",
         extrapolateRight: "clamp",
     });
-    const exit = interpolate(
-        frame,
-        [durationInFrames - 10, durationInFrames],
-        [1, 0],
-        {
-            easing: Easing.in(Easing.cubic),
-            extrapolateLeft: "clamp",
-            extrapolateRight: "clamp",
-        },
-    );
+    const exitOpacity = interpolate(frame, [pageFrames - exit, pageFrames], [1, 0], {
+        easing: Easing.in(Easing.cubic),
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+    });
 
     return (
-        <CaptionWrapper width={width}>
+        <CaptionColumn platform={platform} width={width}>
             <div
                 style={{
-                    backgroundColor: "rgba(0,0,0,0.6)",
-                    backdropFilter: "blur(8px)",
-                    padding: "16px 32px",
-                    borderRadius: 12,
-                    opacity: entrance * exit,
-                    transform: `translateY(${(1 - entrance) * 20}px)`,
+                    display: "inline-block",
+                    backgroundColor: "rgba(12,12,14,0.72)",
+                    padding: `${Math.round(fontSize * 0.3)}px ${Math.round(fontSize * 0.5)}px`,
+                    borderRadius: 16,
+                    opacity: entrance * exitOpacity,
+                    transform: `translateY(${(1 - entrance) * 18}px)`,
+                    boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
                 }}
             >
                 <div
                     style={{
-                        fontSize: fontSize * 0.75,
-                        fontFamily: interFont,
-                        fontWeight: 500,
-                        color: "#FFFFFF",
-                        letterSpacing: 0.5,
-                        whiteSpace: "pre",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        justifyContent: "center",
+                        gap: `${Math.round(fontSize * 0.16)}px`,
                     }}
                 >
-                    {text}
+                    {page.tokens.map((token, i) => (
+                        <span
+                            key={`${i}-${token.fromMs}`}
+                            style={{
+                                fontSize: fontSize * 0.8,
+                                fontFamily: interFont,
+                                fontWeight: 600,
+                                color: "#FFFFFF",
+                                letterSpacing: 0.3,
+                                whiteSpace: "pre",
+                                display: "inline-block",
+                            }}
+                        >
+                            {token.text}
+                        </span>
+                    ))}
                 </div>
             </div>
-        </CaptionWrapper>
+        </CaptionColumn>
     );
 };

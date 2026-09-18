@@ -1,27 +1,28 @@
 {
     "name": "clipmint-captions",
-    "version": "2.0.0",
-    "description": "ClipMint — Professional animated captions for short-form video clips",
+    "version": "2.1.0",
+    "description": "ClipMint — professional animated captions for short-form vertical video",
+    "//": "Remotion requires every @remotion/* package and the remotion core to be on the SAME version. The ^4.0.0 ranges previously resolved to 4.0.434 (locked) for existing packages but 4.0.526 for the newly added @remotion/media and @remotion/google-fonts, which made Remotion abort every render with a version mismatch. These are pinned exactly; bump them together or not at all.",
     "scripts": {
-        "start": "npx remotion studio",
-        "build": "npx remotion render CaptionedClip out/clip.mp4",
-        "render": "npx remotion render",
-        "upgrade": "npx remotion upgrade"
+        "start": "remotion studio",
+        "render": "remotion render",
+        "verify": "tsc --noEmit -p tsconfig.json",
+        "upgrade": "remotion upgrade"
     },
     "dependencies": {
-        "@remotion/cli": "^4.0.0",
-        "@remotion/captions": "^4.0.0",
-        "@remotion/google-fonts": "^4.0.0",
-        "@remotion/media": "^4.0.0",
-        "@remotion/media-utils": "^4.0.0",
-        "@remotion/zod-types": "^4.0.0",
-        "remotion": "^4.0.0",
+        "@remotion/captions": "4.0.526",
+        "@remotion/cli": "4.0.526",
+        "@remotion/google-fonts": "4.0.526",
+        "@remotion/media": "4.0.526",
+        "@remotion/media-utils": "4.0.526",
+        "@remotion/zod-types": "4.0.526",
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
+        "remotion": "4.0.526",
         "zod": "^4.0.0"
     },
     "devDependencies": {
-        "@remotion/eslint-config": "^4.0.0",
+        "@remotion/eslint-config": "4.0.526",
         "@types/react": "^18.3.12",
         "typescript": "^5.6.3"
     }

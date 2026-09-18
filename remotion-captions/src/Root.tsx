@@ -54,6 +54,16 @@ export const RemotionRoot: React.FC = () => {
                     fontSize: 68,
                     trimStartSec: 0,
                     trimEndSec: 0,
+                    layout: "cover",
+                    platform: "tiktok",
+                    maxWordsPerPage: 4,
+                    maxCharsPerPage: 26,
+                    pageBreakGapMs: 420,
+                    showWatermark: true,
+                    brandText: "CLIPMINT",
+                    showProgressBar: true,
+                    hasAudio: false,
+                    audioReactive: false,
                 }}
                 calculateMetadata={({ props }) => {
                     return {
@@ -89,6 +99,16 @@ export const RemotionRoot: React.FC = () => {
                     fontSize: 72,
                     trimStartSec: 0,
                     trimEndSec: 0,
+                    layout: "cover",
+                    platform: "reels",
+                    maxWordsPerPage: 4,
+                    maxCharsPerPage: 26,
+                    pageBreakGapMs: 420,
+                    showWatermark: false,
+                    brandText: "CLIPMINT",
+                    showProgressBar: false,
+                    hasAudio: false,
+                    audioReactive: false,
                 }}
             />
         </>
