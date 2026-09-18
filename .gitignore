@@ -41,3 +41,10 @@ yarn-error.log*
 *.resolved.*
 prd.md.resolved
 task.md.resolved
+
+# Local end-to-end test scratch space
+.testrun/
+
+# Python bytecode
+__pycache__/
+*.pyc

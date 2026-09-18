@@ -35,7 +35,9 @@
 │   └── wrangler.toml           # Worker config
 ├── supabase/
 │   ├── schema.sql              # Database schema (4 tables + RLS)
-│   └── migration_phase4.sql    # increment_videos_used RPC function
+│   ├── migration_phase4.sql    # increment_videos_used RPC function
+│   ├── migration_quota.sql     # Atomic quota counters + refund marker
+│   └── migration_realtime.sql  # Realtime publication for jobs/clips
 ├── .github/workflows/
 │   ├── process-video.yml       # Main pipeline (12 steps)
 │   └── health-check.yml       # Daily cron health check
@@ -71,7 +73,8 @@ npx wrangler deploy # Deploy to Cloudflare
 1. Create a Supabase project at [supabase.com](https://supabase.com)
 2. Run `supabase/schema.sql` in the SQL Editor
 3. Run `supabase/migration_phase4.sql` for the RPC function
-4. Add your Supabase URL and keys to `dashboard/.env.local`
+4. Run `supabase/migration_quota.sql` (atomic quota counters) and `supabase/migration_realtime.sql` (Realtime publication — the dashboard needs it to live-update)
+5. Add your Supabase URL and keys to `dashboard/.env.local`
 
 ## Caption Styles (9 Available)
 
@@ -116,3 +119,25 @@ npx wrangler deploy # Deploy to Cloudflare
 | Creator | ₹499/mo | 50 | 5 |
 | Pro | ₹1,499/mo | 200 | 20 |
 | Agency | ₹4,999/mo | Unlimited | Unlimited |
+
+## Pipeline notes (2026-09)
+
+The processing workflow is stage-instrumented: every step records its name, so
+a failure reports *which* stage broke instead of a generic message. See
+`_audit/07-HANDOVER.md` for the failure playbook.
+
+Three things are load-bearing and easy to break:
+
+* **All `@remotion/*` packages must be the same version.** A mismatch makes
+  Remotion abort every render. They are pinned exactly in
+  `remotion-captions/package.json` — bump them together or not at all.
+* **Caption page grouping lives in `CaptionedClip.tsx`**, not in
+  `createTikTokStyleCaptions`. That helper only breaks a page when a token
+  starts with a space, which the transcription step strips.
+* **Clip trimming happens in `pipeline/prepare_clips.py`**, not in Remotion.
+  Trimming in the renderer shifts the picture while caption timestamps stay
+  put, which desynchronises them.
+
+A caption render that fails is reported as a failed clip. It is never replaced
+with the raw uncaptioned clip — that fallback previously shipped caption-less
+videos while reporting every job as successful.
