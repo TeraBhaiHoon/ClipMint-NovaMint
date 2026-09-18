@@ -1,0 +1,80 @@
+# ClipMint — NIM probe #4: riva.client ASRService (proper SDK path)
+name: NIM Probe 4 (riva.client ASR)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  asr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: riva.client ASR attempts
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -uo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install -q nvidia-riva-client
+          python3 - <<'PY'
+          import os, struct, io, wave, math
+
+          import riva.client
+
+          key = os.environ["NVIDIA_NIM_API_KEY"].strip()
+
+          # generate a 3s 440Hz WAV in memory -> file (16-bit PCM, 16kHz mono)
+          p = "/tmp/probe16k.wav"
+          with wave.open(p, "w") as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+              frames = bytearray()
+              for i in range(16000 * 3):
+                  v = int(12000 * math.sin(2 * math.pi * 440 * i / 16000))
+                  frames += struct.pack("<h", v)
+              w.writeframes(bytes(frames))
+          print("probe wav written:", os.path.getsize(p), "bytes")
+
+          auth = riva.client.Auth(
+              uri="grpc.nvcf.nvidia.com:443",
+              use_ssl=True,
+              metadata_args=[
+                  ["function-id", "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"],  # whisper-large-v3
+                  ["authorization", f"Bearer {key}"],
+              ],
+          )
+          service = riva.client.ASRService(auth)
+
+          CONFIGS = [
+              ("whisper-large-v3 lang=multi",
+               dict(language_code="multi")),
+              ("whisper-large-v3 lang=en-US",
+               dict(language_code="en-US")),
+          ]
+          for name, kw in CONFIGS:
+              print(f"── {name} ──")
+              try:
+                  cfg = riva.client.RecognitionConfig(
+                      sample_rate_hertz=16000,
+                      max_alternatives=1,
+                      enable_word_time_offsets=True,
+                      enable_automatic_punctuation=True,
+                      **kw,
+                  )
+                  resp = service.offline_recognize(open(p, "rb").read(), cfg)
+                  results = resp.results
+                  print("  results:", len(results))
+                  for r_i, result in enumerate(results[:2]):
+                      for alt in result.alternatives[:1]:
+                          words = alt.words
+                          print(f"    transcript[:80]: {alt.transcript[:80]!r}")
+                          print(f"    words: {len(words)}",
+                                f"first={[ (w.word, w.start_time.seconds + w.start_time.nanos/1e9) for w in words[:4] ]}")
+              except Exception as e:
+                  print(f"  ❌ {type(e).__name__}: {e}")
+          print("DONE")
+          PY
