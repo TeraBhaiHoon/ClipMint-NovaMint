@@ -126,7 +126,7 @@ The processing workflow is stage-instrumented: every step records its name, so
 a failure reports *which* stage broke instead of a generic message. See
 `_audit/07-HANDOVER.md` for the failure playbook.
 
-Three things are load-bearing and easy to break:
+Three things are load-bearing and easy to break:-
 
 * **All `@remotion/*` packages must be the same version.** A mismatch makes
   Remotion abort every render. They are pinned exactly in
