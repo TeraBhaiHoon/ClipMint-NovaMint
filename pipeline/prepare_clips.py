@@ -246,6 +246,10 @@ def build_clip(
         last = (resp.stdout or "").strip().splitlines()
         marker = next((l for l in reversed(last) if l.startswith("REFRAME_")), "")
         if resp.returncode == 0 and vertical.exists():
+            # Always report the decision: "face" vs "center" vs "skipped" matters
+            # when judging output quality from the logs alone.
+            if marker:
+                print(f"  reframe[{index}]: {marker}")
             if marker.startswith("REFRAME_WARN"):
                 warnings.append(marker)
             current.unlink(missing_ok=True)
@@ -288,6 +292,11 @@ def build_clip(
         raise RuntimeError("produced clip has no decodable video stream")
     if not window:
         warnings.append("no_captions")
+
+    # The whole point of this module is a vertical deliverable, so verify the
+    # geometry rather than assuming the reframe step did its job.
+    if (info["width"], info["height"]) != (1080, 1920):
+        warnings.append(f"unexpected_geometry_{info['width']}x{info['height']}")
 
     return ClipResult(
         index=index,
@@ -358,7 +367,9 @@ def main() -> int:
             results.append(res)
             snapped = "" if (start == raw_start and end == raw_end) else (
                 f" (snapped from {raw_start:.1f}-{raw_end:.1f})")
+            geom = probe(Path(res.path))
             print(f"[{i}] OK {start:.2f}s→{end:.2f}s  {res.duration:.1f}s  "
+                  f"{geom['width']}x{geom['height']}  "
                   f"{res.caption_words} words  audio={res.has_audio}{snapped}"
                   + (f"  warns={res.warnings}" if res.warnings else ""))
         except Exception as exc:  # keep going: one bad moment must not kill the job
