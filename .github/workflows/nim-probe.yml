@@ -1,0 +1,153 @@
+# ClipMint — NVIDIA NIM deep probe
+#
+# Ground-truth check of what the account's NIM key can ACTUALLY do:
+#   1. Full model list (all IDs, not keyword-filtered)
+#   2. Audio transcription attempts on every plausible ASR model/endpoint combo
+#   3. Chat attempts on the likely LLM IDs
+# Read-only; changes nothing.
+name: NIM Deep Probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Probe NVIDIA NIM
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          python3 - <<'PY'
+          import json, os, sys, time
+          import requests
+
+          key = os.environ.get("NVIDIA_NIM_API_KEY", "").strip()
+          if not key:
+              print("FATAL: NVIDIA_NIM_API_KEY not set"); sys.exit(1)
+          print(f"key present: len={len(key)} prefix={key[:6]}...")
+
+          H = {"Authorization": f"Bearer {key}"}
+          BASE = "https://integrate.api.nvidia.com"
+
+          # ── 1. FULL model list ─────────────────────────────────────────
+          print("\n════ 1. /v1/models — ALL IDs ════")
+          r = requests.get(f"{BASE}/v1/models", headers=H, timeout=30)
+          ids = []
+          if r.status_code == 200:
+              ids = sorted(m.get("id", "?") for m in r.json().get("data", []))
+              print(f"{len(ids)} models:")
+              for i in ids:
+                  print("   ", i)
+          else:
+              print(f"HTTP {r.status_code}: {r.text[:300]}")
+
+          # ── 2. Audio transcription probes ──────────────────────────────
+          print("\n════ 2. Audio transcription probes ════")
+          os.system(
+              "ffmpeg -f lavfi -i 'sine=frequency=440:duration=3' "
+              "-ar 16000 -ac 1 /tmp/probe.wav -y -loglevel quiet && "
+              "ffmpeg -i /tmp/probe.wav -b:a 16k /tmp/probe.mp3 -y -loglevel quiet"
+          )
+          for p in ("/tmp/probe.wav", "/tmp/probe.mp3"):
+              print(f"  {p}: {os.path.getsize(p)} bytes")
+
+          AUDIO_MODELS = [
+              "openai/whisper-large-v3", "openai/whisper-large-v3-turbo",
+              "nvidia/whisper-large-v3", "whisper-large-v3",
+              "nvidia/canary-1b", "nvidia/canary-1b-flash", "nvidia/canary-1b-v2",
+              "nvidia/parakeet-ctc-1.1b-asr", "nvidia/parakeet-tdt-1.1b",
+              "nvidia/riva-asr",
+          ] + [i for i in ids if any(k in i.lower() for k in
+              ("whisper", "canary", "parakeet", "asr", "riva", "speech"))]
+
+          seen, audio_hits = set(), []
+          for model in AUDIO_MODELS:
+              if model in seen: continue
+              seen.add(model)
+              # Attempt A: OpenAI-style multipart on integrate.api.nvidia.com
+              try:
+                  with open("/tmp/probe.wav", "rb") as fh:
+                      r = requests.post(
+                          f"{BASE}/v1/audio/transcriptions",
+                          headers=H,
+                          files={"file": ("probe.wav", fh, "audio/wav")},
+                          data={"model": model, "response_format": "verbose_json"},
+                          timeout=90)
+                  if r.status_code == 200:
+                      body = r.json()
+                      print(f"  ✅ MULTIPART {model}: 200 keys={list(body.keys())[:6]} "
+                            f"text={str(body.get('text',''))[:60]!r}")
+                      audio_hits.append((model, "multipart", body))
+                      continue
+                  a_status, a_body = r.status_code, r.text[:140]
+              except Exception as e:
+                  a_status, a_body = "ERR", str(e)[:140]
+              # Attempt B: JSON/base64 style (some NIM audio models use this)
+              try:
+                  import base64
+                  b64 = base64.b64encode(open("/tmp/probe.mp3", "rb").read()).decode()
+                  r = requests.post(
+                      f"{BASE}/v1/audio/transcriptions",
+                      headers={**H, "Content-Type": "application/json",
+                               "Accept": "application/json"},
+                      json={"model": model, "input": b64, "language": "en"},
+                      timeout=90)
+                  if r.status_code == 200:
+                      body = r.json()
+                      print(f"  ✅ JSON-B64 {model}: 200 keys={list(body.keys())[:6]}")
+                      audio_hits.append((model, "json-b64", body))
+                      continue
+                  b_status, b_body = r.status_code, r.text[:140]
+              except Exception as e:
+                  b_status, b_body = "ERR", str(e)[:140]
+              print(f"  ❌ {model}: multipart={a_status}({a_body}) | json={b_status}({b_body})")
+
+          # ── 3. Chat probes on likely LLM IDs ───────────────────────────
+          print("\n════ 3. Chat probes ════")
+          CHAT = [
+              "meta/llama-3.3-70b-instruct", "meta/llama-3.1-405b-instruct",
+              "meta/llama-3.1-8b-instruct", "deepseek-ai/deepseek-r1",
+              "deepseek-ai/deepseek-v3", "qwen/qwen2.5-72b-instruct",
+              "qwen/qwq-32b", "mistralai/mixtral-8x22b-instruct-v0.1",
+              "nvidia/llama-3.1-nemotron-70b-instruct", "microsoft/phi-4",
+              "openai/gpt-oss-120b", "google/gemma-2-27b-it",
+          ] + [i for i in ids if "instruct" in i.lower() or "nemotron" in i.lower()][:8]
+
+          seen2, chat_hits = set(), []
+          for model in CHAT:
+              if model in seen2: continue
+              seen2.add(model)
+              try:
+                  r = requests.post(
+                      f"{BASE}/v1/chat/completions",
+                      headers={**H, "Content-Type": "application/json"},
+                      json={"model": model,
+                            "messages": [{"role": "user", "content": "Reply with the single word OK"}],
+                            "max_tokens": 2000, "temperature": 0},
+                      timeout=60)
+                  if r.status_code == 200:
+                      txt = r.json()["choices"][0]["message"].get("content") or ""
+                      print(f"  ✅ {model}: OK -> {txt.strip()[:30]!r}")
+                      chat_hits.append(model)
+                  else:
+                      print(f"  ❌ {model}: HTTP {r.status_code} {r.text[:120]}")
+              except Exception as e:
+                  print(f"  ❌ {model}: {e}")
+              time.sleep(1.6)  # stay well inside ~40 RPM
+
+          # ── 4. Vision-model listing (IDs only; capability probe later) ─
+          print("\n════ 4. Vision-ish IDs in the account listing ════")
+          vis = [i for i in ids if any(k in i.lower() for k in
+              ("vision", "vlm", "florence", "dino", "sam", "detect", "ocr",
+               "clip", "vila", "neva", "paddle", "deplot", "yolo"))]
+          print(vis if vis else "(none matched keywords)")
+
+          print("\n════ SUMMARY ════")
+          print(f"models listed: {len(ids)}")
+          print(f"ASR working: {[m for m,_,_ in audio_hits]}")
+          print(f"chat working: {chat_hits}")
+          PY
