@@ -64,6 +64,11 @@ export const RemotionRoot: React.FC = () => {
                     showProgressBar: true,
                     hasAudio: false,
                     audioReactive: false,
+                    fadeEdge: true,
+                    motionBlur: false,
+                    sfxEnabled: false,
+                    bgmSrc: "",
+                    bgmVolume: 0.12,
                 }}
                 calculateMetadata={({ props }) => {
                     return {
@@ -109,6 +114,11 @@ export const RemotionRoot: React.FC = () => {
                     showProgressBar: false,
                     hasAudio: false,
                     audioReactive: false,
+                    fadeEdge: true,
+                    motionBlur: false,
+                    sfxEnabled: false,
+                    bgmSrc: "",
+                    bgmVolume: 0.12,
                 }}
             />
         </>

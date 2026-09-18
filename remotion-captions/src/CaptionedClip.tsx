@@ -25,6 +25,7 @@
  *    killed every clip that had no audio stream.
  */
 import React, { useMemo } from "react";
+import { flushSync } from "react-dom";
 import {
     AbsoluteFill,
     useCurrentFrame,
@@ -33,8 +34,15 @@ import {
     interpolate,
     Easing,
     staticFile,
+    Audio,
+    continueRender,
+    delayRender,
 } from "remotion";
 import { Video } from "@remotion/media";
+import { preloadVideo } from "@remotion/preload";
+import { fitText } from "@remotion/layout-utils";
+import { Trail } from "@remotion/motion-blur";
+import { noise2D } from "@remotion/noise";
 import { z } from "zod";
 import { zColor } from "@remotion/zod-types";
 import { type Caption } from "@remotion/captions";
@@ -77,6 +85,19 @@ const BLANK_TOLERANCE_MS = 700;
 const EASE_CRISP_ENTER = Easing.bezier(0.16, 1, 0.3, 1);
 const EASE_EDITORIAL = Easing.bezier(0.45, 0, 0.55, 1);
 const EASE_PLAYFUL_OVERSHOOT = Easing.bezier(0.34, 1.56, 0.64, 1);
+
+// ---------------------------------------------------------------------------
+// Edge fades (9.2) + SFX/BGM assets
+// ---------------------------------------------------------------------------
+/** Length of the fade-in from / fade-out to black, in composition frames. */
+const FADE_EDGE_FRAMES = 8;
+/** Pop SFX per caption page is disabled above this page count. */
+const MAX_POP_PAGES = 60;
+/** Shared SFX level (task spec: pops ~0.5; whoosh uses the same bed level). */
+const SFX_VOLUME = 0.5;
+/** Public/ paths of the vendored SFX (see pipeline/assets_manifest.json). */
+const SFX_POP = "sfx/pop.wav";
+const SFX_WHOOSH = "sfx/whoosh.wav";
 
 // ---------------------------------------------------------------------------
 // Schema
@@ -149,6 +170,35 @@ export const captionedClipSchema = z.object({
     hasAudio: z.boolean().default(false),
     /** Pulse captions with the audio. Requires `hasAudio: true` to take effect. */
     audioReactive: z.boolean().default(false),
+
+    // ── Edge fades (9.2) ───────────────────────────────────────────────────
+    /**
+     * 8-frame fade-in from black at clip start + fade-out to black at clip
+     * end. Implemented as AbsoluteFill black overlays (NOT TransitionSeries —
+     * see EdgeFadeOverlay below for why). Purely visual: caption Sequences
+     * and their timing are untouched.
+     */
+    fadeEdge: z.boolean().default(true),
+
+    // ── Motion blur (9.6) ──────────────────────────────────────────────────
+    /**
+     * `@remotion/motion-blur` `<Trail>` on the active word. Hormozi style
+     * ONLY, and opt-in because it multiplies the number of rendered layers.
+     */
+    motionBlur: z.boolean().default(false),
+
+    // ── SFX + BGM ──────────────────────────────────────────────────────────
+    /**
+     * Render the SFX bed: `sfx/pop.wav` on the first word of every caption
+     * page (skipped entirely when the clip has >60 pages) and
+     * `sfx/whoosh.wav` at clip frame 0. Missing files are skipped silently —
+     * they can never fail a render.
+     */
+    sfxEnabled: z.boolean().default(false),
+    /** File name inside public/ of the background music track. Empty = none. */
+    bgmSrc: z.string().default(""),
+    /** BGM mixing level. The voice/SFX bed sits on top of this. */
+    bgmVolume: z.number().min(0).max(1).default(0.12),
 });
 
 export type CaptionedClipProps = z.infer<typeof captionedClipSchema>;
@@ -241,8 +291,14 @@ export function buildCaptionPages(
 }
 
 /**
+ * STATIC text-fitting estimator (9.3, part 1).
+ *
  * Shrink the base size when a page contains a word long enough to overflow the
  * caption column. Prevents "CRYPTOCURRENCY" from running off a 1080px frame.
+ *
+ * This remains the exported pure function and the INITIAL value of
+ * `useFitFontSize` below: it runs before fonts/DOM are available, so every
+ * frame has a sane size from the very first paint.
  */
 export function fitFontSize(
     tokens: WordToken[],
@@ -262,6 +318,96 @@ export function fitFontSize(
     const scaled = Math.floor((baseSize * maxWidth) / widest);
     return Math.max(30, scaled);
 }
+
+/**
+ * REAL text fitting (9.3, part 2) via `@remotion/layout-utils`.
+ *
+ * `fitText()`/`measureText()` measure with a hidden DOM node, so they can only
+ * run inside the React/browser tree — the pure `fitFontSize` above cannot be
+ * replaced by them in a plain function. This hook therefore:
+ *
+ *   1. seeds state with the static estimator (same external contract, min 30);
+ *   2. holds the frame with `delayRender()` until `document.fonts.ready`;
+ *   3. re-measures the longest word with `fitText({ validateFontIsLoaded: true })`
+ *      — matching weight 900 + uppercase, the widest combination any style
+ *      renders with, so the fit is conservative for every style;
+ *   4. flushes the measured size synchronously (`flushSync`) BEFORE
+ *      `continueRender()`, so the screenshotted frame always uses the real
+ *      measurement, never the estimate.
+ *
+ * If the font cannot be validated (font load failure), the static estimate is
+ * kept and the render proceeds — fitting degrades, it never fails.
+ */
+const useFitFontSize = (
+    tokens: WordToken[],
+    baseSize: number,
+    maxWidth: number,
+    uppercase: boolean,
+): number => {
+    const initial = useMemo(
+        () => fitFontSize(tokens, baseSize, maxWidth, uppercase),
+        [tokens, baseSize, maxWidth, uppercase],
+    );
+    const [size, setSize] = React.useState(initial);
+    const longest = useMemo(() => {
+        let longest = "";
+        for (const t of tokens) {
+            if (t.text.length > longest.length) longest = t.text;
+        }
+        return longest;
+    }, [tokens]);
+
+    React.useEffect(() => {
+        if (!longest || maxWidth <= 0) return;
+        let settled = false;
+        let cancelled = false;
+        const handle = delayRender(`layout-utils: fitting "${longest}"`);
+        const settle = () => {
+            if (!settled) {
+                settled = true;
+                continueRender(handle);
+            }
+        };
+
+        document.fonts.ready
+            .then(() => {
+                if (cancelled) {
+                    settle();
+                    return;
+                }
+                try {
+                    const { fontSize } = fitText({
+                        text: longest,
+                        withinWidth: maxWidth,
+                        fontFamily: interFont,
+                        fontWeight: 900,
+                        textTransform: uppercase ? "uppercase" : "none",
+                        validateFontIsLoaded: true,
+                    });
+                    // Same external contract as fitFontSize: never grow above
+                    // the base size, never shrink below 30.
+                    const fitted = Math.max(30, Math.min(baseSize, Math.floor(fontSize)));
+                    if (fitted !== size) {
+                        // Synchronous re-render BEFORE continueRender so the
+                        // frame that gets screenshotted already uses this size.
+                        flushSync(() => setSize(fitted));
+                    }
+                } catch {
+                    // validateFontIsLoaded threw — font not (yet) loadable.
+                    // Keep the static estimate; do not fail the render.
+                }
+                settle();
+            })
+            .catch(() => settle());
+
+        return () => {
+            cancelled = true;
+            settle();
+        };
+    }, [longest, maxWidth, baseSize, uppercase, size]);
+
+    return size;
+};
 
 // ---------------------------------------------------------------------------
 // Audio reactivity — opt-in, provided through context.
@@ -309,6 +455,191 @@ const BassProvider: React.FC<{ src: string; children: React.ReactNode }> = ({
     }, [audioData, frame, fps, dataOffsetInSeconds]);
 
     return <BassContext.Provider value={value}>{children}</BassContext.Provider>;
+};
+
+// ---------------------------------------------------------------------------
+// Asset existence gate (SFX + BGM + preloading)
+//
+// The composition bundle has no fs access, so "does this file exist" is
+// answered with an HTTP probe against Remotion's asset server (which serves
+// public/). The probe result is cached module-wide: during a render each frame
+// is a fresh browser page, so the cache costs one probe per unique asset per
+// frame, not per usage.
+//
+// While the probe is in flight the frame is held open with `delayRender()` and
+// the decision is flushed with `flushSync()` before `continueRender()` — the
+// screenshotted frame therefore always reflects the final answer. A missing
+// file resolves to "skip": the <Audio> never mounts and the render succeeds.
+// ---------------------------------------------------------------------------
+
+/** Module-wide probe cache: url → exists. */
+const assetExistsCache = new Map<string, boolean>();
+
+const probeAssetExists = async (url: string): Promise<boolean> => {
+    try {
+        const head = await fetch(url, { method: "HEAD" });
+        if (head.ok) return true;
+        if (head.status === 404 || head.status === 410) return false;
+        // Server rejected HEAD outright (e.g. 405) — retry once with GET.
+    } catch {
+        return false;
+    }
+    try {
+        const get = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
+        return get.ok;
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * Renders `children` (an <Audio>) only if the asset actually resolves.
+ * Unknown → renders nothing until the probe completes (the frame is blocked
+ * by the delayRender handle meanwhile, so nothing is screenshotted early).
+ */
+const AssetGate: React.FC<{ src: string; children: React.ReactNode }> = ({ src, children }) => {
+    const [exists, setExists] = React.useState<boolean | null>(
+        () => assetExistsCache.get(src) ?? null,
+    );
+
+    React.useEffect(() => {
+        const cached = assetExistsCache.get(src);
+        if (cached !== undefined) {
+            // Cached answers need no probe and no handle.
+            if (cached !== exists) setExists(cached);
+            return;
+        }
+
+        let cancelled = false;
+        let settled = false;
+        const handle = delayRender(`Probing asset ${src}`);
+        const settle = () => {
+            if (!settled) {
+                settled = true;
+                continueRender(handle);
+            }
+        };
+
+        probeAssetExists(src)
+            .then((ok) => {
+                assetExistsCache.set(src, ok);
+                if (cancelled) {
+                    settle();
+                    return;
+                }
+                // Synchronous re-render BEFORE continueRender so the frame
+                // that gets screenshotted already reflects the probe result.
+                flushSync(() => setExists(ok));
+                settle();
+            })
+            .catch(() => {
+                assetExistsCache.set(src, false);
+                flushSync(() => {
+                    if (!cancelled) setExists(false);
+                });
+                settle();
+            });
+
+        return () => {
+            cancelled = true;
+            settle();
+        };
+    }, [src]);
+
+    if (exists === null || exists === false) return null;
+    return <>{children}</>;
+};
+
+// ---------------------------------------------------------------------------
+// Video preload gate (9.7 — no black first frames)
+//
+// Two layers of defence:
+//   1. `preloadVideo()` (from @remotion/preload) injects <link rel="preload">
+//      so the fetch starts as early as possible.
+//   2. `VideoPreloadGate` holds the FIRST frame with `delayRender()` until a
+//      probe <video> element has fired `loadeddata` (first frame decoded) —
+//      the actual <Video> then paints real pixels on frame 0 instead of the
+//      background colour. An `error` event settles the gate too: a broken
+//      source must fail loudly elsewhere, never hang the render.
+// ---------------------------------------------------------------------------
+
+const VideoPreloadGate: React.FC<{ src: string; children: React.ReactNode }> = ({
+    src,
+    children,
+}) => {
+    React.useEffect(() => {
+        let settled = false;
+        const handle = delayRender(`Waiting for first frame of ${src}`);
+        const settle = () => {
+            if (!settled) {
+                settled = true;
+                continueRender(handle);
+            }
+        };
+
+        const probe = document.createElement("video");
+        probe.preload = "auto";
+        probe.muted = true;
+        probe.src = src;
+        probe.addEventListener("loadeddata", settle, { once: true });
+        probe.addEventListener("error", settle, { once: true });
+        probe.load();
+
+        return () => {
+            probe.removeEventListener("loadeddata", settle);
+            probe.removeEventListener("error", settle);
+            probe.removeAttribute("src");
+            settle();
+        };
+    }, [src]);
+
+    return <>{children}</>;
+};
+
+// ---------------------------------------------------------------------------
+// Edge fades (9.2)
+//
+// CHOICE: AbsoluteFill black overlays, NOT <TransitionSeries>. TransitionSeries
+// would force every caption page <Sequence> into enter/transition slots and
+// rewrite the absolute page timings that buildCaptionPages + pageFrames depend
+// on — i.e. it would move the captions. Two absolutely positioned overlays
+// change nothing but pixels: no Sequences, no durations, no re-timing.
+//
+// The overlay is the TOPMOST child so the whole frame (clip + captions + UI)
+// fades from and to black. On very short clips where both windows overlap,
+// `Math.max` keeps it black at both ends.
+// ---------------------------------------------------------------------------
+
+const EdgeFadeOverlay: React.FC<{ enabled: boolean; durationInFrames: number }> = ({
+    enabled,
+    durationInFrames,
+}) => {
+    const frame = useCurrentFrame();
+    if (!enabled) return null;
+
+    const fadeIn = interpolate(frame, [0, FADE_EDGE_FRAMES], [1, 0], {
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+    });
+    const fadeOut = interpolate(
+        frame,
+        [Math.max(0, durationInFrames - FADE_EDGE_FRAMES), durationInFrames],
+        [0, 1],
+        {
+            extrapolateLeft: "clamp",
+            extrapolateRight: "clamp",
+        },
+    );
+
+    return (
+        <AbsoluteFill
+            style={{
+                backgroundColor: "#000000",
+                opacity: Math.max(fadeIn, fadeOut),
+                pointerEvents: "none",
+            }}
+        />
+    );
 };
 
 // ---------------------------------------------------------------------------
@@ -497,9 +828,22 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
     showProgressBar,
     hasAudio,
     audioReactive,
+    fadeEdge,
+    motionBlur,
+    sfxEnabled,
+    bgmSrc,
+    bgmVolume,
 }) => {
     const { width, height, fps } = useVideoConfig();
     const frame = useCurrentFrame();
+
+    // ── 9.7: kick off the video fetch as early as possible ─────────────────
+    // <link rel="preload"> for the clip. The deterministic first-frame gate
+    // itself is VideoPreloadGate below.
+    React.useEffect(() => {
+        if (!videoSrc) return;
+        return preloadVideo(staticFile(videoSrc));
+    }, [videoSrc]);
 
     // ── Trim maths (frames are ABSOLUTE positions in the source clip) ──────
     // `trimAfter` is an end position, not a length. Passing the trailing
@@ -541,6 +885,9 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
 
     const maxCaptionWidth = width - SAFE_AREAS[platform].left - SAFE_AREAS[platform].right;
 
+    // Pops are capped: beyond 60 pages the per-page pop bed is skipped entirely.
+    const renderPops = sfxEnabled && pages.length <= MAX_POP_PAGES;
+
     const content = (
         <AbsoluteFill
             style={{
@@ -550,6 +897,20 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
                 alignItems: "center",
             }}
         >
+            {/* ── BGM (looping, mixed at bgmVolume) + whoosh at clip frame 0 ──
+                Both are existence-gated: a missing file silently drops the
+                layer instead of failing the render (see AssetGate). */}
+            {bgmSrc ? (
+                <AssetGate src={staticFile(bgmSrc)}>
+                    <Audio src={staticFile(bgmSrc)} volume={bgmVolume} loop />
+                </AssetGate>
+            ) : null}
+            {sfxEnabled ? (
+                <AssetGate src={staticFile(SFX_WHOOSH)}>
+                    <Audio src={staticFile(SFX_WHOOSH)} volume={SFX_VOLUME} />
+                </AssetGate>
+            ) : null}
+
             {videoSrc ? (
                 layout === "fill" ? (
                     <>
@@ -663,7 +1024,15 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
                 );
 
                 const pageFrames = Math.max(1, endFrame - startFrame);
-                const sized = fitFontSize(page.tokens, fontSize, maxCaptionWidth, true);
+                // Fitting now happens inside PageRenderer via useFitFontSize
+                // (layout-utils needs the React tree); the page gets the base
+                // size plus the real caption column width.
+                const popOffset = page.tokens.length
+                    ? Math.max(
+                          0,
+                          Math.round(((page.tokens[0].fromMs - page.startMs) / 1000) * fps),
+                      )
+                    : 0;
 
                 return (
                     <Sequence
@@ -676,14 +1045,28 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
                             pageFrames={pageFrames}
                             style={captionStyle}
                             accentColor={accentColor}
-                            fontSize={sized}
+                            fontSize={fontSize}
                             width={width}
                             maxWidth={maxCaptionWidth}
                             platform={platform}
+                            motionBlur={motionBlur}
                         />
+                        {/* Pop SFX on the FIRST word of this page, inside the
+                            page's own Sequence so it lands on that word. */}
+                        {renderPops && page.tokens.length > 0 ? (
+                            <AssetGate src={staticFile(SFX_POP)}>
+                                <Sequence from={popOffset} durationInFrames={fps}>
+                                    <Audio src={staticFile(SFX_POP)} volume={SFX_VOLUME} />
+                                </Sequence>
+                            </AssetGate>
+                        ) : null}
                     </Sequence>
                 );
             })}
+
+            {/* ── 9.2: 8-frame fade from / to black over EVERYTHING ─────────
+                Topmost layer, purely visual — see EdgeFadeOverlay. */}
+            <EdgeFadeOverlay enabled={fadeEdge} durationInFrames={durationInFrames} />
         </AbsoluteFill>
     );
 
@@ -691,10 +1074,19 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
     // clip has audio AND asked for reactivity. Either flag alone keeps the
     // audio APIs completely untouched, so a silent clip can never abort a render.
     const mountBassAnalyser = audioReactive && hasAudio && Boolean(videoSrc);
-    return mountBassAnalyser ? (
-        <BassProvider src={staticFile(videoSrc)}>{content}</BassProvider>
+
+    // 9.7: hold frame 0 until the clip's first frame is decoded so the video
+    // (not the background colour) is visible from the very first frame.
+    const gatedContent = videoSrc ? (
+        <VideoPreloadGate src={staticFile(videoSrc)}>{content}</VideoPreloadGate>
     ) : (
         content
+    );
+
+    return mountBassAnalyser ? (
+        <BassProvider src={staticFile(videoSrc)}>{gatedContent}</BassProvider>
+    ) : (
+        gatedContent
     );
 };
 
@@ -707,33 +1099,43 @@ interface PageRendererProps {
     pageFrames: number;
     style: CaptionedClipProps["captionStyle"];
     accentColor: string;
+    /** BASE size — the real fitted size is computed here via useFitFontSize. */
     fontSize: number;
     width: number;
     maxWidth: number;
     platform: keyof typeof SAFE_AREAS;
+    /** 9.6: Trail motion blur on the active word (hormozi only). */
+    motionBlur: boolean;
 }
 
 const PageRenderer: React.FC<PageRendererProps> = (props) => {
+    // 9.3: real text fitting with @remotion/layout-utils. The static estimator
+    // inside the hook is the initial value; the measured value replaces it
+    // before the frame is screenshotted (delayRender + flushSync). Same
+    // external contract as before: shrink long words, min size 30.
+    const fittedFontSize = useFitFontSize(props.page.tokens, props.fontSize, props.maxWidth, true);
+    const withFitted = { ...props, fontSize: fittedFontSize };
+
     switch (props.style) {
         case "bounce":
-            return <BouncePage {...props} />;
+            return <BouncePage {...withFitted} />;
         case "fade":
-            return <FadePage {...props} />;
+            return <FadePage {...withFitted} />;
         case "glow":
-            return <GlowPage {...props} />;
+            return <GlowPage {...withFitted} />;
         case "typewriter":
-            return <TypewriterPage {...props} />;
+            return <TypewriterPage {...withFitted} />;
         case "glitch":
-            return <GlitchPage {...props} />;
+            return <GlitchPage {...withFitted} />;
         case "neon":
-            return <NeonPage {...props} />;
+            return <NeonPage {...withFitted} />;
         case "colorful":
-            return <ColorfulPage {...props} />;
+            return <ColorfulPage {...withFitted} />;
         case "minimal":
-            return <MinimalPage {...props} />;
+            return <MinimalPage {...withFitted} />;
         case "hormozi":
         default:
-            return <HormoziPage {...props} />;
+            return <HormoziPage {...withFitted} />;
     }
 };
 
@@ -776,15 +1178,20 @@ const pageExitFrames = (fps: number) => Math.max(1, Math.round(EXIT_SEC * fps));
 // ===========================================================================
 // 1. HORMOZI — word-by-word karaoke highlight with a scale pop
 // ===========================================================================
-const HormoziPage: React.FC<PageRendererProps> = ({
-    page,
-    pageFrames,
-    accentColor,
-    fontSize,
-    width,
-    maxWidth,
-    platform,
-}) => {
+
+/**
+ * One hormozi word. ALL of its motion (active state, karaoke fill, entrance,
+ * pop) is derived from `useCurrentFrame()` INSIDE this component — required
+ * for 9.6: <Trail> re-renders its children at earlier frames via <Freeze>, so
+ * only frame-dependent children produce an actual trail.
+ */
+const HormoziWord: React.FC<{
+    page: CaptionPage;
+    token: WordToken;
+    index: number;
+    fontSize: number;
+    accentColor: string;
+}> = ({ page, token, index, fontSize, accentColor }) => {
     const bassIntensity = useBass();
     const { fps } = useVideoConfig();
     const frame = useCurrentFrame();
@@ -792,6 +1199,41 @@ const HormoziPage: React.FC<PageRendererProps> = ({
     const karaoke = useKaraokeProgress(page, activeIdx);
     const enter = pageEnterFrames(fps);
 
+    const isActive = index === activeIdx;
+    const tokenStart = Math.round(((token.fromMs - page.startMs) / 1000) * fps);
+    const entrance = interpolate(Math.max(0, frame - tokenStart), [0, enter], [0, 1], {
+        easing: EASE_PLAYFUL_OVERSHOOT,
+        extrapolateLeft: "clamp",
+        extrapolateRight: "clamp",
+    });
+    const pop = isActive ? 1 + entrance * 0.13 + bassIntensity * 0.12 : 1;
+
+    return (
+        <WordTokenSpan
+            token={token}
+            fontSize={fontSize}
+            weight={900}
+            color="#FFFFFF"
+            activeColor={accentColor}
+            isActive={isActive}
+            karaokeProgress={karaoke}
+            accentColor={accentColor}
+            uppercase
+            strokeWidth={isActive ? 0 : 2}
+            scale={pop}
+            glow={isActive ? 26 + bassIntensity * 26 : 0}
+        />
+    );
+};
+
+const HormoziPage: React.FC<PageRendererProps> = ({
+    page,
+    accentColor,
+    fontSize,
+    width,
+    platform,
+    motionBlur,
+}) => {
     return (
         <CaptionColumn platform={platform} width={width}>
             <div
@@ -804,36 +1246,57 @@ const HormoziPage: React.FC<PageRendererProps> = ({
                 }}
             >
                 {page.tokens.map((token, i) => {
-                    const isActive = i === activeIdx;
-                    const tokenStart = Math.round(((token.fromMs - page.startMs) / 1000) * fps);
-                    const entrance = interpolate(
-                        Math.max(0, frame - tokenStart),
-                        [0, enter],
-                        [0, 1],
-                        {
-                            easing: EASE_PLAYFUL_OVERSHOOT,
-                            extrapolateLeft: "clamp",
-                            extrapolateRight: "clamp",
-                        },
-                    );
-                    const pop = isActive ? 1 + entrance * 0.13 + bassIntensity * 0.12 : 1;
+                    if (!motionBlur) {
+                        return (
+                            <HormoziWord
+                                key={`${i}-${token.fromMs}`}
+                                page={page}
+                                token={token}
+                                index={i}
+                                fontSize={fontSize}
+                                accentColor={accentColor}
+                            />
+                        );
+                    }
 
+                    // ── 9.6: motion blur on the ACTIVE word ────────────────
+                    // <Trail> wraps its children in full-frame AbsoluteFills,
+                    // which would tear the word out of the flex-wrap row. An
+                    // invisible in-flow copy reserves the exact word box and
+                    // the Trail overlay is anchored to it with inset:0, so
+                    // layout is byte-identical to the non-blur case.
                     return (
-                        <WordTokenSpan
+                        <span
                             key={`${i}-${token.fromMs}`}
-                            token={token}
-                            fontSize={fontSize}
-                            weight={900}
-                            color="#FFFFFF"
-                            activeColor={accentColor}
-                            isActive={isActive}
-                            karaokeProgress={karaoke}
-                            accentColor={accentColor}
-                            uppercase
-                            strokeWidth={isActive ? 0 : 2}
-                            scale={pop}
-                            glow={isActive ? 26 + bassIntensity * 26 : 0}
-                        />
+                            style={{ display: "inline-block", position: "relative" }}
+                        >
+                            <span aria-hidden style={{ visibility: "hidden", display: "inline-block" }}>
+                                <WordTokenSpan
+                                    token={token}
+                                    fontSize={fontSize}
+                                    weight={900}
+                                    color="#FFFFFF"
+                                    activeColor={accentColor}
+                                    isActive={false}
+                                    karaokeProgress={0}
+                                    accentColor={accentColor}
+                                    uppercase
+                                    strokeWidth={2}
+                                    scale={1}
+                                />
+                            </span>
+                            <span aria-hidden style={{ position: "absolute", inset: 0 }}>
+                                <Trail layers={4} lagInFrames={1} trailOpacity={0.6}>
+                                    <HormoziWord
+                                        page={page}
+                                        token={token}
+                                        index={i}
+                                        fontSize={fontSize}
+                                        accentColor={accentColor}
+                                    />
+                                </Trail>
+                            </span>
+                        </span>
                     );
                 })}
             </div>
@@ -1101,12 +1564,18 @@ const GlitchPage: React.FC<PageRendererProps> = ({
     const activeIdx = useActiveTokenIndex(page);
     const karaoke = useKaraokeProgress(page, activeIdx);
 
-    // Deterministic: sin-based, and expressed in seconds so the cadence does
-    // not change with fps.
+    // ── 9.4: deterministic simplex noise (@remotion/noise) ─────────────────
+    // Replaces Math.sin(frame*N): noise2D is a pure function of (seed, x, y),
+    // so every frame renders identically across renders/fps, while producing
+    // the irregular, non-cyclic jitter the sine approximation could not.
+    // Coordinates are expressed in SECONDS so the cadence does not change with
+    // fps. Intensities are unchanged: same strength, same opacity, same
+    // ~1/3-active duty cycle (threshold 0.3 on a [-1,1] field).
     const seconds = frame / fps;
-    const glitchActive = Math.floor(seconds * 7) % 3 === 0;
+    const glitchField = noise2D("clipmint-glitch-cadence", seconds * 7, 0);
+    const glitchActive = glitchField > 0.3;
     const strength = glitchActive ? 2.5 + bassIntensity * 7 : 0;
-    const offset = glitchActive ? Math.sin(seconds * 62) * strength : 0;
+    const offset = glitchActive ? noise2D("clipmint-glitch-offset", seconds * 62, 0) * strength : 0;
 
     const entrance = interpolate(frame, [0, enter], [0, 1], {
         easing: EASE_CRISP_ENTER,
@@ -1217,9 +1686,11 @@ const NeonPage: React.FC<PageRendererProps> = ({
     const seconds = frame / fps;
 
     // Ignition: a brief irregular flicker for the first ~0.35s, then steady.
+    // 9.4: noise2D instead of Math.sin — same 0.35 / -0.3 thresholds and
+    // intensities, but the flicker pattern is now aperiodic and deterministic.
     const igniting = seconds < 0.35;
     const flicker = igniting
-        ? Math.sin(seconds * 90) > -0.3
+        ? noise2D("clipmint-neon-flicker", seconds * 90, 0) > -0.3
             ? 1
             : 0.35
         : 1;
