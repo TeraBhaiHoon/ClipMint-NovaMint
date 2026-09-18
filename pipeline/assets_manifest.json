@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "sfx": {
+    "pop": "sfx/pop.wav",
+    "whoosh": "sfx/whoosh.wav",
+    "ding": "sfx/ding.wav",
+    "riser": "sfx/riser.wav"
+  },
+  "bgm": {
+    "energetic": "bgm/energetic.mp3",
+    "calm": "bgm/calm.mp3",
+    "corporate": "bgm/corporate.mp3",
+    "inspiring": "bgm/inspiring.mp3"
+  },
+  "meta": {
+    "generated": "2026-09-18",
+    "licenses": [
+      "sfx/*: synthesized locally with ffmpeg (aevalsrc/anoisesrc) - generated content, no third-party rights",
+      "bgm/energetic.mp3: 'Melodic Techno Journey' by alex-morgan - Pixabay Content License (https://pixabay.com/service/license-summary/), source https://pixabay.com/music/techno-trance-melodic-techno-journey-537492/",
+      "bgm/calm.mp3: 'Focus' by AtlasAudio - Pixabay Content License (https://pixabay.com/service/license-summary/), source https://pixabay.com/music/meditationspiritual-focus-583146/",
+      "bgm/corporate.mp3: 'Technology - Tech Technology' by APALONBeats - Pixabay Content License (https://pixabay.com/service/license-summary/), source https://pixabay.com/music/corporate-technology-tech-technology-549463/",
+      "bgm/inspiring.mp3: 'Freedom Inspired Cinematic Background Music For Video' by music_for_video - Pixabay Content License (https://pixabay.com/service/license-summary/), source https://pixabay.com/music/trap-freedom-inspired-cinematic-background-music-for-video-5606/"
+    ]
+  }
+}
