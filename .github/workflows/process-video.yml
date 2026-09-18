@@ -611,7 +611,7 @@ jobs:
                               "https://api.groq.com/openai/v1/chat/completions",
                               headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
                               json={
-                                  "model": "llama-3.3-70b-versatile",
+                                  "model": "openai/gpt-oss-120b",
                                   "messages": [
                                       {"role": "system", "content": "You are a Hindi-to-Hinglish romanization expert. You convert Devanagari script to natural romanized Hindi (Hinglish) as Indians type it on social media. Return ONLY valid JSON."},
                                       {"role": "user", "content": prompt}
@@ -767,7 +767,7 @@ jobs:
                               "Content-Type": "application/json"
                           },
                           json={
-                              "model": "llama-3.3-70b-versatile",
+                              "model": "openai/gpt-oss-120b",
                               "messages": [
                                   {"role": "system", "content": "You are a viral content expert. Return ONLY valid JSON." if is_json else "You are a viral content expert."},
                                   {"role": "user", "content": prompt}
