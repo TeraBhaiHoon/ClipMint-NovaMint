@@ -22,9 +22,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { job_id, status, error_message, webhook_secret } = body;
 
-    // Lazy-init Resend (avoids build-time crash when env var is missing)
-    const resend = new Resend(process.env.RESEND_API_KEY);
-
     // ── Authenticate the webhook call ──
     const expectedSecret = process.env.WEBHOOK_SECRET;
     if (!expectedSecret || webhook_secret !== expectedSecret) {
@@ -70,36 +67,19 @@ export async function POST(request: NextRequest) {
     const job = jobs[0];
 
     // ── Update clips_used in user profile when job completes successfully ──
+    // Atomic RPC (see supabase/migration_quota.sql) instead of a read-modify-write.
     if (status === "done" && job.clips_count > 0) {
       try {
-        const profileRes = await fetch(
-          `${supabaseUrl}/rest/v1/profiles?id=eq.${job.user_id}&select=clips_used`,
-          {
-            headers: {
-              apikey: serviceKey,
-              Authorization: `Bearer ${serviceKey}`,
-            },
-          }
-        );
-        const profiles = await profileRes.json();
-        if (profiles && profiles.length > 0) {
-          const currentClipsUsed = profiles[0].clips_used || 0;
-          await fetch(
-            `${supabaseUrl}/rest/v1/profiles?id=eq.${job.user_id}`,
-            {
-              method: "PATCH",
-              headers: {
-                apikey: serviceKey,
-                Authorization: `Bearer ${serviceKey}`,
-                "Content-Type": "application/json",
-                Prefer: "return=minimal",
-              },
-              body: JSON.stringify({
-                clips_used: currentClipsUsed + job.clips_count,
-              }),
-            }
-          );
-          console.log(`Updated clips_used: ${currentClipsUsed} → ${currentClipsUsed + job.clips_count} for user ${job.user_id}`);
+        const rpc = await callRpc(supabaseUrl, serviceKey, "increment_clips_used", {
+          p_user_id: job.user_id,
+          p_count: job.clips_count,
+        });
+        if (!rpc.ok) {
+          console.error("increment_clips_used RPC failed:", rpc.detail);
+        } else if (rpc.data === false) {
+          console.error(`increment_clips_used refused for user ${job.user_id} (profile missing?)`);
+        } else {
+          console.log(`incremented clips_used by ${job.clips_count} for user ${job.user_id}`);
         }
       } catch (err) {
         console.error("Failed to update clips_used:", err);
@@ -107,42 +87,53 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Decrement videos_used when job fails or is cancelled ──
-    // (The user's videos_used was incremented at submission time,
-    //  so we reverse it here since the job didn't succeed.)
+    // (The user's videos_used was incremented at submission time, so we reverse
+    //  it here since the job didn't succeed.)
+    //
+    // Idempotency: the pipeline sets `jobs.status` to failed/cancelled *before*
+    // it calls this webhook, so the status cannot tell us whether we already
+    // refunded. Instead we flip `jobs.videos_refunded` with a conditional PATCH
+    // (compare-and-set): only the delivery that wins the race refunds.
     if (status === "failed" || status === "cancelled") {
       try {
-        const profileRes = await fetch(
-          `${supabaseUrl}/rest/v1/profiles?id=eq.${job.user_id}&select=videos_used`,
+        const claimRes = await fetch(
+          `${supabaseUrl}/rest/v1/jobs?id=eq.${job_id}&videos_refunded=eq.false`,
           {
+            method: "PATCH",
             headers: {
               apikey: serviceKey,
               Authorization: `Bearer ${serviceKey}`,
+              "Content-Type": "application/json",
+              Prefer: "return=representation",
             },
+            body: JSON.stringify({ videos_refunded: true }),
           }
         );
-        const profiles = await profileRes.json();
-        if (profiles && profiles.length > 0) {
-          const currentVideosUsed = profiles[0].videos_used || 0;
-          const newVideosUsed = Math.max(0, currentVideosUsed - 1);
-          await fetch(
-            `${supabaseUrl}/rest/v1/profiles?id=eq.${job.user_id}`,
-            {
-              method: "PATCH",
-              headers: {
-                apikey: serviceKey,
-                Authorization: `Bearer ${serviceKey}`,
-                "Content-Type": "application/json",
-                Prefer: "return=minimal",
-              },
-              body: JSON.stringify({
-                videos_used: newVideosUsed,
-              }),
-            }
+
+        if (!claimRes.ok) {
+          const detail = (await claimRes.text()).slice(0, 300);
+          console.error(
+            `Could not claim refund for job ${job_id} (is supabase/migration_quota.sql applied?):`,
+            claimRes.status,
+            detail
           );
-          console.log(`Decremented videos_used: ${currentVideosUsed} → ${newVideosUsed} for user ${job.user_id} (job ${status})`);
+        } else {
+          const claimed = await claimRes.json();
+          if (Array.isArray(claimed) && claimed.length > 0) {
+            const rpc = await callRpc(supabaseUrl, serviceKey, "refund_videos_used", {
+              p_user_id: job.user_id,
+            });
+            if (rpc.ok && rpc.data === true) {
+              console.log(`Refunded one video slot for user ${job.user_id} (job ${status})`);
+            } else {
+              console.error("refund_videos_used RPC failed:", rpc.detail);
+            }
+          } else {
+            console.log(`Refund already recorded for job ${job_id} — skipping duplicate refund`);
+          }
         }
       } catch (err) {
-        console.error("Failed to decrement videos_used:", err);
+        console.error("Failed to refund videos_used:", err);
       }
     }
 
@@ -207,35 +198,47 @@ export async function POST(request: NextRequest) {
       (status === "failed" && notifyJobFailed) ||
       (status === "cancelled" && notifyJobFailed);
 
-    // ── Send Email notification ──
+    // ── Send Email notification (best effort — must never fail the webhook) ──
     if (shouldNotify && notifyEmail) {
-      try {
-        if (status === "done") {
-          await resend.emails.send({
-            from: "ClipMint <no-reply@novamintnetworks.in>",
-            to: [userEmail],
-            subject: "🎬 Your clips are ready!",
-            html: buildSuccessEmail({
-              jobUrl,
-              clipCount: job.clips_count || 0,
-              videoUrl: job.video_url || "",
-            }),
-          });
-        } else if (status === "failed") {
-          await resend.emails.send({
-            from: "ClipMint <no-reply@novamintnetworks.in>",
-            to: [userEmail],
-            subject: "⚠️ Video processing failed",
-            html: buildFailureEmail({
-              jobUrl,
-              errorMessage: error_message || "An unexpected error occurred",
-              videoUrl: job.video_url || "",
-            }),
-          });
+      const resendKey = process.env.RESEND_API_KEY;
+      if (!resendKey) {
+        console.warn("RESEND_API_KEY is not set — skipping email notification");
+      } else {
+        try {
+          // Constructed here, at the point of use, so a missing/invalid key can
+          // never throw before the quota bookkeeping above has run.
+          const resend = new Resend(resendKey);
+
+          if (status === "done") {
+            const result = await resend.emails.send({
+              from: "ClipMint <no-reply@novamintnetworks.in>",
+              to: [userEmail],
+              subject: "🎬 Your clips are ready!",
+              html: buildSuccessEmail({
+                jobUrl,
+                clipCount: job.clips_count || 0,
+                videoUrl: job.video_url || "",
+              }),
+            });
+            if (result.error) console.error("Resend error (success email):", result.error);
+            else console.log(`Email notification sent to ${userEmail} for status: ${status}`);
+          } else if (status === "failed") {
+            const result = await resend.emails.send({
+              from: "ClipMint <no-reply@novamintnetworks.in>",
+              to: [userEmail],
+              subject: "⚠️ Video processing failed",
+              html: buildFailureEmail({
+                jobUrl,
+                errorMessage: error_message || "An unexpected error occurred",
+                videoUrl: job.video_url || "",
+              }),
+            });
+            if (result.error) console.error("Resend error (failure email):", result.error);
+            else console.log(`Email notification sent to ${userEmail} for status: ${status}`);
+          }
+        } catch (err) {
+          console.error("Failed to send email notification:", err);
         }
-        console.log(`Email notification sent to ${userEmail} for status: ${status}`);
-      } catch (err) {
-        console.error("Failed to send email notification:", err);
       }
     }
 
@@ -265,6 +268,50 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// ── Supabase helpers ──
+
+/**
+ * Call a Postgres function via PostgREST. Returns `ok: false` with a short
+ * detail string when the HTTP call fails (e.g. the migration was not applied)
+ * so callers can log instead of throwing.
+ */
+async function callRpc(
+  supabaseUrl: string,
+  serviceKey: string,
+  fn: string,
+  params: Record<string, unknown>
+): Promise<{ ok: boolean; data: unknown; detail: string }> {
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: {
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(params),
+  });
+
+  const text = await res.text();
+  let data: unknown = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  return { ok: res.ok, data, detail: `${res.status} ${text.slice(0, 300)}` };
+}
+
+/** Escape a value before interpolating it into the notification HTML. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ── Discord Webhook ──
@@ -331,6 +378,8 @@ async function sendDiscordNotification(opts: {
 // ── Email Templates ──
 
 function buildSuccessEmail(opts: { jobUrl: string; clipCount: number; videoUrl: string }) {
+  const safeVideoUrl = escapeHtml(opts.videoUrl);
+  const safeJobUrl = escapeHtml(opts.jobUrl);
   return `
 <!DOCTYPE html>
 <html>
@@ -346,16 +395,16 @@ function buildSuccessEmail(opts: { jobUrl: string; clipCount: number; videoUrl: 
         <strong style="color:#39E508;">${opts.clipCount} clip${opts.clipCount !== 1 ? "s" : ""}</strong>.
       </p>
       <p style="color:#888;font-size:13px;margin:0 0 24px;word-break:break-all;">
-        Source: ${opts.videoUrl.length > 80 ? opts.videoUrl.slice(0, 80) + "..." : opts.videoUrl}
+        Source: ${safeVideoUrl.length > 80 ? safeVideoUrl.slice(0, 80) + "..." : safeVideoUrl}
       </p>
-      <a href="${opts.jobUrl}"
+      <a href="${safeJobUrl}"
          style="display:inline-block;background:linear-gradient(135deg,#39E508,#00C853);color:#000;padding:14px 32px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;">
         View & Download Clips →
       </a>
     </div>
     <div style="padding:20px 40px;border-top:1px solid #222;">
       <p style="color:#555;font-size:12px;margin:0;">
-        ClipMint by NovaMint Networks · <a href="${opts.jobUrl}" style="color:#39E508;text-decoration:none;">Dashboard</a>
+        ClipMint by NovaMint Networks · <a href="${safeJobUrl}" style="color:#39E508;text-decoration:none;">Dashboard</a>
       </p>
     </div>
   </div>
@@ -364,6 +413,9 @@ function buildSuccessEmail(opts: { jobUrl: string; clipCount: number; videoUrl: 
 }
 
 function buildFailureEmail(opts: { jobUrl: string; errorMessage: string; videoUrl: string }) {
+  const safeVideoUrl = escapeHtml(opts.videoUrl);
+  const safeJobUrl = escapeHtml(opts.jobUrl);
+  const safeError = escapeHtml(opts.errorMessage);
   return `
 <!DOCTYPE html>
 <html>
@@ -378,21 +430,21 @@ function buildFailureEmail(opts: { jobUrl: string; errorMessage: string; videoUr
         Unfortunately, ClipMint encountered an error while processing your video.
       </p>
       <p style="color:#888;font-size:13px;margin:0 0 12px;word-break:break-all;">
-        Source: ${opts.videoUrl.length > 80 ? opts.videoUrl.slice(0, 80) + "..." : opts.videoUrl}
+        Source: ${safeVideoUrl.length > 80 ? safeVideoUrl.slice(0, 80) + "..." : safeVideoUrl}
       </p>
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:12px 16px;margin:0 0 24px;">
         <span style="color:#EF4444;font-size:13px;">
-          ${opts.errorMessage}
+          ${safeError}
         </span>
       </div>
-      <a href="${opts.jobUrl}"
+      <a href="${safeJobUrl}"
          style="display:inline-block;background:linear-gradient(135deg,#EF4444,#DC2626);color:#fff;padding:14px 32px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;">
         View Job & Retry →
       </a>
     </div>
     <div style="padding:20px 40px;border-top:1px solid #222;">
       <p style="color:#555;font-size:12px;margin:0;">
-        ClipMint by NovaMint Networks · <a href="${opts.jobUrl}" style="color:#39E508;text-decoration:none;">Dashboard</a>
+        ClipMint by NovaMint Networks · <a href="${safeJobUrl}" style="color:#39E508;text-decoration:none;">Dashboard</a>
       </p>
     </div>
   </div>

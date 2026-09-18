@@ -1,14 +1,14 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import Link from "next/link";
-import type { Job, Clip } from "@/lib/types";
+import type { Job, Clip, JobStatus } from "@/lib/types";
 import { JOB_STATUS_LABELS } from "@/lib/types";
 import {
     ArrowLeft, Download, ExternalLink, Copy, Share2, Star,
     Clock, Film, Loader2, RefreshCw, AlertTriangle, Image,
-    Check, ChevronRight,
+    Check, ChevronRight, Play, X,
 } from "lucide-react";
 
 const PIPELINE_STEPS = [
@@ -19,6 +19,41 @@ const PIPELINE_STEPS = [
     { key: "captioning", label: "Caption" },
     { key: "uploading", label: "Upload" },
 ];
+
+const TERMINAL_STATUSES: JobStatus[] = ["done", "failed", "cancelled"];
+/** Polling fallback cadence while a job is still running (Realtime can drop). */
+const JOB_POLL_MS = 4000;
+/** A job stuck in a non-terminal state for longer than this is surfaced as stuck. */
+const STUCK_AFTER_MS = 45 * 60 * 1000;
+
+function isTerminalStatus(status: JobStatus | null | undefined): boolean {
+    return !!status && TERMINAL_STATUSES.includes(status);
+}
+
+/** Google Drive file id — from the stored column, else parsed out of the URL. */
+function parseDriveFileId(clip: Clip): string | null {
+    if (clip.drive_file_id) return clip.drive_file_id;
+    if (!clip.drive_url) return null;
+    const byPath = clip.drive_url.match(/\/file\/d\/([^/?#]+)/);
+    if (byPath) return byPath[1];
+    const byQuery = clip.drive_url.match(/[?&]id=([^&]+)/);
+    return byQuery ? byQuery[1] : null;
+}
+
+/** The pipeline never writes duration_seconds — fall back to end - start. */
+function clipDurationSeconds(clip: Clip): number | null {
+    if (typeof clip.duration_seconds === "number" && clip.duration_seconds > 0) {
+        return clip.duration_seconds;
+    }
+    if (
+        typeof clip.start_time === "number" &&
+        typeof clip.end_time === "number" &&
+        clip.end_time > clip.start_time
+    ) {
+        return clip.end_time - clip.start_time;
+    }
+    return null;
+}
 
 function getStepState(stepKey: string, jobStatus: string) {
     const stepOrder = PIPELINE_STEPS.map((s) => s.key);
@@ -39,30 +74,69 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     const [retrying, setRetrying] = useState(false);
     const [downloadingAll, setDownloadingAll] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    const [previewClip, setPreviewClip] = useState<Clip | null>(null);
+    // Ticks on every poll so the "stuck" check re-evaluates without extra timers.
+    const [now, setNow] = useState(() => Date.now());
+    const inFlightRef = useRef(false);
+    const statusRef = useRef<JobStatus | null>(null);
 
     useEffect(() => {
-        async function load() {
-            const { data: jobData } = await supabase.from("jobs").select("*").eq("id", jobId).single();
-            if (jobData) setJob(jobData as Job);
+        let disposed = false;
+        let timer: ReturnType<typeof setInterval> | null = null;
 
-            const { data: clipsData } = await supabase.from("clips").select("*").eq("job_id", jobId).order("clip_index", { ascending: true });
-            if (clipsData) setClips(clipsData as Clip[]);
-            setLoading(false);
+        async function load() {
+            if (inFlightRef.current) return; // never overlap requests
+            inFlightRef.current = true;
+            try {
+                const { data: jobData } = await supabase.from("jobs").select("*").eq("id", jobId).single();
+                if (disposed) return;
+                if (jobData) {
+                    setJob(jobData as Job);
+                    statusRef.current = (jobData as Job).status;
+                }
+
+                const { data: clipsData } = await supabase.from("clips").select("*").eq("job_id", jobId).order("clip_index", { ascending: true });
+                if (disposed) return;
+                if (clipsData) setClips(clipsData as Clip[]);
+                setNow(Date.now());
+            } finally {
+                inFlightRef.current = false;
+                if (!disposed) setLoading(false);
+            }
         }
+
         load();
+
+        // Polling fallback: Realtime `postgres_changes` only fires when the
+        // publication is configured AND the websocket is healthy, so keep a
+        // simple poll running until the job reaches a terminal state.
+        timer = setInterval(() => {
+            if (isTerminalStatus(statusRef.current)) {
+                if (timer) clearInterval(timer);
+                return;
+            }
+            load();
+        }, JOB_POLL_MS);
 
         // Real-time updates for this job
         const channel = supabase
             .channel(`job-${jobId}`)
             .on("postgres_changes", { event: "UPDATE", schema: "public", table: "jobs", filter: `id=eq.${jobId}` }, (payload) => {
-                setJob(payload.new as Job);
+                const next = payload.new as Job;
+                statusRef.current = next.status;
+                setJob(next);
             })
             .on("postgres_changes", { event: "INSERT", schema: "public", table: "clips", filter: `job_id=eq.${jobId}` }, (payload) => {
-                setClips((prev) => [...prev, payload.new as Clip]);
+                const clip = payload.new as Clip;
+                setClips((prev) => (prev.some((c) => c.id === clip.id) ? prev : [...prev, clip]));
             })
             .subscribe();
 
-        return () => { supabase.removeChannel(channel); };
+        return () => {
+            disposed = true;
+            if (timer) clearInterval(timer);
+            supabase.removeChannel(channel);
+        };
     }, [jobId]);
 
     const handleRetry = async () => {
@@ -70,14 +144,22 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
         setRetrying(true);
         await supabase.from("jobs").update({ status: "queued", progress: 0, error_message: null }).eq("id", job.id);
         setJob((j) => j ? { ...j, status: "queued", progress: 0, error_message: null } : j);
+        statusRef.current = "queued";
         try {
+            // Only the job id is sent — the API re-reads the stored URL/config.
             const res = await fetch("/api/trigger-pipeline", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ job_id: job.id, video_url: job.video_url, caption_style: job.caption_style, max_clips: job.max_clips }),
+                body: JSON.stringify({ job_id: job.id }),
             });
-            if (!res.ok) setJob((j) => j ? { ...j, status: "failed", error_message: "Could not start processing. Please try again." } : j);
+            if (!res.ok) {
+                const payload = await res.json().catch(() => null);
+                const message = payload?.error || "Could not start processing. Please try again.";
+                setJob((j) => j ? { ...j, status: "failed", error_message: message } : j);
+                statusRef.current = "failed";
+            }
         } catch {
             setJob((j) => j ? { ...j, status: "failed", error_message: "Could not start processing. Please check your connection." } : j);
+            statusRef.current = "failed";
         }
         setRetrying(false);
     };
@@ -146,6 +228,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
 
     const statusInfo = JOB_STATUS_LABELS[job.status];
     const isProcessing = !["done", "failed", "queued", "cancelled"].includes(job.status);
+    const runningSince = new Date(job.started_at || job.created_at).getTime();
+    const isStuck = !isTerminalStatus(job.status) && runningSince > 0 && now - runningSince > STUCK_AFTER_MS;
+    const previewDriveId = previewClip ? parseDriveFileId(previewClip) : null;
 
     return (
         <div>
@@ -270,6 +355,29 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                 </div>
             )}
 
+            {/* ─── Stuck job (no progress for 45+ minutes) ─── */}
+            {isStuck && (
+                <div className="glass-card p-5 mb-6 border-amber-500/20 bg-amber-500/5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle size={20} className="text-[#f59e0b] flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                            <div className="text-sm font-bold text-[#f59e0b] mb-1.5">This job looks stuck</div>
+                            <div className="text-xs text-slate-300 mb-3.5">
+                                It has been in &quot;{statusInfo.label}&quot; for more than 45 minutes with no progress.
+                                Retry to send it through the pipeline again.
+                            </div>
+                            <button 
+                                className="btn-primary px-4 py-2 text-xs font-semibold flex items-center gap-1.5" 
+                                onClick={handleRetry} 
+                                disabled={retrying}
+                            >
+                                {retrying ? <><Loader2 size={14} className="animate-spin" /> Retrying...</> : <><RefreshCw size={14} /> Retry</>}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* ─── Clips Gallery ─── */}
             <h2 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
                 <Film size={18} className="text-[#8b5cf6]" />
@@ -285,7 +393,10 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                 </div>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {clips.map((clip, i) => (
+                    {clips.map((clip, i) => {
+                        const driveId = parseDriveFileId(clip);
+                        const duration = clipDurationSeconds(clip);
+                        return (
                         <div 
                             key={clip.id} 
                             className="glass-card animate-fade-in-up !p-0 overflow-hidden hover:border-[#8b5cf6]/35 shadow-lg flex flex-col" 
@@ -294,13 +405,36 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                             {/* Preview area */}
                             <div className="h-44 bg-gradient-to-br from-[#0d0c12] to-[#12101b] flex items-center justify-center relative overflow-hidden border-b border-white/5">
                                 {clip.thumbnail_url ? (
-                                    <img 
-                                        src={clip.thumbnail_url} 
-                                        alt={clip.title || `Clip ${clip.clip_index + 1}`} 
-                                        className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 hover:scale-105" 
-                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setPreviewClip(clip)}
+                                        className="absolute inset-0 w-full h-full group cursor-pointer border-0 bg-transparent p-0"
+                                        title="Preview clip"
+                                    >
+                                        <img 
+                                            src={clip.thumbnail_url} 
+                                            alt={clip.title || `Clip ${clip.clip_index + 1}`} 
+                                            className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                                        />
+                                        <span className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <span className="w-11 h-11 rounded-full bg-black/60 backdrop-blur-sm border border-white/20 flex items-center justify-center">
+                                                <Play size={17} className="text-white ml-0.5" fill="currentColor" />
+                                            </span>
+                                        </span>
+                                    </button>
                                 ) : (
-                                    <Film size={36} className="text-[#64748b]/20" />
+                                    <div className="flex flex-col items-center gap-2">
+                                        <Film size={36} className="text-[#64748b]/20" />
+                                        {driveId && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setPreviewClip(clip)}
+                                                className="btn-secondary px-3 py-1.5 text-[10px] font-semibold flex items-center gap-1.5"
+                                            >
+                                                <Play size={11} /> Preview
+                                            </button>
+                                        )}
+                                    </div>
                                 )}
                                 {clip.viral_score != null && (
                                     <div 
@@ -313,9 +447,9 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                         <Star size={13} /> {clip.viral_score}
                                     </div>
                                 )}
-                                {clip.duration_seconds != null && (
+                                {duration != null && (
                                     <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-bold text-slate-200 backdrop-blur-sm">
-                                        {Math.round(clip.duration_seconds)}s
+                                        {Math.round(duration)}s
                                     </div>
                                 )}
                             </div>
@@ -376,7 +510,71 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                 </div>
                             </div>
                         </div>
-                    ))}
+                        );
+                    })}
+                </div>
+            )}
+
+            {/* ─── Inline clip preview (Google Drive player) ─── */}
+            {previewClip && (
+                <div
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+                    onClick={() => setPreviewClip(null)}
+                >
+                    <div
+                        className="relative w-full max-w-[340px]"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <button
+                            type="button"
+                            onClick={() => setPreviewClip(null)}
+                            className="absolute -top-10 right-0 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center text-slate-200 cursor-pointer transition-colors"
+                            aria-label="Close preview"
+                        >
+                            <X size={16} />
+                        </button>
+                        <div
+                            className="relative w-full rounded-2xl overflow-hidden border border-white/10 bg-black shadow-2xl"
+                            style={{ aspectRatio: "9 / 16" }}
+                        >
+                            {previewDriveId ? (
+                                <iframe
+                                    src={`https://drive.google.com/file/d/${previewDriveId}/preview`}
+                                    className="absolute inset-0 w-full h-full"
+                                    allow="autoplay; fullscreen"
+                                    allowFullScreen
+                                    title={previewClip.title || `Clip ${previewClip.clip_index + 1}`}
+                                />
+                            ) : (
+                                <div className="absolute inset-0 flex items-center justify-center text-xs text-[#64748b] px-6 text-center">
+                                    Preview isn&apos;t available for this clip yet.
+                                </div>
+                            )}
+                        </div>
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-slate-200 truncate">
+                                {previewClip.title || `Clip ${previewClip.clip_index + 1}`}
+                            </span>
+                            <div className="flex gap-1.5 flex-shrink-0">
+                                <button
+                                    className="btn-primary py-1.5 px-3 text-[11px] font-semibold"
+                                    onClick={() => previewClip.drive_url && triggerDownload(previewClip.drive_url)}
+                                >
+                                    <Download size={12} /> Download
+                                </button>
+                                {previewClip.drive_url && (
+                                    <a
+                                        href={previewClip.drive_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="btn-secondary py-1.5 px-3 text-[11px] font-semibold"
+                                    >
+                                        <ExternalLink size={12} /> Drive
+                                    </a>
+                                )}
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

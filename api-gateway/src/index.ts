@@ -7,6 +7,10 @@
  *   GET  /api/v1/jobs/:id     — Get job details
  *   GET  /api/v1/jobs/:id/clips — Get clips for a job
  *   GET  /api/v1/health       — Health check
+ *
+ * NOTE: the URL validator below is a self-contained copy of
+ * `dashboard/src/lib/validateUrl.ts` — a Worker cannot import from the Next.js
+ * tree, so the rules are duplicated on purpose. Keep both in sync.
  */
 
 export interface Env {
@@ -26,6 +30,14 @@ interface ApiUser {
     plan: string;
     videos_used: number;
     videos_limit: number;
+    clips_used: number;
+    clips_limit: number;
+}
+
+interface ApiKeyRow {
+    id: string;
+    user_id: string;
+    requests_today: number | null;
 }
 
 interface CreateJobBody {
@@ -33,6 +45,120 @@ interface CreateJobBody {
     caption_style?: string;
     max_clips?: number;
     source_type?: string;
+}
+
+// ─── Video URL validation / normalisation (mirror of lib/validateUrl.ts) ────
+
+type VideoProvider = "youtube" | "instagram" | "facebook" | "drive" | "vimeo" | "direct";
+
+interface UrlValidationResult {
+    ok: boolean;
+    url?: string;
+    provider?: VideoProvider;
+    reason?: string;
+}
+
+const MAX_URL_LENGTH = 2048;
+
+const PROVIDER_HOSTS: Record<string, VideoProvider> = {
+    "youtube.com": "youtube",
+    "www.youtube.com": "youtube",
+    "m.youtube.com": "youtube",
+    "music.youtube.com": "youtube",
+    "youtu.be": "youtube",
+    "instagram.com": "instagram",
+    "www.instagram.com": "instagram",
+    "facebook.com": "facebook",
+    "www.facebook.com": "facebook",
+    "m.facebook.com": "facebook",
+    "fb.watch": "facebook",
+    "drive.google.com": "drive",
+    "vimeo.com": "vimeo",
+};
+
+const DIRECT_MEDIA_EXTENSIONS = /\.(mp4|mov|m4v|webm)$/;
+
+/**
+ * Characters rejected outright. Deliberately NARROW — an earlier version also
+ * banned `& ; | > < ( ) ' "`, which rejected ordinary links like
+ * `youtube.com/watch?v=ID&list=…`. Those are only dangerous when a value is
+ * pasted into a shell command, and the pipeline now passes the URL through the
+ * environment rather than interpolating it into a script. What remains is the
+ * set that is never legitimate in a URL (whitespace, control characters) plus
+ * backtick, `$` and `\`, which could break out of a quoted string.
+ */
+const SHELL_UNSAFE = /[`$\\\s\u0000-\u001f]/;
+
+const TRACKING_PARAMS = new Set(["si", "fbclid", "igshid", "igsh", "feature", "ref", "ref_src", "_r"]);
+const KEEP_PARAMS = new Set(["v", "list", "start", "id"]);
+
+/** Strip tracking params while preserving functional ones (`v`, `list`, `start`, `id`). */
+function normalizeVideoUrl(raw: string): string {
+    const trimmed = raw.trim();
+    try {
+        const parsed = new URL(trimmed);
+        const isYouTube = PROVIDER_HOSTS[parsed.hostname.toLowerCase()] === "youtube";
+
+        for (const key of Array.from(parsed.searchParams.keys())) {
+            const lower = key.toLowerCase();
+            if (KEEP_PARAMS.has(lower)) continue;
+            if (TRACKING_PARAMS.has(lower) || lower.startsWith("utm_") || (isYouTube && lower === "t")) {
+                parsed.searchParams.delete(key);
+            }
+        }
+
+        return parsed.toString();
+    } catch {
+        return trimmed;
+    }
+}
+
+/** https-only (including direct media files). Returns the normalised URL. */
+function validateVideoUrl(raw: unknown): UrlValidationResult {
+    if (typeof raw !== "string" || !raw.trim()) {
+        return { ok: false, reason: "Please paste a video URL." };
+    }
+
+    const trimmed = raw.trim();
+
+    if (trimmed.length > MAX_URL_LENGTH) {
+        return { ok: false, reason: `That URL is too long (max ${MAX_URL_LENGTH} characters).` };
+    }
+
+    if (SHELL_UNSAFE.test(trimmed)) {
+        return {
+            ok: false,
+            reason: "That URL contains an unsupported character. Copy the link straight from your browser and paste it again.",
+        };
+    }
+
+    let parsed: URL;
+    try {
+        parsed = new URL(trimmed);
+    } catch {
+        return { ok: false, reason: "That doesn't look like a link. Paste the full video URL starting with https://" };
+    }
+
+    if (parsed.protocol !== "https:") {
+        return { ok: false, reason: "Only https:// links are supported." };
+    }
+
+    const host = parsed.hostname.toLowerCase();
+    let provider = PROVIDER_HOSTS[host];
+
+    if (!provider && DIRECT_MEDIA_EXTENSIONS.test(parsed.pathname.toLowerCase())) {
+        provider = "direct";
+    }
+
+    if (!provider) {
+        return {
+            ok: false,
+            reason:
+                "That link isn't a supported video source. Paste a YouTube, Instagram, Facebook, Vimeo or Google Drive link, or a direct .mp4/.mov/.m4v/.webm file URL.",
+        };
+    }
+
+    return { ok: true, url: normalizeVideoUrl(trimmed), provider };
 }
 
 // ─── CORS Headers ────────────────────────────────────────────────────────────
@@ -60,11 +186,96 @@ function errorResponse(message: string, status: number, env?: Env): Response {
     return jsonResponse({ error: message }, status, env);
 }
 
+// ─── Supabase helpers ────────────────────────────────────────────────────────
+
+interface RpcResult {
+    ok: boolean;
+    data: unknown;
+}
+
+async function callRpc(env: Env, fn: string, params: Record<string, unknown>): Promise<RpcResult | null> {
+    try {
+        const res = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+            method: "POST",
+            headers: {
+                apikey: env.SUPABASE_SERVICE_KEY,
+                Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(params),
+        });
+
+        if (!res.ok) {
+            const detail = (await res.text()).slice(0, 300);
+            console.error(`RPC ${fn} failed: ${res.status} ${detail}`);
+            return null;
+        }
+
+        const text = await res.text();
+        return { ok: true, data: text ? JSON.parse(text) : null };
+    } catch (err) {
+        console.error(`RPC ${fn} threw:`, err instanceof Error ? err.message : String(err));
+        return null;
+    }
+}
+
+/**
+ * Reserve one video slot atomically (supabase/migration_quota.sql).
+ * Returns true (reserved), false (limit reached) or null (RPC unavailable —
+ * caller fails open so the API keeps working if the migration is not applied).
+ */
+async function reserveVideoSlot(env: Env, userId: string): Promise<boolean | null> {
+    const result = await callRpc(env, "increment_videos_used", { p_user_id: userId });
+    if (!result) return null;
+    return result.data === true;
+}
+
+async function refundVideoSlot(env: Env, userId: string): Promise<void> {
+    await callRpc(env, "refund_videos_used", { p_user_id: userId });
+}
+
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
+
+/**
+ * Update `api_keys.last_used_at` / `requests_today` without blocking the
+ * response. NOTE: `api_keys` has no date column, so `requests_today` can only be
+ * incremented here — it is never reset at midnight. A true daily reset would
+ * need a `requests_date` column (out of scope for this fix).
+ */
+function recordKeyUsage(
+    env: Env,
+    keyId: string,
+    requestsToday: number | null,
+    ctx?: ExecutionContext
+): void {
+    const task = (async () => {
+        try {
+            await fetch(`${env.SUPABASE_URL}/rest/v1/api_keys?id=eq.${keyId}`, {
+                method: "PATCH",
+                headers: {
+                    apikey: env.SUPABASE_SERVICE_KEY,
+                    Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
+                    "Content-Type": "application/json",
+                    Prefer: "return=minimal",
+                },
+                body: JSON.stringify({
+                    last_used_at: new Date().toISOString(),
+                    requests_today: (requestsToday || 0) + 1,
+                }),
+            });
+        } catch (err) {
+            console.error("Failed to record API key usage:", err instanceof Error ? err.message : String(err));
+        }
+    })();
+
+    if (ctx) ctx.waitUntil(task);
+    else void task;
+}
 
 async function authenticateRequest(
     request: Request,
-    env: Env
+    env: Env,
+    ctx?: ExecutionContext
 ): Promise<ApiUser | null> {
     const authHeader = request.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) return null;
@@ -81,7 +292,7 @@ async function authenticateRequest(
 
     // Check Supabase for the key
     const keyRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/api_keys?key_hash=eq.${hashHex}&is_active=eq.true&select=user_id`,
+        `${env.SUPABASE_URL}/rest/v1/api_keys?key_hash=eq.${hashHex}&is_active=eq.true&select=id,user_id,requests_today`,
         {
             headers: {
                 apikey: env.SUPABASE_SERVICE_KEY,
@@ -90,12 +301,15 @@ async function authenticateRequest(
         }
     );
 
-    const keys = (await keyRes.json()) as Array<{ user_id: string }>;
+    const keys = (await keyRes.json()) as ApiKeyRow[];
     if (!keys.length) return null;
+
+    // Authenticated — record usage (non-blocking).
+    recordKeyUsage(env, keys[0].id, keys[0].requests_today, ctx);
 
     // Get user profile
     const profileRes = await fetch(
-        `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${keys[0].user_id}&select=id,plan,videos_used,videos_limit`,
+        `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${keys[0].user_id}&select=id,plan,videos_used,videos_limit,clips_used,clips_limit`,
         {
             headers: {
                 apikey: env.SUPABASE_SERVICE_KEY,
@@ -131,7 +345,16 @@ async function handleCreateJob(
     user: ApiUser,
     env: Env
 ): Promise<Response> {
-    // Check quota
+    const body = (await request.json()) as CreateJobBody;
+
+    // ── Validate + normalise the URL (it is interpolated into a shell command
+    //    by the workflow, so this is the security boundary) ──
+    const validation = validateVideoUrl(body.video_url);
+    if (!validation.ok) {
+        return errorResponse(validation.reason || "Invalid video_url", 400, env);
+    }
+
+    // ── Quota ──
     if (user.videos_used >= user.videos_limit) {
         return errorResponse(
             `Video limit reached (${user.videos_used}/${user.videos_limit}). Upgrade your plan.`,
@@ -140,10 +363,13 @@ async function handleCreateJob(
         );
     }
 
-    const body = (await request.json()) as CreateJobBody;
-
-    if (!body.video_url) {
-        return errorResponse("video_url is required", 400, env);
+    const remainingClips = Math.max(0, (user.clips_limit ?? 0) - (user.clips_used ?? 0));
+    if (remainingClips < 1) {
+        return errorResponse(
+            `Clip limit reached (${user.clips_used}/${user.clips_limit}). Upgrade your plan.`,
+            429,
+            env
+        );
     }
 
     const VALID_STYLES = [
@@ -155,7 +381,20 @@ async function handleCreateJob(
         return errorResponse(`Invalid caption_style. Must be one of: ${VALID_STYLES.join(", ")}`, 400, env);
     }
 
-    const maxClips = Math.min(Math.max(body.max_clips || 10, 1), 20);
+    // Clamp server-side to the plan's remaining clips.
+    const maxClips = Math.min(Math.max(body.max_clips || 10, 1), 20, remainingClips);
+
+    // Reserve the video slot *before* creating/dispatching the job so a
+    // concurrent submission cannot slip past the limit.
+    const reserved = await reserveVideoSlot(env, user.id);
+    if (reserved === false) {
+        return errorResponse(
+            `Video limit reached (${user.videos_used}/${user.videos_limit}). Upgrade your plan.`,
+            429,
+            env
+        );
+    }
+    const slotReserved = reserved === true;
 
     // Create job in Supabase
     const jobRes = await fetch(`${env.SUPABASE_URL}/rest/v1/jobs`, {
@@ -168,7 +407,7 @@ async function handleCreateJob(
         },
         body: JSON.stringify({
             user_id: user.id,
-            video_url: body.video_url,
+            video_url: validation.url,
             caption_style: captionStyle,
             max_clips: maxClips,
             source_type: body.source_type || "url",
@@ -178,6 +417,7 @@ async function handleCreateJob(
 
     const jobs = (await jobRes.json()) as Array<{ id: string }>;
     if (!jobs.length) {
+        if (slotReserved) await refundVideoSlot(env, user.id);
         return errorResponse("Failed to create job", 500, env);
     }
 
@@ -197,7 +437,7 @@ async function handleCreateJob(
                 ref: "main",
                 inputs: {
                     job_id: jobId,
-                    video_url: body.video_url,
+                    video_url: validation.url,
                     caption_style: captionStyle,
                     max_clips: String(maxClips),
                 },
@@ -226,6 +466,8 @@ async function handleCreateJob(
                     }),
                 }
             );
+            // No pipeline run means no webhook, so refund the reserved slot here.
+            if (slotReserved) await refundVideoSlot(env, user.id);
             return errorResponse(errDetail, 500, env);
         }
     } catch (err) {
@@ -249,22 +491,9 @@ async function handleCreateJob(
                 }),
             }
         );
+        if (slotReserved) await refundVideoSlot(env, user.id);
         return errorResponse(`Pipeline trigger failed: ${errMsg}`, 500, env);
     }
-
-    // Increment videos_used
-    await fetch(
-        `${env.SUPABASE_URL}/rest/v1/rpc/increment_videos_used`,
-        {
-            method: "POST",
-            headers: {
-                apikey: env.SUPABASE_SERVICE_KEY,
-                Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ p_user_id: user.id }),
-        }
-    );
 
     return jsonResponse(
         {
@@ -365,7 +594,7 @@ async function handleGetClips(
 // ─── Main Router ─────────────────────────────────────────────────────────────
 
 export default {
-    async fetch(request: Request, env: Env): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
         // Handle CORS preflight
         if (request.method === "OPTIONS") {
             return new Response(null, {
@@ -392,7 +621,7 @@ export default {
         }
 
         // All other routes require auth
-        const user = await authenticateRequest(request, env);
+        const user = await authenticateRequest(request, env, ctx);
         if (!user) {
             return errorResponse(
                 "Unauthorized. Provide a valid API key via Authorization: Bearer <key>",

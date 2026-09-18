@@ -6,10 +6,11 @@ compatibility_date = "2024-12-01"
 # SUPABASE_URL
 # SUPABASE_SERVICE_KEY
 # GITHUB_TOKEN
-# GITHUB_REPO (e.g. "username/13-ClipMint")
+# GITHUB_REPO (e.g. "TeraBhaiHoon/ClipMint-NovaMint")
 
 [vars]
-CORS_ORIGIN = "https://ai-content-repurposer-beta.vercel.app"
+# Production dashboard origin — the only origin allowed to call this API.
+CORS_ORIGIN = "https://clipmint.novamintnetworks.in"
 RATE_LIMIT_PER_MINUTE = 30
 
 # KV namespace for rate limiting and caching

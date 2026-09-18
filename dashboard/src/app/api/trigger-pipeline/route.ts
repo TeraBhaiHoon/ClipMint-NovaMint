@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/server";
+import { createClient, createServiceClient } from "@/lib/server";
+import { validateVideoUrl } from "@/lib/validateUrl";
 
 /**
  * POST /api/trigger-pipeline
@@ -7,7 +8,25 @@ import { createClient } from "@/lib/server";
  * Called by the dashboard after a job is inserted into Supabase.
  * Triggers the GitHub Actions workflow_dispatch to start processing.
  * This runs server-side so the GITHUB_TOKEN never reaches the browser.
+ *
+ * SECURITY: the request body only carries `job_id`. `video_url`,
+ * `caption_style` and `max_clips` are always re-read from the stored job row —
+ * the URL ends up in a shell command on the CI runner, so a client-supplied
+ * value must never be trusted.
  */
+
+type SupabaseLike = NonNullable<ReturnType<typeof createServiceClient>>;
+
+/** Mark a job as failed with a user-facing message (best effort). */
+async function failJob(supabase: SupabaseLike, jobId: string, message: string) {
+    const { error } = await supabase
+        .from("jobs")
+        .update({ status: "failed", error_message: message })
+        .eq("id", jobId);
+
+    if (error) console.error("Could not mark job as failed:", error.message);
+}
+
 export async function POST(request: NextRequest) {
     const supabase = await createClient();
 
@@ -20,20 +39,20 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { job_id, video_url, caption_style, max_clips } = body;
+    const body = await request.json().catch(() => ({}));
+    const job_id = body?.job_id;
 
-    if (!job_id || !video_url) {
+    if (!job_id || typeof job_id !== "string") {
         return NextResponse.json(
-            { error: "job_id and video_url are required" },
+            { error: "job_id is required" },
             { status: 400 }
         );
     }
 
-    // Verify the job belongs to this user
+    // Verify the job belongs to this user and read the *stored* configuration.
     const { data: job, error: jobError } = await supabase
         .from("jobs")
-        .select("id, user_id")
+        .select("id, user_id, video_url, caption_style, max_clips, status")
         .eq("id", job_id)
         .eq("user_id", user.id)
         .single();
@@ -44,6 +63,58 @@ export async function POST(request: NextRequest) {
             { status: 404 }
         );
     }
+
+    // Service-role client for quota reads/writes. Falls back to the RLS-scoped
+    // session client (which can read the caller's own profile) if the key is
+    // not configured, so the route keeps working in local dev.
+    const admin = createServiceClient();
+    if (!admin) {
+        console.warn("SUPABASE_SERVICE_ROLE_KEY not set — using session client for quota checks");
+    }
+    const quotaClient = admin ?? supabase;
+
+    // ── Validate the stored URL (defence in depth: it is interpolated into a
+    //    shell command by the workflow) ──
+    const validation = validateVideoUrl(job.video_url);
+    if (!validation.ok) {
+        await failJob(quotaClient, job.id, validation.reason);
+        return NextResponse.json({ error: validation.reason }, { status: 400 });
+    }
+
+    // ── Quota checks (server-side; the browser check is UX only) ──
+    const { data: profile, error: profileError } = await quotaClient
+        .from("profiles")
+        .select("clips_used, clips_limit, videos_used, videos_limit")
+        .eq("id", job.user_id)
+        .single();
+
+    if (profileError || !profile) {
+        console.error("Could not read profile for quota check:", profileError?.message);
+        return NextResponse.json(
+            { error: "Could not verify your plan limits. Please try again." },
+            { status: 500 }
+        );
+    }
+
+    // The dashboard reserves a video slot (increment_videos_used) *before* it
+    // creates the job, so videos_used already includes this job. Only a value
+    // above the limit means someone slipped past the reservation RPC.
+    if (profile.videos_used > profile.videos_limit) {
+        const message = `You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`;
+        await failJob(quotaClient, job.id, message);
+        return NextResponse.json({ error: message }, { status: 402 });
+    }
+
+    const remainingClips = Math.max(0, (profile.clips_limit ?? 0) - (profile.clips_used ?? 0));
+    if (remainingClips < 1) {
+        const message = "You've run out of clips. Please upgrade your plan to keep creating.";
+        await failJob(quotaClient, job.id, message);
+        return NextResponse.json({ error: message }, { status: 402 });
+    }
+
+    // Clamp server-side: the client may ask for more clips than it has left.
+    const requestedClips = Number(job.max_clips) || 10;
+    const effectiveMaxClips = Math.min(Math.max(requestedClips, 1), remainingClips);
 
     // Trigger GitHub Actions workflow
     const githubToken = process.env.GITHUB_TOKEN;
@@ -56,13 +127,11 @@ export async function POST(request: NextRequest) {
         if (!githubToken) missing.push("GITHUB_TOKEN");
         if (!githubRepo) missing.push("GITHUB_REPO");
 
-        await supabase
-            .from("jobs")
-            .update({
-                status: "failed",
-                error_message: "Processing service is temporarily unavailable. Please try again later.",
-            })
-            .eq("id", job_id);
+        await failJob(
+            quotaClient,
+            job.id,
+            "Processing service is temporarily unavailable. Please try again later."
+        );
 
         return NextResponse.json({
             triggered: false,
@@ -83,10 +152,10 @@ export async function POST(request: NextRequest) {
             body: JSON.stringify({
                 ref: "main",
                 inputs: {
-                    job_id: job_id,
-                    video_url: video_url,
-                    caption_style: caption_style || "hormozi",
-                    max_clips: String(max_clips || 10),
+                    job_id: job.id,
+                    video_url: validation.url,
+                    caption_style: job.caption_style || "hormozi",
+                    max_clips: String(effectiveMaxClips),
                 },
             }),
         });
@@ -95,13 +164,11 @@ export async function POST(request: NextRequest) {
             const errText = await dispatchRes.text();
             console.error("GitHub dispatch failed:", `GitHub API ${dispatchRes.status}: ${errText.slice(0, 500)}`, "URL:", dispatchUrl);
 
-            await supabase
-                .from("jobs")
-                .update({
-                    status: "failed",
-                    error_message: "Could not start video processing. Please try again.",
-                })
-                .eq("id", job_id);
+            await failJob(
+                quotaClient,
+                job.id,
+                "Could not start video processing. Please try again."
+            );
 
             return NextResponse.json(
                 { error: "Could not start video processing. Please try again." },
@@ -109,18 +176,20 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        return NextResponse.json({ triggered: true, job_id });
+        return NextResponse.json({
+            triggered: true,
+            job_id: job.id,
+            max_clips: effectiveMaxClips,
+        });
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error("Pipeline trigger error:", errMsg);
 
-        await supabase
-            .from("jobs")
-            .update({
-                status: "failed",
-                error_message: "An unexpected error occurred. Please try again.",
-            })
-            .eq("id", job_id);
+        await failJob(
+            quotaClient,
+            job.id,
+            "An unexpected error occurred. Please try again."
+        );
 
         return NextResponse.json(
             { error: "An unexpected error occurred. Please try again." },

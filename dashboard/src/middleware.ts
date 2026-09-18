@@ -52,7 +52,10 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
     matcher: [
-        // Match all routes except static files and API routes
-        "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+        // Match everything except Next.js internals, static files and all /api
+        // routes. API routes authenticate themselves (session cookie, webhook
+        // secret or cron secret) and must not be gated by the browser-session
+        // middleware — the GitHub-called webhook in particular has no session.
+        "/((?!api/|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
     ],
 };

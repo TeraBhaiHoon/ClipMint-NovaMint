@@ -8,6 +8,7 @@ import {
     Check, Zap, AlertCircle,
 } from "lucide-react";
 import { CAPTION_STYLES, type CaptionStyle } from "@/lib/types";
+import { validateVideoUrl } from "@/lib/validateUrl";
 
 const STEPS = [
     { num: 1, label: "Source" },
@@ -33,41 +34,94 @@ export default function NewVideoPage() {
         setIsSubmitting(true);
         setError(null);
 
+        // Client-side validation for instant feedback. The server validates the
+        // *stored* URL again before dispatching — that is the security boundary.
+        const validation = validateVideoUrl(videoUrl);
+        if (!validation.ok) {
+            setError(validation.reason);
+            setIsSubmitting(false);
+            return;
+        }
+        const normalizedUrl = validation.url;
+
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) { setError("You must be logged in."); setIsSubmitting(false); return; }
 
-        const { data: profile } = await supabase.from("profiles").select("clips_used, clips_limit, videos_used, videos_limit").eq("id", user.id).single();
+        const { data: profile, error: profileError } = await supabase
+            .from("profiles")
+            .select("clips_used, clips_limit, videos_used, videos_limit")
+            .eq("id", user.id)
+            .single();
 
-        if (profile) {
-            if (profile.videos_used >= profile.videos_limit) {
-                setError(`You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`);
-                setIsSubmitting(false); return;
-            }
-            if (profile.clips_used >= profile.clips_limit) {
-                setError(`You've reached your limit of ${profile.clips_limit} clips. Please upgrade.`);
-                setIsSubmitting(false); return;
-            }
-            const remaining = profile.clips_limit - profile.clips_used;
-            if (remaining <= 0) { setError("No clips remaining. Please upgrade."); setIsSubmitting(false); return; }
-            if (maxClips > remaining) setMaxClips(remaining);
+        if (profileError || !profile) {
+            // A failed profile fetch used to skip every limit check — fail loudly instead.
+            console.error("Could not load profile limits:", profileError?.message);
+            setError("Could not verify your plan limits. Please refresh the page and try again.");
+            setIsSubmitting(false); return;
+        }
+
+        if (profile.videos_used >= profile.videos_limit) {
+            setError(`You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`);
+            setIsSubmitting(false); return;
+        }
+        if (profile.clips_used >= profile.clips_limit) {
+            setError(`You've reached your limit of ${profile.clips_limit} clips. Please upgrade.`);
+            setIsSubmitting(false); return;
+        }
+        const remaining = Math.max(0, profile.clips_limit - profile.clips_used);
+        if (remaining <= 0) { setError("No clips remaining. Please upgrade."); setIsSubmitting(false); return; }
+
+        // Clamp *and use* the clamped value below — setting state alone was dead code.
+        const effectiveMaxClips = Math.min(maxClips, remaining);
+        if (effectiveMaxClips !== maxClips) setMaxClips(effectiveMaxClips);
+
+        // Reserve a video slot atomically before creating anything, so two tabs
+        // (or a retry storm) cannot push videos_used past the limit.
+        let reservedSlot = false;
+        const { data: reserved, error: reserveError } = await supabase.rpc("increment_videos_used", {
+            p_user_id: user.id,
+        });
+        if (reserveError) {
+            // RPC missing (migration not applied) or transient failure: log loudly
+            // and continue — the trigger route still enforces the clip quota.
+            console.error("increment_videos_used RPC failed:", reserveError.message);
+        } else if (reserved === false) {
+            setError(`You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`);
+            setIsSubmitting(false); return;
+        } else {
+            reservedSlot = true;
         }
 
         const { data, error: insertError } = await supabase.from("jobs").insert({
-            user_id: user.id, video_url: videoUrl.trim(),
+            user_id: user.id, video_url: normalizedUrl,
             source_type: sourceType === "upload" ? "drive" : sourceType,
-            caption_style: captionStyle, max_clips: maxClips, status: "queued", progress: 0,
+            caption_style: captionStyle, max_clips: effectiveMaxClips, status: "queued", progress: 0,
         }).select("id").single();
 
-        if (insertError) { setError(insertError.message); setIsSubmitting(false); return; }
+        if (insertError) {
+            // Give the reserved slot back if the job could not be created.
+            if (reservedSlot) await supabase.rpc("refund_videos_used", { p_user_id: user.id });
+            setError(insertError.message); setIsSubmitting(false); return;
+        }
 
         if (data) {
-            if (profile) await supabase.from("profiles").update({ videos_used: profile.videos_used + 1 }).eq("id", user.id);
             try {
-                await fetch("/api/trigger-pipeline", {
+                const res = await fetch("/api/trigger-pipeline", {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ job_id: data.id, video_url: videoUrl.trim(), caption_style: captionStyle, max_clips: maxClips }),
+                    body: JSON.stringify({ job_id: data.id }),
                 });
-            } catch (err) { console.warn("Trigger failed:", err); }
+                if (!res.ok) {
+                    const payload = await res.json().catch(() => null);
+                    setError(payload?.error || "Could not start processing. Please try again.");
+                    setIsSubmitting(false);
+                    return;
+                }
+            } catch (err) {
+                console.warn("Trigger failed:", err);
+                setError("Could not start processing. Please check your connection and retry from the job page.");
+                setIsSubmitting(false);
+                return;
+            }
             router.push(`/dashboard/${data.id}`);
         }
     };

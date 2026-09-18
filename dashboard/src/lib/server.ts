@@ -1,4 +1,5 @@
 import { createServerClient } from "@supabase/ssr";
+import { createClient as createAdminClient, type SupabaseClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 
 export async function createClient() {
@@ -26,4 +27,19 @@ export async function createClient() {
             },
         }
     );
+}
+
+/**
+ * Service-role client for server-only work (quota counters, cross-user reads).
+ * Returns `null` when SUPABASE_SERVICE_ROLE_KEY is not configured so callers can
+ * degrade gracefully instead of throwing.
+ */
+export function createServiceClient(): SupabaseClient | null {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !serviceKey) return null;
+
+    return createAdminClient(url, serviceKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+    });
 }

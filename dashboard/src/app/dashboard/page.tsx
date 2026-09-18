@@ -20,6 +20,14 @@ import {
 
 type FilterOption = JobStatus | "all" | "processing";
 
+/** Polling fallback cadence while at least one job is still running. */
+const JOBS_POLL_MS = 8000;
+const TERMINAL_STATUSES: JobStatus[] = ["done", "failed", "cancelled"];
+
+function isTerminalStatus(status: JobStatus): boolean {
+    return TERMINAL_STATUSES.includes(status);
+}
+
 const FILTER_OPTIONS: { value: FilterOption; label: string; color: string }[] = [
     { value: "all", label: "All Jobs", color: "var(--text-secondary)" },
     { value: "queued", label: "Queued", color: "#6B7280" },
@@ -56,39 +64,66 @@ export default function JobsPage() {
     const [showFilterDropdown, setShowFilterDropdown] = useState(false);
     const [userName, setUserName] = useState("");
     const filterRef = useRef<HTMLDivElement>(null);
+    const inFlightRef = useRef(false);
+    const jobsRef = useRef<Job[]>([]);
+
+    // Keep a ref of the latest jobs so the polling interval can decide cheaply.
+    useEffect(() => { jobsRef.current = jobs; }, [jobs]);
 
     useEffect(() => {
+        let disposed = false;
+        let timer: ReturnType<typeof setInterval> | null = null;
+
         async function loadJobs() {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
+            if (inFlightRef.current) return; // never overlap requests
+            inFlightRef.current = true;
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user || disposed) return;
 
-            // Load name for greeting
-            const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
-            if (profile?.full_name) setUserName(profile.full_name.split(" ")[0]);
+                // Load name for greeting
+                const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
+                if (profile?.full_name && !disposed) setUserName(profile.full_name.split(" ")[0]);
 
-            const { data, error } = await supabase
-                .from("jobs")
-                .select("*")
-                .eq("user_id", user.id)
-                .order("created_at", { ascending: false });
+                const { data, error } = await supabase
+                    .from("jobs")
+                    .select("*")
+                    .eq("user_id", user.id)
+                    .order("created_at", { ascending: false });
 
-            if (data && !error) setJobs(data as Job[]);
-            setLoading(false);
+                if (disposed) return;
+                if (data && !error) setJobs(data as Job[]);
+            } finally {
+                inFlightRef.current = false;
+                if (!disposed) setLoading(false);
+            }
         }
         loadJobs();
+
+        // Polling fallback: only while at least one job is non-terminal.
+        timer = setInterval(() => {
+            if (!jobsRef.current.some((j) => !isTerminalStatus(j.status))) return;
+            loadJobs();
+        }, JOBS_POLL_MS);
 
         const channel = supabase
             .channel("jobs-changes")
             .on("postgres_changes", { event: "*", schema: "public", table: "jobs" }, (payload) => {
                 if (payload.eventType === "INSERT") {
-                    setJobs((prev) => [payload.new as Job, ...prev]);
+                    const inserted = payload.new as Job;
+                    // The polling fallback may already have this row — dedupe by id.
+                    setJobs((prev) => (prev.some((j) => j.id === inserted.id) ? prev : [inserted, ...prev]));
                 } else if (payload.eventType === "UPDATE") {
                     setJobs((prev) => prev.map((j) => j.id === (payload.new as Job).id ? (payload.new as Job) : j));
                 }
             })
             .subscribe();
 
-        return () => { supabase.removeChannel(channel); };
+        return () => {
+            disposed = true;
+            if (timer) clearInterval(timer);
+            supabase.removeChannel(channel);
+        };
     }, []);
 
     useEffect(() => {
