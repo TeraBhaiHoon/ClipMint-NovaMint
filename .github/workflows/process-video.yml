@@ -77,6 +77,14 @@ on:
         required: false
         default: "false"
         type: string
+      enhance_tier:
+        description: "GPU enhancement tier (hd requires Modal secrets + deployed app; skips gracefully otherwise)"
+        required: false
+        default: "standard"
+        type: choice
+        options:
+          - standard
+          - hd
 
 concurrency:
   group: clipmint-${{ github.event.inputs.job_id }}
@@ -1038,6 +1046,32 @@ jobs:
             --silences workspace/audio/silences.txt \
             --outdir workspace/clips \
             --formats "$OUTPUT_FORMATS"
+
+      - name: HD enhance clips (Modal GPU, optional tier)
+        if: ${{ inputs.enhance_tier == 'hd' }}
+        run: |
+          set -uo pipefail
+          echo "hd_enhance" > workspace/.current_step
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          manifest = json.load(open("workspace/clips/clips_manifest.json"))
+          enhanced = 0
+          for entry in manifest:
+              path = os.path.join("workspace/clips", entry["file"])
+              out = path.replace(".mp4", "_hd.mp4")
+              r = subprocess.run(
+                  [sys.executable, "pipeline/gpu_enhance.py",
+                   "--input", path, "--output", out, "--timeout", "1500"],
+                  capture_output=True, text=True)
+              tail = (r.stdout or "").strip().splitlines()
+              marker = next((l for l in reversed(tail) if l.startswith("ENHANCE_")), "no marker")
+              print(f"  [{entry['index']}] {marker}")
+              if marker.startswith("ENHANCE_OK") and os.path.exists(out):
+                  os.replace(out, path)   # enhanced file becomes the master
+                  enhanced += 1
+          print(f"HD_ENHANCE_OK enhanced={enhanced}/{len(manifest)}")
+          PY
 
       # ─────────────────────────────────────────────────────────────────────
       # 11. Render captions (parallel; failures are reported, never hidden)
