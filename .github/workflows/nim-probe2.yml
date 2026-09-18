@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-          pip install -q nvidia-riva-client
+          pip install -q requests nvidia-riva-client
           python3 - <<'PY'
           import base64, json, os, subprocess, sys, time
           import requests
