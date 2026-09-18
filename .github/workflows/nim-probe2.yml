@@ -1,0 +1,171 @@
+# ClipMint — NIM probe #2: the IDs the first probe missed + gRPC ASR + vision
+name: NIM Probe 2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Probe current-gen models
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install -q nvidia-riva-client
+          python3 - <<'PY'
+          import base64, json, os, subprocess, sys, time
+          import requests
+
+          key = os.environ["NVIDIA_NIM_API_KEY"].strip()
+          H = {"Authorization": f"Bearer {key}"}
+          BASE = "https://integrate.api.nvidia.com"
+
+          os.system("ffmpeg -f lavfi -i 'sine=frequency=440:duration=3' "
+                    "-ar 16000 -ac 1 /tmp/probe.wav -y -loglevel quiet")
+
+          # ── 1. Chat: the CURRENT models actually in the listing ────────
+          print("════ 1. Chat: current-gen IDs from the listing ════")
+          CHAT = [
+              "z-ai/glm-5.3", "z-ai/glm-5.3-flash",
+              "moonshotai/kimi-k2.6", "moonshotai/kimi-k3",
+              "deepseek-ai/deepseek-v4-flash-0731",
+              "nvidia/nemotron-3-super-120b-a12b",
+              "nvidia/nemotron-3-ultra-550b-a55b",
+              "nvidia/nemotron-3.5-lightning-30b-a3b",
+              "nvidia/nemotron-nano-3-30b-a3b",
+              "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+              "mistralai/mistral-nemotron", "mistralai/mistral-large-2-instruct",
+              "writer/palmyra-creative-122b", "01-ai/yi-large",
+              "meta/llama-3.2-90b-vision-instruct", "nvidia/vila",
+          ]
+          ok_chat = []
+          for model in CHAT:
+              try:
+                  r = requests.post(
+                      f"{BASE}/v1/chat/completions",
+                      headers={**H, "Content-Type": "application/json"},
+                      json={"model": model,
+                            "messages": [{"role": "user", "content": "Reply with the single word OK"}],
+                            "max_tokens": 2000, "temperature": 0},
+                      timeout=60)
+                  if r.status_code == 200:
+                      txt = r.json()["choices"][0]["message"].get("content") or ""
+                      print(f"  ✅ {model}: OK -> {txt.strip()[:30]!r}")
+                      ok_chat.append(model)
+                  else:
+                      print(f"  ❌ {model}: HTTP {r.status_code} {r.text[:110]}")
+              except Exception as e:
+                  print(f"  ❌ {model}: {e}")
+              time.sleep(1.6)
+
+          # ── 2. Vision: can llama-3.2-90b-vision describe an image? ─────
+          print("\n════ 2. Vision (chat/completions with image_url) ════")
+          # 64x64 red PNG
+          png = base64.b64encode(bytes.fromhex(
+              "89504e470d0a1a0a0000000d4948445200000040000000400802000000"
+              "1d9546910000001c4944415478da63fc3fc3f0ff3f03261013300d6000"
+              "0000049454e44ae426082")).decode()
+          for model in ["meta/llama-3.2-90b-vision-instruct", "meta/llama-3.2-11b-vision-instruct",
+                        "nvidia/vila", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"]:
+              try:
+                  r = requests.post(
+                      f"{BASE}/v1/chat/completions",
+                      headers={**H, "Content-Type": "application/json"},
+                      json={"model": model, "max_tokens": 3000, "temperature": 0,
+                            "messages": [{"role": "user", "content": [
+                                {"type": "text", "text": "What color is this image? One word."},
+                                {"type": "image_url",
+                                 "image_url": {"url": f"data:image/png;base64,{png}"}}]}]},
+                      timeout=90)
+                  if r.status_code == 200:
+                      txt = r.json()["choices"][0]["message"].get("content") or ""
+                      print(f"  ✅ {model}: {txt.strip()[:60]!r}")
+                  else:
+                      print(f"  ❌ {model}: HTTP {r.status_code} {r.text[:130]}")
+              except Exception as e:
+                  print(f"  ❌ {model}: {e}")
+              time.sleep(1.6)
+
+          # ── 3. OCR: nemotron-parse ─────────────────────────────────────
+          print("\n════ 3. OCR (nemotron-parse) ════")
+          for model, path in [("nvidia/nemotron-parse", "/v1/chat/completions"),
+                              ("nvidia/nemotron-parse-2.0", "/v1/chat/completions")]:
+              try:
+                  r = requests.post(
+                      f"{BASE}{path}",
+                      headers={**H, "Content-Type": "application/json"},
+                      json={"model": model, "max_tokens": 2000, "temperature": 0,
+                            "messages": [{"role": "user", "content": [
+                                {"type": "text", "text": "OCR this image."},
+                                {"type": "image_url",
+                                 "image_url": {"url": f"data:image/png;base64,{png}"}}]}]},
+                      timeout=90)
+                  print(f"  {'✅' if r.status_code == 200 else '❌'} {model}: "
+                        f"HTTP {r.status_code} {r.text[:120] if r.status_code != 200 else r.json()['choices'][0]['message'].get('content','')[:80]!r}")
+              except Exception as e:
+                  print(f"  ❌ {model}: {e}")
+              time.sleep(1.6)
+
+          print("\n════ SUMMARY ════")
+          print(f"chat ok: {ok_chat}")
+          PY
+
+      - name: Probe NIM gRPC ASR (Riva)
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -uo pipefail
+          echo "════ gRPC Riva ASR attempts ════"
+          python3 - <<'PY'
+          import os, subprocess, glob
+
+          key = os.environ["NVIDIA_NIM_API_KEY"].strip()
+          os.system("ffmpeg -f lavfi -i 'sine=frequency=440:duration=3' "
+                    "-ar 16000 -ac 1 /tmp/probe16k.wav -y -loglevel quiet")
+
+          # python-clients ships the transcribe script; install it from GitHub
+          if not glob.glob("/opt/python-clients/scripts/asr/transcribe_file_offline.py"):
+              os.system("git clone -q --depth 1 https://github.com/NVIDIA-ISAAC-OSS/python-clients /opt/python-clients || "
+                        "git clone -q --depth 1 https://github.com/NVIDIA/python-clients /opt/python-clients")
+
+          script = None
+          for root in ("/opt/python-clients",):
+              hits = glob.glob(f"{root}/**/transcribe_file_offline.py", recursive=True)
+              if hits:
+                  script = hits[0]
+          print("transcribe script:", script)
+          if not script:
+              print("SKIP: python-clients unavailable"); raise SystemExit(0)
+
+          # (model, function-id) pairs from the build.nvidia.com API pages
+          TARGETS = [
+              ("openai/whisper-large-v3", "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"),
+              ("nvidia/canary-1b-asr", "b0e8b4a5-217c-40b7-9b96-17d84e666317"),
+              ("nvidia/parakeet-tdt-0.6b-v2", "d3fe9151-442b-4204-a70d-5fcc597fd610"),
+          ]
+          for model, fid in TARGETS:
+              print(f"── {model} (function-id {fid[:8]}...) ──")
+              cmd = ["python3", script,
+                     "--server", "grpc.nvcf.nvidia.com:443", "--use-ssl",
+                     "--metadata", "function-id", fid,
+                     "--metadata", "authorization", f"Bearer {key}",
+                     "--input-file", "/tmp/probe16k.wav",
+                     "--language-code", "multi",
+                     "--word-time-offsets", "--automatic-punctuation"]
+              r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+              out = (r.stdout or "") + (r.stderr or "")
+              print("  rc:", r.returncode)
+              print("  out:", out[:600].replace("\n", " | "))
+          PY
