@@ -1,8 +1,22 @@
 # ClipMint — Video Processing Pipeline
 #
-# Triggered by API Gateway (workflow_dispatch) or manual trigger.
-# Downloads video → transcribes → AI analysis → clips → captions → uploads
+# Flow: download → transcribe → analyse → prepare clips (vertical + loudness)
+#       → render animated captions → thumbnails → upload → record results
 #
+# Triggered by the API Gateway or the dashboard via workflow_dispatch.
+#
+# Design rules learned from production incidents (see _audit/FINDINGS.md):
+#
+#  1. NOTHING fails silently. The previous version fell back to copying the raw
+#     uncaptioned clip whenever Remotion errored, so the product shipped
+#     caption-less videos while reporting success — which hid a Remotion
+#     version mismatch indefinitely.
+#  2. User input NEVER reaches a shell line through ${{ inputs.* }}
+#     interpolation; it is passed via the environment and quoted.
+#  3. Every step records its name, so a failure can name the exact stage.
+#  4. Trimming happens in ffmpeg, not in the renderer, so video and caption
+#     timelines cannot drift apart.
+
 name: Process Video
 
 on:
@@ -13,7 +27,7 @@ on:
         required: true
         type: string
       video_url:
-        description: "Video URL to process (YouTube, Instagram, etc.)"
+        description: "Source video URL"
         required: true
         type: string
       caption_style:
@@ -37,10 +51,14 @@ on:
         default: "10"
         type: string
 
+concurrency:
+  group: clipmint-${{ github.event.inputs.job_id }}
+  cancel-in-progress: false
+
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "22"
   PYTHON_VERSION: "3.11"
-  FFMPEG_THREADS: "2"
+  CLIPMINT_AUDIO_REACTIVE: "1"
 
 jobs:
   process:
@@ -48,9 +66,9 @@ jobs:
     timeout-minutes: 300
 
     steps:
-      # ─────────────────────────────────────────────────────────────
+      # ─────────────────────────────────────────────────────────────────────
       # 1. Setup
-      # ─────────────────────────────────────────────────────────────
+      # ─────────────────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -65,1463 +83,1061 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg imagemagick rclone
-          pip install -U yt-dlp requests
-          # Install Deno (required for yt-dlp --js-runtimes deno)
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg imagemagick rclone fonts-dejavu-core
+          pip install -q -U yt-dlp requests
+          # Deno is required by yt-dlp to solve YouTube's n-signature challenge.
           curl -fsSL https://deno.land/install.sh | sh
-          echo "$HOME/.deno/bin" >> $GITHUB_PATH
+          echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
 
       - name: Install Remotion dependencies
         working-directory: remotion-captions
-        run: npm install --legacy-peer-deps
-
-      - name: Update job status → downloading
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "downloading", "progress": 5, "started_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}'
+          set -euo pipefail
+          # Every @remotion/* package is pinned to one version and the lockfile is
+          # committed. A mismatched tree makes Remotion abort EVERY render, which
+          # is what previously made the pipeline ship uncaptioned clips.
+          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
+          node -e "console.log('remotion', require('remotion/package.json').version)"
+          node -e "console.log('@remotion/media', require('@remotion/media/package.json').version)"
+          node -e "console.log('@remotion/google-fonts', require('@remotion/google-fonts/package.json').version)"
 
-      # ─────────────────────────────────────────────────────────────
-      # 2. Download Source Video
-      # ─────────────────────────────────────────────────────────────
-      - name: Download video
+      - name: Install pipeline Python dependencies
+        run: |
+          set -euo pipefail
+          if [ -f pipeline/requirements.txt ]; then
+            pip install -q -r pipeline/requirements.txt
+          fi
+          python3 -c "import cv2; print('opencv', cv2.__version__)" \
+            || echo "WARN: OpenCV unavailable — reframing will fall back to a centre crop"
+
+      - name: Create workspace
+        run: |
+          set -euo pipefail
+          mkdir -p workspace/source workspace/audio workspace/clips \
+                   workspace/captioned workspace/thumbnails workspace/output
+          # Records the running stage so failures can be reported precisely.
+          echo "setup" > workspace/.current_step
+
+      - name: Validate inputs
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          VIDEO_URL: ${{ inputs.video_url }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys
+          job_id = os.environ["JOB_ID"].strip()
+          url = os.environ["VIDEO_URL"].strip()
+          errors = []
+          if not re.fullmatch(r"[0-9a-fA-F-]{36}", job_id):
+              errors.append(f"job_id is not a UUID: {job_id!r}")
+          if len(url) > 2048:
+              errors.append("video_url exceeds 2048 characters")
+          # Narrow set: whitespace and control characters are never valid inside a
+          # URL, and backtick, `$` and `\` could break out of a quoted string.
+          # `&`, `;` and friends ARE allowed because they appear in ordinary links
+          # such as youtube.com/watch?v=ID&list=... which users legitimately paste.
+          if re.search(r"[\x00-\x1f\s`$\\]", url):
+              errors.append("video_url contains whitespace, control characters or unsafe metacharacters")
+          if not url.lower().startswith(("http://", "https://")):
+              errors.append("video_url must be an http(s) URL")
+          if errors:
+              print("INPUT_VALIDATION_FAILED:", "; ".join(errors))
+              sys.exit(1)
+          print(f"inputs ok: job={job_id} host={url.split('/')[2]}")
+          PY
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 2. Download
+      # ─────────────────────────────────────────────────────────────────────
+      - name: "Mark: downloading"
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status downloading --progress 5
+
+      - name: Download source video
         id: download
         env:
+          VIDEO_URL: ${{ inputs.video_url }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
         run: |
-          mkdir -p workspace/source workspace/audio workspace/clips workspace/captioned workspace/thumbnails
+          set -euo pipefail
+          echo "download" > workspace/.current_step
 
-          echo "📥 Downloading: ${{ inputs.video_url }}"
-
-          # Write raw cookie file (Netscape format) — no base64 decode
-          printf '%s' "$YOUTUBE_COOKIES" > /tmp/yt_cookies.txt
-
-          yt-dlp \
-            --js-runtimes deno \
-            --force-ipv4 \
-            --retries 10 \
-            --fragment-retries 10 \
-            --retry-sleep 3 \
-            --remote-components "ejs:github" \
-            --format "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
-            --merge-output-format mp4 \
-            --output "workspace/source/source.mp4" \
-            --no-playlist \
-            --socket-timeout 60 \
-            --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
-            --sleep-interval 1 \
-            --max-sleep-interval 3 \
-            $( [ -s /tmp/yt_cookies.txt ] && echo "--cookies /tmp/yt_cookies.txt" ) \
-            "${{ inputs.video_url }}"
-
-          DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 workspace/source/source.mp4)
-          echo "duration=$DURATION" >> $GITHUB_OUTPUT
-          echo "✅ Downloaded. Duration: ${DURATION}s"
-
-      # ─────────────────────────────────────────────────────────────
-      # 3. Extract Audio for Transcription
-      # ─────────────────────────────────────────────────────────────
-      - name: Extract audio
-        run: |
-          echo "🎵 Extracting audio..."
-          ffmpeg -i workspace/source/source.mp4 \
-            -vn -acodec pcm_s16le -ar 16000 -ac 1 \
-            workspace/audio/audio.wav \
-            -y -loglevel warning
-          echo "✅ Audio extracted"
-
-      - name: Update job status → transcribing
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "transcribing", "progress": 20}'
-
-      # ─────────────────────────────────────────────────────────────
-      # 4. Transcribe with Groq Whisper API (fallback: NVIDIA NIM)
-      # ─────────────────────────────────────────────────────────────
-      - name: Transcribe audio
-        id: transcribe
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-        run: |
-          echo "🗣️ Transcribing audio (Groq Whisper → NVIDIA NIM fallback)..."
-
-          # Split audio into 25MB chunks if needed (Groq limit)
-          FILE_SIZE=$(stat --printf="%s" workspace/audio/audio.wav)
-          MAX_SIZE=25000000
-          SEGMENT_DURATION=300
-
-          echo "📁 Audio file size: $FILE_SIZE bytes"
-
-          if [ "$FILE_SIZE" -gt "$MAX_SIZE" ]; then
-            echo "⚠️ Audio file too large ($FILE_SIZE bytes), splitting into 5-min chunks..."
-            ffmpeg -i workspace/audio/audio.wav -f segment -segment_time $SEGMENT_DURATION \
-              -c copy workspace/audio/chunk_%03d.wav -y -loglevel warning
+          # Cookies are optional: a missing file must not break non-YouTube
+          # sources, so its state is reported rather than required.
+          if [ -n "${YOUTUBE_COOKIES:-}" ]; then
+            printf '%s' "$YOUTUBE_COOKIES" > /tmp/yt_cookies.txt
+            echo "cookies: $(wc -l < /tmp/yt_cookies.txt) lines, $(stat --printf='%s' /tmp/yt_cookies.txt) bytes"
           else
-            cp workspace/audio/audio.wav workspace/audio/chunk_000.wav
+            : > /tmp/yt_cookies.txt
+            echo "cookies: none configured"
           fi
 
-          # Count chunks for Python
-          CHUNK_COUNT=$(ls workspace/audio/chunk_*.wav | wc -l)
-          echo "📦 Processing $CHUNK_COUNT chunk(s)..."
+          COOKIE_ARG=""
+          if [ -s /tmp/yt_cookies.txt ]; then
+            COOKIE_ARG="--cookies /tmp/yt_cookies.txt"
+          fi
 
-          # Run full transcription pipeline in Python (handles Groq → NIM fallback per chunk)
-          python3 << 'PYTRANSCRIBE'
-          import json, os, time, glob, requests, re
+          echo "host: $(echo "$VIDEO_URL" | cut -d/ -f3)"
 
-          groq_key = os.environ.get("GROQ_API_KEY", "")
-          nim_key = os.environ.get("NVIDIA_NIM_API_KEY", "")
-          segment_duration = 300
+          # YouTube's bot checks are client-specific, so trying progressively
+          # different player clients clears most "Sign in to confirm you're not
+          # a bot" failures without any other change.
+          ATTEMPTS=(
+            "--extractor-args youtube:player_client=default,tv,web_safari"
+            "--extractor-args youtube:player_client=web_safari,tv_embedded"
+            "--extractor-args youtube:player_client=android_vr"
+            ""
+          )
 
-          # ── Provider configs ──
-          PROVIDERS = []
-          if groq_key:
-              PROVIDERS.append({
-                  "name": "Groq Whisper",
-                  "url": "https://api.groq.com/openai/v1/audio/transcriptions",
-                  "key": groq_key,
-                  "model": "whisper-large-v3-turbo",
-                  "max_retries": 3,
-              })
+          DOWNLOADED=0
+          for i in "${!ATTEMPTS[@]}"; do
+            EXTRA="${ATTEMPTS[$i]}"
+            echo "── download attempt $((i + 1))/${#ATTEMPTS[@]} ${EXTRA:-generic} ──"
+            # shellcheck disable=SC2086
+            if yt-dlp \
+                --js-runtimes deno \
+                --remote-components ejs:github \
+                --force-ipv4 \
+                --retries 5 --fragment-retries 5 --retry-sleep 3 \
+                --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
+                --merge-output-format mp4 \
+                --output "workspace/source/source.%(ext)s" \
+                --no-playlist --socket-timeout 60 \
+                --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+                --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
+                $COOKIE_ARG $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
+              if [ -s workspace/source/source.mp4 ]; then DOWNLOADED=1; break; fi
+            fi
+            echo "attempt $((i + 1)) failed"
+            rm -f workspace/source/source.*
+          done
+
+          if [ "$DOWNLOADED" -ne 1 ]; then
+            echo "════════ DOWNLOAD DIAGNOSIS ════════"
+            if grep -qi "sign in to confirm\|not a bot" /tmp/ytdlp.log; then
+              echo "YOUTUBE_BOT_CHECK — YouTube rejected the request as automated."
+              echo "  Fix: refresh the YOUTUBE_COOKIES secret from a signed-in browser session."
+            elif grep -qi "cookies are no longer valid\|rotated" /tmp/ytdlp.log; then
+              echo "YOUTUBE_COOKIES_STALE — the stored cookies were rotated by YouTube."
+              echo "  Fix: re-export cookies and update the YOUTUBE_COOKIES secret."
+            elif grep -qi "Unsupported URL" /tmp/ytdlp.log; then
+              echo "UNSUPPORTED_URL — this host is not supported."
+              echo "  Supported: YouTube, Instagram, Facebook, Vimeo, Google Drive, direct video file."
+            elif grep -qi "Private video\|members-only\|age" /tmp/ytdlp.log; then
+              echo "ACCESS_DENIED — the video is private, members-only or age-restricted."
+            fi
+            tail -25 /tmp/ytdlp.log
+            exit 1
+          fi
+
+          SIZE=$(stat --printf='%s' workspace/source/source.mp4)
+          DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 workspace/source/source.mp4 || echo 0)
+          echo "downloaded ${SIZE} bytes, ${DURATION}s"
+
+          # Reject a broken download before spending minutes transcribing it.
+          if [ "$SIZE" -lt 10240 ]; then
+            echo "DOWNLOAD_INVALID: file is under 10 KB"; exit 1
+          fi
+          if ! python3 -c "
+          import sys
+          d = float('${DURATION}' or 0)
+          sys.exit(0 if d >= 5 else 1)
+          "; then
+            echo "DOWNLOAD_INVALID: duration under 5 seconds (${DURATION})"; exit 1
+          fi
+
+          echo "duration=$DURATION" >> "$GITHUB_OUTPUT"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 3. Audio
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Extract audio
+        run: |
+          set -euo pipefail
+          echo "extract_audio" > workspace/.current_step
+          ffmpeg -i workspace/source/source.mp4 \
+            -vn -acodec pcm_s16le -ar 16000 -ac 1 \
+            workspace/audio/audio.wav -y -loglevel warning
+
+      - name: "Mark: transcribing"
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status transcribing --progress 20
+
+      - name: Transcribe audio
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "transcribe" > workspace/.current_step
+          python3 - <<'PY'
+          import glob, json, os, re, sys, time
+          import requests
+
+          key = os.environ.get("GROQ_API_KEY", "").strip()
+          if not key:
+              print("FATAL: GROQ_API_KEY is not set"); sys.exit(1)
+
+          GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+          # large-v3-turbo is much faster at nearly identical accuracy; the full
+          # v3 model is the accuracy fallback when turbo is rate limited.
+          MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]
+          SEGMENT_SECONDS = 300
+          MAX_BYTES = 24_000_000
+
+          wav = "workspace/audio/audio.wav"
+          size = os.path.getsize(wav)
+          print(f"audio: {size} bytes")
+
+          for old in glob.glob("workspace/audio/chunk_*.wav"):
+              os.remove(old)
+
+          if size > MAX_BYTES:
+              print("splitting into 5-minute chunks")
+              os.system(
+                  f'ffmpeg -i {wav} -f segment -segment_time {SEGMENT_SECONDS} '
+                  f'-c copy "workspace/audio/chunk_%03d.wav" -y -loglevel error'
+              )
           else:
-              print("GROQ_API_KEY not set -- skipping Groq provider")
+              os.system(f'cp {wav} workspace/audio/chunk_000.wav')
 
-          if nim_key:
-              PROVIDERS.append({
-                  "name": "NVIDIA NIM Whisper",
-                  "url": "https://integrate.api.nvidia.com/v1/audio/transcriptions",
-                  "key": nim_key,
-                  "model": "nvidia/parakeet-ctc-1.1b-asr",
-                  "max_retries": 2,
-              })
-          else:
-              print("NVIDIA_NIM_API_KEY not set -- NIM fallback disabled")
+          chunks = sorted(glob.glob("workspace/audio/chunk_*.wav"))
+          if not chunks:
+              print("FATAL: no audio chunks produced"); sys.exit(1)
+          print(f"chunks: {len(chunks)}")
 
-          if not PROVIDERS:
-              print("No transcription providers configured -- aborting")
-              exit(1)
+          def post_chunk(path, model, language=None):
+              form = {
+                  "model": model,
+                  "response_format": "verbose_json",
+                  "timestamp_granularities[]": "word",
+              }
+              if language:
+                  form["language"] = language
+              with open(path, "rb") as fh:
+                  return requests.post(
+                      GROQ_URL,
+                      headers={"Authorization": f"Bearer {key}"},
+                      files={"file": (os.path.basename(path), fh, "audio/wav")},
+                      data=form, timeout=300,
+                  )
 
-          print(f"Providers configured: {' -> '.join(p['name'] for p in PROVIDERS)}")
-
-          # ── Language state: auto-detect on first chunk, lock for rest ──
-          detected_language = None  # Will be set after first chunk
-
-          def transcribe_chunk(chunk_path, force_language=None):
-              """Transcribe a single audio chunk. Tries providers in order with retries.
-              If force_language is set, hints Whisper to use that language for consistency."""
-              for provider in PROVIDERS:
-                  for attempt in range(provider["max_retries"]):
+          def transcribe_chunk(path, language=None):
+              """First successful response for one chunk, across models."""
+              for model in MODELS:
+                  for attempt in range(3):
                       try:
-                          with open(chunk_path, "rb") as audio_file:
-                              form_data = {
-                                  "model": provider["model"],
-                                  "response_format": "verbose_json",
-                                  "timestamp_granularities[]": "word",
-                              }
-                              # Force language hint for consistency across chunks
-                              if force_language:
-                                  form_data["language"] = force_language
-
-                              response = requests.post(
-                                  provider["url"],
-                                  headers={"Authorization": f"Bearer {provider['key']}"},
-                                  files={"file": (os.path.basename(chunk_path), audio_file, "audio/wav")},
-                                  data=form_data,
-                                  timeout=180,
-                              )
-
-                          if response.status_code == 200:
-                              data = response.json()
-                              if "words" in data or "segments" in data:
-                                  lang = data.get("language", "unknown")
-                                  print(f"  Transcribed via {provider['name']} (attempt {attempt + 1}, lang={lang})")
-                                  return data
-                              else:
-                                  print(f"  {provider['name']} returned 200 but response missing words/segments")
-                                  print(f"      Response keys: {list(data.keys())}")
-                                  break
-
-                          elif response.status_code in [429, 500, 502, 503]:
-                              wait = 2 ** attempt * 5
-                              print(f"  {provider['name']} HTTP {response.status_code}, retrying in {wait}s (attempt {attempt + 1}/{provider['max_retries']})...")
-                              time.sleep(wait)
-
-                          else:
-                              print(f"  {provider['name']} HTTP {response.status_code}: {response.text[:300]}")
-                              break
-
-                      except requests.exceptions.Timeout:
+                          resp = post_chunk(path, model, language)
+                      except requests.RequestException as exc:
                           wait = 2 ** attempt * 5
-                          print(f"  {provider['name']} timeout, retrying in {wait}s (attempt {attempt + 1}/{provider['max_retries']})...")
-                          time.sleep(wait)
-
-                      except Exception as e:
+                          print(f"  {model}: network error ({exc}); retry in {wait}s")
+                          time.sleep(wait); continue
+                      if resp.status_code == 200:
+                          data = resp.json()
+                          if data.get("words") or data.get("segments"):
+                              print(f"  {model}: ok (lang={data.get('language')})")
+                              return data
+                          print(f"  {model}: HTTP 200 but no words/segments")
+                          break
+                      if resp.status_code in (429, 500, 502, 503):
                           wait = 2 ** attempt * 5
-                          print(f"  {provider['name']} error: {e}, retrying in {wait}s (attempt {attempt + 1}/{provider['max_retries']})...")
-                          time.sleep(wait)
+                          print(f"  {model}: HTTP {resp.status_code}; retry in {wait}s")
+                          time.sleep(wait); continue
+                      print(f"  {model}: HTTP {resp.status_code} {resp.text[:200]}")
+                      break
+              return None
 
-                  print(f"  {provider['name']} exhausted all retries -- trying next provider...")
+          HALLUCINATIONS = {
+              "thank you for watching", "thanks for watching",
+              "subscribe to my channel", "please like and share",
+              "please subscribe", "like share and subscribe",
+              "don't forget to subscribe", "hit the bell icon",
+              "see you in the next video", "subtitles by", "captions by",
+              "translated by", "music playing",
+          }
 
-              return None  # All providers failed
+          def clean(words):
+              """Remove Whisper's punctuation-only tokens, repetition loops and
+              known hallucinated sign-offs."""
+              kept = []
+              for w in words:
+                  text = (w.get("text") or "").strip()
+                  if not text:
+                      continue
+                  if re.fullmatch(r"[^\w\s]+", text):
+                      continue
+                  if len(text) == 1 and text.lower() not in ("i", "a", "o"):
+                      continue
+                  span = w["endMs"] - w["startMs"]
+                  if span <= 0 or span > 8000:
+                      continue
+                  kept.append(w)
 
-          def parse_captions(data, offset):
-              """Convert verbose_json response -> Caption[] format."""
-              captions = []
-
-              if "words" in data and data["words"]:
-                  for w in data["words"]:
-                      text = w.get("word", w.get("text", "")).strip()
-                      if not text:
+              deduped, run = [], 1
+              for i, w in enumerate(kept):
+                  if i > 0 and w["text"].lower() == kept[i - 1]["text"].lower():
+                      run += 1
+                      if run > 3:
                           continue
-                      captions.append({
-                          "text": text,
-                          "startMs": int((w["start"] + offset) * 1000),
-                          "endMs": int((w["end"] + offset) * 1000),
-                          "timestampMs": None,
-                          "confidence": None,
-                      })
-                  print(f"  Word-level captions: {len(captions)} words")
+                  else:
+                      run = 1
+                  deduped.append(w)
 
-              elif "segments" in data and data["segments"]:
+              final, skip_to = [], -1
+              for i, w in enumerate(deduped):
+                  if i < skip_to:
+                      continue
+                  escaped = False
+                  for phrase in HALLUCINATIONS:
+                      n = len(phrase.split())
+                      window = " ".join(d["text"].lower() for d in deduped[i:i + n])
+                      if window == phrase:
+                          print(f"    removed hallucination: {phrase!r}")
+                          skip_to = i + n
+                          escaped = True
+                          break
+                  if not escaped:
+                      final.append(w)
+              return final
+
+          all_words, detected = [], None
+          for idx, chunk in enumerate(chunks):
+              offset = idx * SEGMENT_SECONDS
+              print(f"chunk {idx + 1}/{len(chunks)} (offset {offset}s)")
+              data = transcribe_chunk(chunk, detected)
+              if data is None:
+                  print(f"FATAL: transcription failed on chunk {idx + 1}")
+                  sys.exit(1)
+
+              if detected is None:
+                  raw = (data.get("language") or "en").lower()
+                  detected = {
+                      "hindi": "hi", "english": "en", "hinglish": "hi", "urdu": "ur",
+                      "punjabi": "pa", "tamil": "ta", "telugu": "te", "bengali": "bn",
+                      "marathi": "mr", "gujarati": "gu", "kannada": "kn", "malayalam": "ml",
+                  }.get(raw, raw)
+                  print(f"language locked: {detected}")
+
+              words = [
+                  {
+                      # Text is kept verbatim. The renderer groups caption pages by
+                      # word count / pause / punctuation and NEVER by leading
+                      # whitespace, so this cannot collapse the pages the way the
+                      # previous TikTok-grouping helper did.
+                      "text": w.get("word", w.get("text", "")).strip(),
+                      "startMs": int((w["start"] + offset) * 1000),
+                      "endMs": int((w["end"] + offset) * 1000),
+                      "timestampMs": None,
+                      "confidence": w.get("probability"),
+                  }
+                  for w in (data.get("words") or [])
+                  if w.get("start") is not None
+              ]
+
+              if not words and data.get("segments"):
+                  # Spread each segment's words evenly so captions still get
+                  # per-word timings when the provider omits word granularity.
                   for seg in data["segments"]:
-                      words = seg["text"].strip().split()
-                      n = max(1, len(words))
-                      seg_start = seg["start"] + offset
-                      seg_end = seg["end"] + offset
-                      dur = (seg_end - seg_start) / n
-                      for i, w in enumerate(words):
-                          if not w.strip():
-                              continue
-                          captions.append({
-                              "text": w,
-                              "startMs": int((seg_start + i * dur) * 1000),
-                              "endMs": int((seg_start + (i + 1) * dur) * 1000),
+                      tokens = (seg.get("text") or "").split()
+                      if not tokens:
+                          continue
+                      span = (seg["end"] - seg["start"]) / len(tokens)
+                      for i, tok in enumerate(tokens):
+                          words.append({
+                              "text": tok,
+                              "startMs": int((seg["start"] + offset + i * span) * 1000),
+                              "endMs": int((seg["start"] + offset + (i + 1) * span) * 1000),
                               "timestampMs": None,
                               "confidence": None,
                           })
-                  print(f"  Fallback segment distribution: {len(captions)} words")
+              all_words.extend(words)
 
-              else:
-                  print("  No words or segments found in response")
-                  return None
+          if not all_words:
+              print("FATAL: transcript is empty"); sys.exit(1)
 
-              if captions:
-                  print(f"  First 3 words: {[c['text'] for c in captions[:3]]}")
+          cleaned = clean(all_words)
+          print(f"words: {len(all_words)} raw -> {len(cleaned)} filtered")
+          if len(cleaned) < 10:
+              print("FATAL: too few words survive filtering"); sys.exit(1)
 
-              return captions
+          json.dump(cleaned, open("workspace/audio/full_captions.json", "w"))
+          open("workspace/audio/detected_language.txt", "w").write(detected or "en")
+          print(f"TRANSCRIBE_OK words={len(cleaned)} language={detected}")
+          PY
 
-          # ────────────────────────────────────────────────────────
-          # Hallucination filter — removes Whisper artifacts
-          # ────────────────────────────────────────────────────────
-          HALLUCINATION_PHRASES = [
-              "thank you for watching",
-              "thanks for watching",
-              "subscribe to my channel",
-              "please like and share",
-              "please subscribe",
-              "like share and subscribe",
-              "don't forget to subscribe",
-              "hit the bell icon",
-              "see you in the next video",
-              "bye bye",
-              "thank you so much",
-              "thanks for listening",
-              "subtitles by",
-              "captions by",
-              "translated by",
-              "copyright",
-              "music playing",
-              "applause",
-              "laughter",
-          ]
-
-          def filter_hallucinations(captions):
-              """Remove Whisper hallucinations: repetitions, artifacts, garbage text."""
-              if not captions:
-                  return captions
-
-              original_count = len(captions)
-              filtered = []
-
-              # ── Pass 1: Remove individual garbage words ──
-              for c in captions:
-                  text = c["text"].strip()
-
-                  # Skip empty text
-                  if not text:
-                      continue
-
-                  # Skip pure punctuation (Whisper sometimes outputs "...", ",,,", etc.)
-                  if re.match(r'^[^\w\s]+$', text):
-                      continue
-
-                  # Skip single characters that aren't real words
-                  # Allow: I, a, O (English), common Hindi particles
-                  if len(text) == 1 and text.lower() not in ('i', 'a', 'o'):
-                      continue
-
-                  # Skip words with impossibly long duration (>8 seconds for a single word)
-                  dur_ms = c["endMs"] - c["startMs"]
-                  if dur_ms > 8000:
-                      print(f"    Filtered long-duration word: '{text}' ({dur_ms}ms)")
-                      continue
-
-                  # Skip words with zero/negative duration
-                  if dur_ms <= 0:
-                      continue
-
-                  filtered.append(c)
-
-              # ── Pass 2: Remove consecutive repetitions (>3 repeats) ──
-              deduped = []
-              repeat_count = 1
-              for i, c in enumerate(filtered):
-                  if i > 0 and c["text"].lower() == filtered[i - 1]["text"].lower():
-                      repeat_count += 1
-                      if repeat_count <= 3:
-                          deduped.append(c)
-                      # else: skip — it's a hallucinated repetition
-                  else:
-                      repeat_count = 1
-                      deduped.append(c)
-
-              # ── Pass 3: Remove known hallucination phrases ──
-              # Build a sliding window of text to check for hallucination phrases
-              final = []
-              skip_until = -1
-              for i, c in enumerate(deduped):
-                  if i < skip_until:
-                      continue
-
-                  # Check if current position starts a hallucination phrase
-                  is_hallucination = False
-                  for phrase in HALLUCINATION_PHRASES:
-                      phrase_words = phrase.split()
-                      window = [d["text"].lower() for d in deduped[i:i + len(phrase_words)]]
-                      if " ".join(window) == phrase:
-                          print(f"    Filtered hallucination phrase: '{phrase}' at word {i}")
-                          skip_until = i + len(phrase_words)
-                          is_hallucination = True
-                          break
-
-                  if not is_hallucination:
-                      final.append(c)
-
-              removed = original_count - len(final)
-              if removed > 0:
-                  print(f"  Hallucination filter: removed {removed}/{original_count} words ({removed/original_count*100:.1f}%)")
-              else:
-                  print(f"  Hallucination filter: all {original_count} words passed (clean)")
-
-              return final
-
-          # ── Main: process all chunks ──
-          chunks = sorted(glob.glob("workspace/audio/chunk_*.wav"))
-          all_captions = []
-          failed = False
-
-          for chunk_idx, chunk_path in enumerate(chunks):
-              chunk_size = os.path.getsize(chunk_path)
-              offset = chunk_idx * segment_duration
-              print(f"\nChunk {chunk_idx + 1}/{len(chunks)}: {chunk_path} ({chunk_size} bytes, offset: {offset}s)")
-
-              # First chunk: auto-detect language. Subsequent chunks: force detected language.
-              data = transcribe_chunk(chunk_path, force_language=detected_language)
-
-              if data is None:
-                  print(f"  ALL providers failed for chunk {chunk_idx} -- aborting pipeline")
-                  failed = True
-                  break
-
-              # Capture detected language from first successful chunk
-              if detected_language is None:
-                  detected_language = data.get("language", "en")
-                  # Normalize: Whisper returns "hindi" or "hi", standardize to ISO code
-                  lang_map = {"hindi": "hi", "english": "en", "hinglish": "hi",
-                              "urdu": "ur", "punjabi": "pa", "tamil": "ta",
-                              "telugu": "te", "bengali": "bn", "marathi": "mr",
-                              "gujarati": "gu", "kannada": "kn", "malayalam": "ml"}
-                  detected_language = lang_map.get(detected_language.lower(), detected_language.lower())
-                  print(f"  Language auto-detected: '{detected_language}' -- locking for remaining chunks")
-
-              captions = parse_captions(data, offset)
-
-              if captions is None:
-                  print(f"  Failed to parse captions for chunk {chunk_idx} -- aborting pipeline")
-                  failed = True
-                  break
-
-              all_captions.extend(captions)
-
-          if failed:
-              print("\nTranscription failed -- aborting pipeline")
-              exit(1)
-
-          # ── Apply hallucination filter ──
-          print(f"\nApplying hallucination filter to {len(all_captions)} words...")
-          all_captions = filter_hallucinations(all_captions)
-
-          # Write final captions
-          with open("workspace/audio/full_captions.json", "w") as f:
-              json.dump(all_captions, f)
-
-          # Write detected language for downstream steps
-          with open("workspace/audio/detected_language.txt", "w") as f:
-              f.write(detected_language)
-
-          print(f"\nTranscription complete: {len(all_captions)} words across {len(chunks)} chunk(s)")
-          print(f"Detected language: {detected_language}")
-          PYTRANSCRIBE
-
-          # Read detected language for downstream steps
-          DETECTED_LANG=$(cat workspace/audio/detected_language.txt 2>/dev/null || echo "en")
-          echo "captions_path=workspace/audio/full_captions.json" >> $GITHUB_OUTPUT
-          echo "detected_language=$DETECTED_LANG" >> $GITHUB_OUTPUT
-          echo "Detected language: $DETECTED_LANG"
-
-      # ─────────────────────────────────────────────────────────────
-      # 4b. Transliterate Devanagari → Hinglish via Groq LLM
-      #     Only runs if detected language is Hindi (hi)
-      # ─────────────────────────────────────────────────────────────
-      - name: Transliterate to Hinglish (LLM)
+      # ─────────────────────────────────────────────────────────────────────
+      # 4. Hinglish transliteration
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Transliterate Devanagari to Hinglish
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
-          echo "Transliterating captions to Hinglish if needed..."
+          set -euo pipefail
+          echo "transliterate" > workspace/.current_step
+          python3 - <<'PY'
+          import json, os, re, sys, time
+          import requests
 
-          # Check detected language — only transliterate for Hindi
-          DETECTED_LANG=$(cat workspace/audio/detected_language.txt 2>/dev/null || echo "en")
-          echo "Detected language: $DETECTED_LANG"
+          key = os.environ.get("GROQ_API_KEY", "").strip()
+          captions = json.load(open("workspace/audio/full_captions.json"))
+          devanagari = re.compile(r"[\u0900-\u097F]")
+          targets = [i for i, c in enumerate(captions) if devanagari.search(c["text"])]
 
-          python3 << 'TRANSLITERATE'
-          import json, re, os, requests, time
+          if not targets:
+              print("no Devanagari text — nothing to transliterate")
+              sys.exit(0)
 
-          groq_key = os.environ["GROQ_API_KEY"]
+          print(f"{len(targets)} of {len(captions)} words are Devanagari")
+          MODEL = os.environ.get("CLIPMINT_LLM_MODEL", "openai/gpt-oss-120b")
+          BATCH = 60
+          failed_batches = 0
 
-          # Read detected language
-          detected_lang = "en"
-          try:
-              with open('workspace/audio/detected_language.txt') as f:
-                  detected_lang = f.read().strip()
-          except FileNotFoundError:
-              pass
-
-          with open('workspace/audio/full_captions.json') as f:
-              captions = json.load(f)
-
-          # Detect if any Devanagari characters exist
-          devanagari_re = re.compile(r'[\u0900-\u097F]')
-          hindi_words = [c for c in captions if devanagari_re.search(c.get('text', ''))]
-
-          if not hindi_words and detected_lang != "hi":
-              print("No Devanagari text and language is not Hindi -- skipping transliteration")
-              exit(0)
-
-          if not hindi_words:
-              print("Language is Hindi but no Devanagari text found -- skipping transliteration")
-              exit(0)
-
-          print(f"Found {len(hindi_words)}/{len(captions)} words in Devanagari -- transliterating with context...")
-
-          # ── Context-aware transliteration ──
-          # Instead of sending individual words, we group consecutive words into
-          # sentence-like chunks so the LLM can understand context and produce
-          # better romanization (e.g., "main" vs "mein" based on context).
-          CONTEXT_SIZE = 15  # words per group for LLM context
-
-          # Build groups of consecutive Devanagari words with their neighbors for context
-          hindi_indices = [i for i, c in enumerate(captions) if devanagari_re.search(c.get('text', ''))]
-
-          # Process in batches of CONTEXT_SIZE indices
-          BATCH_SIZE = 150  # max indices per LLM call
-          for batch_start in range(0, len(hindi_indices), BATCH_SIZE):
-              batch_idx = hindi_indices[batch_start:batch_start + BATCH_SIZE]
-
-              # Build context sentences: for each Devanagari word, include surrounding words
-              # This gives the LLM context to produce better transliteration
-              context_groups = []
-              current_group = []
-              current_group_idx = []
-
-              for idx in batch_idx:
-                  # Get a window of words around this Devanagari word for context
-                  start = max(0, idx - 2)
-                  end = min(len(captions), idx + 3)
-                  context = " ".join(c['text'] for c in captions[start:end])
-
-                  current_group.append({
-                      "index": idx,
-                      "original": captions[idx]['text'],
-                      "context": context
-                  })
-
-                  if len(current_group) >= CONTEXT_SIZE:
-                      context_groups.append(current_group)
-                      current_group = []
-
-              if current_group:
-                  context_groups.append(current_group)
-
-              for group_idx, group in enumerate(context_groups):
-                  # Build the prompt with context
-                  words_with_context = []
-                  for j, item in enumerate(group):
-                      words_with_context.append(
-                          f'{j+1}. "{item["original"]}" (context: ...{item["context"]}...)'
+          for start in range(0, len(targets), BATCH):
+              group = targets[start:start + BATCH]
+              enriched = "\n".join(
+                  f'{n + 1}. "{captions[i]["text"]}" (context: '
+                  f'{" ".join(c["text"] for c in captions[max(0, i - 2):i + 3])})'
+                  for n, i in enumerate(group)
+              )
+              prompt = (
+                  "Convert these Hindi (Devanagari) words to natural Hinglish "
+                  "(romanised Hindi as Indians actually type it).\n"
+                  "Rules: do not translate to English; keep Latin-script words exactly "
+                  "as they are; use the context to pick the right romanisation; "
+                  'return ONLY JSON {"words": [...]} in the same order.\n\n'
+                  f"Words:\n{enriched}"
+              )
+              done = False
+              for attempt in range(3):
+                  try:
+                      resp = requests.post(
+                          "https://api.groq.com/openai/v1/chat/completions",
+                          headers={"Authorization": f"Bearer {key}",
+                                   "Content-Type": "application/json"},
+                          json={
+                              "model": MODEL,
+                              "messages": [
+                                  {"role": "system", "content": "You romanise Hindi to natural Hinglish. Return only JSON."},
+                                  {"role": "user", "content": prompt},
+                              ],
+                              "temperature": 0.1,
+                              "max_tokens": 3000,
+                              "response_format": {"type": "json_object"},
+                          },
+                          timeout=120,
                       )
-                  words_str = "\n".join(words_with_context)
+                      if resp.status_code != 200:
+                          print(f"  HTTP {resp.status_code}: {resp.text[:200]}")
+                          time.sleep(2 ** attempt * 3)
+                          continue
+                      parsed = json.loads(resp.json()["choices"][0]["message"]["content"])
+                      out = parsed.get("words") if isinstance(parsed, dict) else parsed
+                      if not isinstance(out, list) or len(out) != len(group):
+                          print("  length mismatch; retrying")
+                          time.sleep(2)
+                          continue
+                      for idx, value in zip(group, out):
+                          value = str(value).strip()
+                          if value:
+                              captions[idx]["text"] = value
+                      done = True
+                      break
+                  except Exception as exc:  # noqa: BLE001
+                      print(f"  error: {exc}")
+                      time.sleep(2 ** attempt * 3)
+              if not done:
+                  failed_batches += 1
 
-                  prompt = f"""Convert these Hindi (Devanagari) words to natural Hinglish (romanized Hindi).
+          json.dump(captions, open("workspace/audio/full_captions.json", "w"))
+          remaining = sum(1 for c in captions if devanagari.search(c["text"]))
+          print(f"TRANSLITERATE_OK remaining_devanagari={remaining} failed_batches={failed_batches}")
+          PY
 
-          CRITICAL RULES:
-          1. Romanize how Indians ACTUALLY type on WhatsApp/Instagram — NOT formal transliteration
-          2. Do NOT translate to English. Just romanize the Hindi word.
-          3. If a word is ALREADY in English/Latin script, keep it exactly as-is
-          4. Use the context to pick the right romanization (e.g., "मैं" = "main" not "mein" when meaning "I")
-          5. Common patterns:
-             - क्या → kya, कैसे → kaise, बहुत → bohot, लेकिन → lekin
-             - है → hai, हैं → hain, था → tha, हो → ho
-             - आप → aap, तुम → tum, मैं → main, हम → hum
-             - नहीं → nahi, अच्छा → accha, ठीक → theek
-          6. Return ONLY a JSON object with key "words" containing an array of romanized strings, same order
-
-          Words to romanize:
-          {words_str}"""
-
-                  for attempt in range(3):
-                      try:
-                          resp = requests.post(
-                              "https://api.groq.com/openai/v1/chat/completions",
-                              headers={"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"},
-                              json={
-                                  "model": "openai/gpt-oss-120b",
-                                  "messages": [
-                                      {"role": "system", "content": "You are a Hindi-to-Hinglish romanization expert. You convert Devanagari script to natural romanized Hindi (Hinglish) as Indians type it on social media. Return ONLY valid JSON."},
-                                      {"role": "user", "content": prompt}
-                                  ],
-                                  "temperature": 0.1,
-                                  "max_tokens": 2048,
-                                  "response_format": {"type": "json_object"}
-                              },
-                              timeout=60
-                          )
-                          if resp.status_code == 200:
-                              content = resp.json()["choices"][0]["message"]["content"]
-                              parsed = json.loads(content)
-                              # Handle both {"words": [...]} and [...] and {"result": [...]} formats
-                              if isinstance(parsed, dict):
-                                  romanized = parsed.get("words", list(parsed.values())[0] if parsed else [])
-                              else:
-                                  romanized = parsed
-
-                              if isinstance(romanized, list) and len(romanized) == len(group):
-                                  for item, roman_word in zip(group, romanized):
-                                      new_text = str(roman_word).strip()
-                                      if new_text:  # Don't replace with empty string
-                                          captions[item["index"]]['text'] = new_text
-                                  print(f"  Batch {batch_start//BATCH_SIZE + 1}, Group {group_idx + 1}: transliterated {len(group)} words")
-                                  break
-                              else:
-                                  print(f"  Length mismatch: expected {len(group)}, got {len(romanized) if isinstance(romanized, list) else 'non-list'}. Retrying...")
-                          elif resp.status_code in [429, 500, 502, 503]:
-                              wait = 2 ** attempt * 3
-                              print(f"  Groq {resp.status_code}, retrying in {wait}s...")
-                              time.sleep(wait)
-                          else:
-                              print(f"  Groq error {resp.status_code}: {resp.text[:200]}")
-                              break
-                      except Exception as e:
-                          print(f"  Error: {e}")
-                          if attempt < 2:
-                              time.sleep(2 ** attempt * 3)
-
-          with open('workspace/audio/full_captions.json', 'w') as f:
-              json.dump(captions, f)
-
-          # Verify no Devanagari remains
-          remaining = sum(1 for c in captions if devanagari_re.search(c.get('text', '')))
-          print(f"Transliteration complete. Remaining Devanagari words: {remaining}/{len(captions)}")
-          if remaining > 0:
-              # Show first few remaining for debugging
-              samples = [c['text'] for c in captions if devanagari_re.search(c.get('text', ''))][:5]
-              print(f"  Remaining samples: {samples}")
-          TRANSLITERATE
-
-      # ─────────────────────────────────────────────────────────────
-      # 4c. Audio Energy Analysis (Tier 1.3)
-      # ─────────────────────────────────────────────────────────────
-      - name: Analyze audio energy
+      # ─────────────────────────────────────────────────────────────────────
+      # 5. Audio analysis
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Analyse audio energy
         run: |
-          echo "🔊 Analyzing audio energy levels..."
+          set -euo pipefail
+          echo "audio_energy" > workspace/.current_step
           ffmpeg -i workspace/audio/audio.wav \
             -af "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=workspace/audio/energy.txt" \
-            -f null - 2>/dev/null
-          echo "✅ Audio energy analysis complete"
+            -f null - 2>/dev/null || true
+          echo "energy samples: $(grep -c RMS_level workspace/audio/energy.txt 2>/dev/null || echo 0)"
 
-      # ─────────────────────────────────────────────────────────────
-      # 4d. Silence Detection for Clean Cut Points (Tier 1.4)
-      # ─────────────────────────────────────────────────────────────
-      - name: Detect silence gaps (adaptive threshold)
+      - name: Detect silence gaps
         run: |
-          echo "🔇 Detecting silence gaps with adaptive loudnorm threshold..."
+          set -euo pipefail
+          echo "silence_detect" > workspace/.current_step
 
-          # ── Pass 1: Measure the audio's actual noise floor ──
-          # The loudnorm filter's first pass reports input_thresh, which is
-          # the measured noise floor of THIS specific audio. Using it as
-          # the silencedetect threshold adapts to quiet podcasts vs loud
-          # music without any hardcoded dB value. (silence-detection.md skill)
+          # The loudnorm measurement pass reports this file's own noise floor,
+          # which adapts the threshold to quiet podcasts and loud music alike —
+          # no hardcoded dB value.
           LOUDNORM_JSON=$(ffmpeg -i workspace/audio/audio.wav \
-            -af "loudnorm=print_format=json" \
-            -f null - 2>&1 | sed -n '/{/,/}/p')
+            -af "loudnorm=print_format=json" -f null - 2>&1 | sed -n '/{/,/}/p')
 
-          # Extract input_thresh (noise floor) — fallback to -35 if parse fails
-          INPUT_THRESH=$(echo "$LOUDNORM_JSON" | python3 -c "
+          THRESHOLD=$(echo "$LOUDNORM_JSON" | python3 -c "
           import sys, json
           try:
               data = json.load(sys.stdin)
-              thresh = float(data.get('input_thresh', '-35.0'))
-              # Clamp to reasonable range: never quieter than -50, never louder than -20
-              thresh = max(-50.0, min(-20.0, thresh))
-              print(f'{thresh:.1f}')
-          except:
+              value = float(data.get('input_thresh', '-35.0'))
+              print(f'{max(-50.0, min(-20.0, value)):.1f}')
+          except Exception:
               print('-35.0')
           " 2>/dev/null || echo "-35.0")
 
-          echo "  📊 Measured noise floor: ${INPUT_THRESH}dB (using as silence threshold)"
-
-          # ── Pass 2: Detect silences using the adaptive threshold ──
+          echo "noise floor: ${THRESHOLD}dB"
           ffmpeg -i workspace/audio/audio.wav \
-            -af "silencedetect=noise=${INPUT_THRESH}dB:d=0.3" \
+            -af "silencedetect=noise=${THRESHOLD}dB:d=0.25" \
             -f null - 2>&1 | grep "silence_" > workspace/audio/silences.txt || true
 
-          SILENCE_COUNT=$(wc -l < workspace/audio/silences.txt)
-          echo "✅ Found $SILENCE_COUNT silence markers (threshold: ${INPUT_THRESH}dB)"
+          echo "silence markers: $(wc -l < workspace/audio/silences.txt)"
 
-          # Save threshold for downstream steps
-          echo "$INPUT_THRESH" > workspace/audio/silence_threshold.txt
+      # ─────────────────────────────────────────────────────────────────────
+      # 6. Viral moment detection
+      # ─────────────────────────────────────────────────────────────────────
+      - name: "Mark: analyzing"
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status analyzing --progress 40
 
-      - name: Update job status → analyzing
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "analyzing", "progress": 40}'
-
-      # ─────────────────────────────────────────────────────────────
-      # 5. AI Analysis — Find Viral Moments (Python — no shell escaping issues)
-      # ─────────────────────────────────────────────────────────────
-      - name: AI viral moment detection
-        id: ai_analysis
+      - name: Detect viral moments
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           MAX_CLIPS: ${{ inputs.max_clips }}
           VIDEO_DURATION: ${{ steps.download.outputs.duration }}
         run: |
-          echo "🧠 Analyzing transcript for viral moments using sliding window and 2-pass scoring..."
+          set -euo pipefail
+          echo "viral_detection" > workspace/.current_step
+          python3 - <<'PY'
+          import json, os, re, statistics, sys, time
+          import requests
 
-          python3 << 'PYTHON_SCRIPT'
-          import json, os, requests, sys, time
+          key = os.environ["GROQ_API_KEY"].strip()
+          max_clips = max(1, min(int(os.environ.get("MAX_CLIPS", "10") or 10), 20))
+          duration = float(os.environ.get("VIDEO_DURATION", "0") or 0)
 
-          groq_key = os.environ["GROQ_API_KEY"]
-          max_clips = int(os.environ.get("MAX_CLIPS", "10"))
-          video_duration = float(os.environ.get("VIDEO_DURATION", "0") or "0")
-
-          with open("workspace/audio/full_captions.json") as f:
-              captions = json.load(f)
-
-          print(f"📄 Caption words loaded: {len(captions)}")
-
+          captions = json.load(open("workspace/audio/full_captions.json"))
+          print(f"words: {len(captions)}  video: {duration:.0f}s  max_clips: {max_clips}")
           if not captions:
-              print("❌ Empty captions — cannot analyze")
-              sys.exit(1)
+              print("FATAL: no captions to analyse"); sys.exit(1)
 
-          def call_groq_with_retry(prompt, is_json=False, max_retries=3):
-              for attempt in range(max_retries + 1):
-                  try:
-                      response = requests.post(
-                          "https://api.groq.com/openai/v1/chat/completions",
-                          headers={
-                              "Authorization": f"Bearer {groq_key}",
-                              "Content-Type": "application/json"
-                          },
-                          json={
-                              "model": "openai/gpt-oss-120b",
-                              "messages": [
-                                  {"role": "system", "content": "You are a viral content expert. Return ONLY valid JSON." if is_json else "You are a viral content expert."},
-                                  {"role": "user", "content": prompt}
-                              ],
-                              "temperature": 0.7,
-                              "max_tokens": 4096,
-                              "response_format": {"type": "json_object"} if is_json else None
-                          },
-                          timeout=120
-                      )
-                      
-                      if response.status_code == 200:
-                          return response.json()["choices"][0]["message"]["content"]
-                      
-                      if response.status_code in [429, 500, 502, 503] and attempt < max_retries:
-                          wait = 2 ** attempt * 5
-                          print(f"  ⚠️ Groq returned {response.status_code}, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
-                          time.sleep(wait)
-                          continue
-                      
-                      raise Exception(f"Groq API error {response.status_code}: {response.text[:300]}")
-                  except Exception as e:
-                      if attempt < max_retries:
-                          wait = 2 ** attempt * 5
-                          print(f"  ⚠️ Error calling Groq: {e}, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
-                          time.sleep(wait)
-                      else:
-                          raise e
+          # gpt-oss-120b replaced the retired llama-3.3-70b-versatile, which now
+          # returns HTTP 404 model_not_found on this account.
+          MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
 
-          # 1. Prepare sliding windows
-          WINDOW_SIZE = 6000
-          OVERLAP = 1000
+          def ask(prompt, is_json, max_tokens=4096):
+              last = None
+              for model in MODELS:
+                  for attempt in range(3):
+                      try:
+                          resp = requests.post(
+                              "https://api.groq.com/openai/v1/chat/completions",
+                              headers={"Authorization": f"Bearer {key}",
+                                       "Content-Type": "application/json"},
+                              json={
+                                  "model": model,
+                                  "messages": [
+                                      {"role": "system", "content": (
+                                          "You are a short-form video editor who finds "
+                                          "clips that perform on Reels, Shorts and TikTok."
+                                          + (" Return only valid JSON." if is_json else "")
+                                      )},
+                                      {"role": "user", "content": prompt},
+                                  ],
+                                  "temperature": 0.6,
+                                  "max_tokens": max_tokens,
+                                  **({"response_format": {"type": "json_object"}} if is_json else {}),
+                              },
+                              timeout=180,
+                          )
+                          if resp.status_code == 200:
+                              return resp.json()["choices"][0]["message"]["content"]
+                          last = f"{model} HTTP {resp.status_code}: {resp.text[:200]}"
+                          if resp.status_code in (429, 500, 502, 503):
+                              time.sleep(2 ** attempt * 5)
+                              continue
+                          break
+                      except requests.RequestException as exc:
+                          last = f"{model}: {exc}"
+                          time.sleep(2 ** attempt * 4)
+                  print(f"  model {model} exhausted: {last}")
+              raise RuntimeError(f"all models failed: {last}")
 
-          transcript_text = ""
-          char_to_time = []
+          # ── Time-indexed transcript windows ────────────────────────────
+          text, timemap = "", []
           for c in captions:
-              start_char = len(transcript_text)
-              word = c['text'] + " "
-              transcript_text += word
-              for i in range(len(word)):
-                  char_to_time.append(c['startMs'] / 1000.0)
+              for ch in c["text"] + " ":
+                  text += ch
+                  timemap.append(c["startMs"] / 1000.0)
 
-          def get_time(char_idx):
-              if char_idx >= len(char_to_time): return char_to_time[-1] if char_to_time else 0
-              if char_idx < 0: return 0
-              return char_to_time[char_idx]
+          def time_at(idx):
+              if not timemap:
+                  return 0.0
+              return timemap[min(max(idx, 0), len(timemap) - 1)]
 
+          WINDOW_CHARS, OVERLAP_CHARS = 7000, 1200
+          step = WINDOW_CHARS - OVERLAP_CHARS
           windows = []
-          for i in range(0, len(transcript_text), WINDOW_SIZE - OVERLAP):
-              chunk = transcript_text[i:i + WINDOW_SIZE]
-              if len(chunk.strip()) < 50: continue
-              start_sec = get_time(i)
-              end_sec = get_time(i + len(chunk))
+          for start in range(0, max(1, len(text)), step):
+              chunk = text[start:start + WINDOW_CHARS]
+              if len(chunk.strip()) < 60:
+                  continue
               windows.append({
-                  'text': chunk,
-                  'start_sec': start_sec,
-                  'end_sec': end_sec
+                  "text": chunk,
+                  "start": time_at(start),
+                  "end": time_at(start + len(chunk)),
               })
+          print(f"windows: {len(windows)}")
 
-          print(f"🪟 Created {len(windows)} sliding windows for transcript analysis.")
+          length_hint = (
+              f" The source video is {duration:.0f}s long; keep every clip inside that range."
+              if duration > 0 else ""
+          )
 
-          all_moments = []
-          duration_hint = f" The full video is {video_duration:.0f} seconds ({video_duration/60:.1f} minutes) long." if video_duration > 0 else ""
-
-          for idx, window in enumerate(windows):
-              print(f"🔍 Analyzing window {idx+1}/{len(windows)} (Time: {window['start_sec']:.1f}s - {window['end_sec']:.1f}s)")
-              
-              # PASS 1: Discovery
-              discovery_prompt = f"""Find ALL interesting moments in this transcript section.{duration_hint}
-              Be generous — include anything that MIGHT work as a standalone clip.
-              Allow clip lengths to be determined dynamically by the natural context, from 15 to 120 seconds.
-              
-              Transcript section:
-              {window['text']}
-              """
-              
-              print("  ▶️ Running Discovery pass...")
+          moments = []
+          for i, w in enumerate(windows):
+              print(f"window {i + 1}/{len(windows)} ({w['start']:.0f}s–{w['end']:.0f}s)")
+              discovery = (
+                  "Read this transcript section and list every moment that could stand "
+                  f"alone as a short vertical video.{length_hint} Be generous, but only "
+                  "include moments with a clear beginning and end.\n\n"
+                  f"Transcript:\n{w['text']}"
+              )
               try:
-                  candidates_text = call_groq_with_retry(discovery_prompt, is_json=False)
-              except Exception as e:
-                  print(f"  ❌ Failed discovery pass: {e}")
+                  candidates = ask(discovery, is_json=False)
+              except Exception as exc:  # noqa: BLE001
+                  print(f"  discovery failed: {exc}")
                   continue
 
-              # PASS 2: Ranking extraction
-              ranking_prompt = f"""Here are candidate moments extracted from a video transcript.
-              Rank them strictly using this rubric:
-
-              1. HOOK STRENGTH (1-20): Does it grab attention in the first 3 seconds?
-              2. STANDALONE VALUE (1-20): Does the clip make sense WITHOUT the full video?
-              3. EMOTIONAL PEAK (1-20): Is there humor, surprise, controversy, or deep insight?
-              4. SHAREABILITY (1-20): Would someone tag a friend or repost this?
-              5. COMPLETION (1-20): Does it have a natural start and end point?
-
-              Return the top candidates as a JSON object with a "clips" key containing an array.
-              Each moment must have:
-              - start_time: start timestamp in seconds (float, naturally fitting the dialogue boundaries based on the text, within {window['start_sec']:.1f} to {window['end_sec']:.1f})
-              - end_time: end timestamp in seconds (float, clip should be dynamically sized to fit context, 15 to 120 secs)
-              - viral_score: total_score (sum of all 5 rubric points, 1-100 rating)
-              - title: catchy title for the clip
-              - description: brief description
-              - hashtags: array of 5 relevant hashtags
-              - hook: compelling first-line hook caption
-              
-              Candidates to rank:
-              {candidates_text}
-              """
-              
-              print("  ▶️ Running Ranking pass...")
+              ranking = (
+                  "Score each candidate 1-20 on all five axes, then return the best.\n"
+                  "1) HOOK: does the first 3 seconds stop the scroll?\n"
+                  "2) STANDALONE: understandable with zero context?\n"
+                  "3) EMOTION: humour, surprise, tension or insight?\n"
+                  "4) SHAREABILITY: would someone send this to a friend?\n"
+                  "5) COMPLETENESS: clean start and a satisfying end?\n\n"
+                  'Return JSON: {"clips": [{"start_time": <float seconds>, '
+                  '"end_time": <float seconds>, "viral_score": <sum of the five scores, 5-100>, '
+                  '"title": "...", "description": "...", "hashtags": ["#a", ...5 items], '
+                  '"hook": "..."}]}\n'
+                  f"start_time must fall between {w['start']:.1f} and {w['end']:.1f}. "
+                  "Aim for 20-60 second clips unless the idea genuinely needs longer.\n\n"
+                  f"Candidates:\n{candidates}"
+              )
               try:
-                  ranking_json_str = call_groq_with_retry(ranking_prompt, is_json=True)
-                  parsed = json.loads(ranking_json_str)
-                  window_clips = parsed.get("clips", [])
-                  all_moments.extend(window_clips)
-              except Exception as e:
-                  print(f"  ❌ Failed ranking pass: {e}")
+                  parsed = json.loads(ask(ranking, is_json=True))
+                  found = parsed.get("clips", [])
+                  print(f"  {len(found)} candidate(s)")
+                  moments.extend(found)
+              except Exception as exc:  # noqa: BLE001
+                  print(f"  ranking failed: {exc}")
 
-          # Deduplicate moments that overlap significantly (> 5 seconds overlap)
-          final_moments = []
-          for m in all_moments:
+          if not moments:
+              print("FATAL: no moments identified"); sys.exit(1)
+
+          # ── Normalise, clamp, de-duplicate ──────────────────────────────
+          clean = []
+          for m in moments:
               try:
-                  m['start_time'] = float(m['start_time'])
-                  m['end_time'] = float(m['end_time'])
-                  m['viral_score'] = float(m.get('viral_score', 50))
-              except:
+                  s, e = float(m["start_time"]), float(m["end_time"])
+              except (KeyError, TypeError, ValueError):
                   continue
-              
-              is_duplicate = False
-              for fm in final_moments:
-                  overlap_start = max(m['start_time'], fm['start_time'])
-                  overlap_end = min(m['end_time'], fm['end_time'])
-                  overlap_dur = max(0, overlap_end - overlap_start)
-                  if overlap_dur > 5.0:
-                      # Merge/keep the highest score
-                      if m['viral_score'] > fm['viral_score']:
-                          fm.update(m)
-                      is_duplicate = True
-                      break
-              if not is_duplicate:
-                  final_moments.append(m)
+              if e <= s:
+                  continue
+              if duration > 0:
+                  s = max(0.0, min(s, duration - 5))
+                  e = max(s + 5, min(e, duration))
+              clean.append({**m, "start_time": s, "end_time": e,
+                            "viral_score": max(0.0, min(100.0, float(m.get("viral_score", 50))))})
 
-          # ── Audio Energy Boosting (Tier 1.3) ──
-          # Parse energy data and boost scores for moments with high audio energy
-          import re, statistics
-          energy_data = []
+          clean.sort(key=lambda m: m["viral_score"], reverse=True)
+          kept = []
+          for m in clean:
+              if any(min(m["end_time"], k["end_time"]) - max(m["start_time"], k["start_time"]) > 5
+                     for k in kept):
+                  continue
+              kept.append(m)
+              if len(kept) >= max_clips * 2:   # spares for the prepare step
+                  break
+
+          # ── Audio-energy boost ──────────────────────────────────────────
+          energy = []
           try:
-              with open('workspace/audio/energy.txt') as ef:
-                  current_time = 0.0
-                  for line in ef:
-                      time_match = re.search(r'pts_time:(\d+\.?\d*)', line)
-                      if time_match:
-                          current_time = float(time_match.group(1))
-                      rms_match = re.search(r'RMS_level=(-?\d+\.?\d*)', line)
-                      if rms_match:
-                          rms = float(rms_match.group(1))
-                          energy_data.append({'time': current_time, 'rms_db': rms})
+              t = 0.0
+              for line in open("workspace/audio/energy.txt"):
+                  mt = re.search(r"pts_time:(\d+\.?\d*)", line)
+                  if mt:
+                      t = float(mt.group(1))
+                  mr = re.search(r"RMS_level=(-?\d+\.?\d*)", line)
+                  if mr:
+                      energy.append((t, float(mr.group(1))))
           except FileNotFoundError:
-              print("  ⚠️ energy.txt not found — skipping energy boosting")
+              print("energy.txt missing — skipping energy boost")
 
-          if energy_data:
-              rms_values = [e['rms_db'] for e in energy_data if e['rms_db'] > -100]
-              if len(rms_values) >= 2:
-                  mean_rms = statistics.mean(rms_values)
-                  std_rms = statistics.stdev(rms_values)
-                  threshold = mean_rms + std_rms
-                  energy_peaks = [e for e in energy_data if e['rms_db'] > threshold]
-                  print(f"🔊 Audio energy: {len(energy_peaks)} peak seconds detected (threshold: {threshold:.1f} dB)")
+          if len(energy) >= 2:
+              values = [v for _, v in energy if v > -100]
+              if len(values) >= 2:
+                  cut = statistics.mean(values) + statistics.stdev(values)
+                  peaks = [t for t, v in energy if v > cut]
+                  for m in kept:
+                      n = sum(1 for p in peaks if m["start_time"] <= p <= m["end_time"])
+                      if n:
+                          m["viral_score"] = min(100.0, m["viral_score"] + min(15, n * 3))
+                          m["energy_peaks"] = n
+                  print(f"energy peaks: {len(peaks)} (threshold {cut:.1f} dB)")
 
-                  for moment in final_moments:
-                      start = moment['start_time']
-                      end = moment['end_time']
-                      peak_count = sum(1 for p in energy_peaks if start <= p['time'] <= end)
-                      energy_bonus = min(15, peak_count * 3)  # up to +15 points
-                      if energy_bonus > 0:
-                          old_score = moment['viral_score']
-                          moment['viral_score'] = min(100, moment['viral_score'] + energy_bonus)
-                          moment['energy_peaks'] = peak_count
-                          print(f"  ⚡ Boosted moment at {start:.1f}s: {old_score:.0f} → {moment['viral_score']:.0f} (+{energy_bonus}, {peak_count} peaks)")
-              else:
-                  print("  ⚠️ Not enough energy data for peak detection")
+          kept.sort(key=lambda m: m["viral_score"], reverse=True)
+          kept = kept[:max_clips]
+          json.dump({"clips": kept}, open("workspace/clips/viral_moments.json", "w"), indent=2)
+          print(f"VIRAL_OK moments={len(kept)} top_score={kept[0]['viral_score']:.0f}")
+          PY
 
-          # Sort by score and take top N
-          final_moments.sort(key=lambda m: m['viral_score'], reverse=True)
-          clips = final_moments[:max_clips]
+      # ─────────────────────────────────────────────────────────────────────
+      # 7. Prepare clips: cut → vertical reframe → loudness → captions
+      # ─────────────────────────────────────────────────────────────────────
+      - name: "Mark: clipping"
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status clipping --progress 55
 
-          with open("workspace/clips/viral_moments.json", "w") as f:
-              json.dump({"clips": clips}, f, indent=2)
-
-          print(f"✅ Found {len(clips)} deduplicated viral moments across entire video.")
-          PYTHON_SCRIPT
-
-      - name: Update job status → clipping
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      - name: Prepare vertical clips
         run: |
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "clipping", "progress": 50}'
+          set -euo pipefail
+          echo "prepare_clips" > workspace/.current_step
+          python3 pipeline/prepare_clips.py \
+            --source workspace/source/source.mp4 \
+            --moments workspace/clips/viral_moments.json \
+            --captions workspace/audio/full_captions.json \
+            --silences workspace/audio/silences.txt \
+            --outdir workspace/clips
 
-      # ─────────────────────────────────────────────────────────────
-      # 6. FFmpeg — Split Video into Clips + Python SRT slicing
-      # ─────────────────────────────────────────────────────────────
-      - name: Split video into clips
+      # ─────────────────────────────────────────────────────────────────────
+      # 8. Render captions (parallel; failures are reported, never hidden)
+      # ─────────────────────────────────────────────────────────────────────
+      - name: "Mark: captioning"
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status captioning --progress 70
+
+      - name: Render captions
         run: |
-          echo "✂️ Splitting video into clips (with silence-snapped boundaries)..."
+          set -euo pipefail
+          echo "render_captions" > workspace/.current_step
+          python3 pipeline/render_clips.py \
+            --clipsdir workspace/clips \
+            --outdir workspace/captioned \
+            --remotion-dir remotion-captions \
+            --style "${{ inputs.caption_style }}" \
+            --platform tiktok \
+            --concurrency 2 \
+            --report workspace/render_report.json
 
-          python3 << 'PYTHON'
-          import json, subprocess, re
-
-          with open("workspace/clips/viral_moments.json") as f:
-              data = json.loads(f.read())
-
-          moments = data.get("clips", data) if isinstance(data, dict) else data
-
-          # Load full Caption[] array
-          with open("workspace/audio/full_captions.json") as f:
-              full_captions = json.load(f)
-
-          # ── Load silence gaps (Tier 1.4) ──
-          silences = []
-          try:
-              with open('workspace/audio/silences.txt') as sf:
-                  current_start = None
-                  for line in sf:
-                      s_match = re.search(r'silence_start:\s*(\d+\.?\d*)', line)
-                      if s_match:
-                          current_start = float(s_match.group(1))
-                      e_match = re.search(r'silence_end:\s*(\d+\.?\d*)', line)
-                      if e_match and current_start is not None:
-                          silences.append((current_start, float(e_match.group(1))))
-                          current_start = None
-              print(f"  🔇 Loaded {len(silences)} silence gaps for boundary snapping")
-          except FileNotFoundError:
-              print("  ⚠️ silences.txt not found — skipping silence snapping")
-
-          def snap_to_silence(timestamp, direction='nearest', max_shift=3.0):
-              """Snap a timestamp to the nearest silence gap within max_shift seconds."""
-              if not silences:
-                  return timestamp
-              best = timestamp
-              best_dist = float('inf')
-              for s_start, s_end in silences:
-                  midpoint = (s_start + s_end) / 2
-                  dist = abs(midpoint - timestamp)
-                  if dist < best_dist and dist <= max_shift:
-                      best_dist = dist
-                      best = midpoint
-              return best
-
-          def filter_captions(captions, start_sec, end_sec):
-              """Filter captions to a time window and re-zero timestamps to clip start."""
-              start_ms = int(start_sec * 1000)
-              end_ms   = int(end_sec   * 1000)
-              result = []
-              for c in captions:
-                  if c['startMs'] >= (start_ms - 500) and c['startMs'] < end_ms:
-                      result.append({
-                          'text': c['text'],
-                          'startMs': c['startMs'] - start_ms,
-                          'endMs':   min(c['endMs'] - start_ms, end_ms - start_ms),
-                          'timestampMs': None,
-                          'confidence': None
-                      })
-              return result
-
-          for i, moment in enumerate(moments):
-              start = float(moment["start_time"])
-              end = float(moment["end_time"])
-
-              # Snap boundaries to nearest silence gap (up to 3s shift)
-              original_start, original_end = start, end
-              start = snap_to_silence(start, max_shift=3.0)
-              end = snap_to_silence(end, max_shift=3.0)
-
-              # Safety: ensure minimum 10s clip after snapping
-              duration = end - start
-              if duration < 10:
-                  end = start + max(15, original_end - original_start)
-                  duration = end - start
-
-              if start != original_start or end != original_end:
-                  print(f"  🔇 Clip {i}: snapped {original_start:.1f}→{start:.1f}s, {original_end:.1f}→{end:.1f}s")
-
-              output = f"workspace/clips/clip_{i:03d}.mp4"
-
-              cmd = [
-                  "ffmpeg", "-i", "workspace/source/source.mp4",
-                  "-ss", str(start), "-t", str(duration),
-                  "-c:v", "libx264", "-preset", "fast",
-                  "-c:a", "aac", "-b:a", "128k",
-                  "-movflags", "+faststart",
-                  output, "-y", "-loglevel", "warning"
-              ]
-
-              subprocess.run(cmd, check=True)
-              print(f"  ✅ Clip {i}: {start:.1f}s → {end:.1f}s ({duration:.1f}s)")
-
-              # Update moment metadata with snapped times
-              moment['start_time'] = start
-              moment['end_time'] = end
-
-              # Filter Caption[] for this clip window and write .captions.json
-              clip_captions = filter_captions(full_captions, start, end)
-              if clip_captions:
-                  with open(f"workspace/clips/clip_{i:03d}.captions.json", "w") as f:
-                      json.dump(clip_captions, f)
-                  print(f"    📝 {len(clip_captions)} caption words written")
-              else:
-                  print(f"    ⚠️ No captions found for clip_{i:03d} ({start:.1f}s–{end:.1f}s)")
-
-          # Save moment metadata for later Supabase insert
-          with open("workspace/clips/moments_metadata.json", "w") as f:
-              json.dump(moments, f, indent=2)
-
-          print(f"✅ Split into {len(moments)} clips")
-          PYTHON
-
-      - name: Update job status → captioning
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "captioning", "progress": 65}'
-
-      # ─────────────────────────────────────────────────────────────
-      # 7. Remotion — Render Animated Captions
-      # ─────────────────────────────────────────────────────────────
-      - name: Render captioned clips
-        working-directory: remotion-captions
-        run: |
-          echo "🎬 Rendering animated captions with Remotion..."
-
-          STYLE="${{ inputs.caption_style }}"
-
-          # Read the adaptive silence threshold from the detection step
-          SILENCE_THRESH=$(cat ../workspace/audio/silence_threshold.txt 2>/dev/null || echo "-35.0")
-
-          for clip in ../workspace/clips/clip_*.mp4; do
-            BASENAME=$(basename "$clip" .mp4)
-            CAPTIONS_FILE="../workspace/clips/${BASENAME}.captions.json"
-            OUTPUT="../workspace/captioned/${BASENAME}_captioned.mp4"
-
-            # Check if captions JSON exists
-            if [ ! -f "$CAPTIONS_FILE" ]; then
-              echo "  ⚠️ No captions for $BASENAME — copying raw clip"
-              cp "$clip" "$OUTPUT"
-              continue
-            fi
-
-            # Get the true duration of this clip (seconds) so Remotion renders
-            # exactly the right number of frames instead of the hardcoded 10 s.
-            CLIP_DURATION=$(ffprobe -v quiet -show_entries format=duration \
-              -of csv=p=0 "$clip")
-            DURATION_FRAMES=$(python3 -c \
-              "import math; print(max(1, math.ceil(${CLIP_DURATION} * 30)))")
-
-            # ── Per-clip silence trim detection (silence-detection.md + videos.md) ──
-            # Detect leading/trailing silence in THIS clip using the adaptive threshold.
-            # Remotion's <Video trimBefore/trimAfter> will skip these silent frames.
-            TRIM_DATA=$(ffmpeg -i "$clip" \
-              -af "silencedetect=noise=${SILENCE_THRESH}dB:d=0.2" \
-              -f null - 2>&1 | python3 -c "
-            import sys, re
-            lines = sys.stdin.read()
-            clip_dur = float('${CLIP_DURATION}')
-            silences = []
-            starts = re.findall(r'silence_start:\s*([\d.]+)', lines)
-            ends = re.findall(r'silence_end:\s*([\d.]+)', lines)
-            for s, e in zip(starts, ends):
-                silences.append((float(s), float(e)))
-            # Leading silence: first gap that starts at or near 0
-            trim_start = 0.0
-            if silences and silences[0][0] < 0.1:
-                trim_start = min(silences[0][1], 2.0)  # Cap at 2s
-            # Trailing silence: last gap that ends at or near clip end
-            trim_end = 0.0
-            if silences and abs(silences[-1][1] - clip_dur) < 0.3:
-                trail_dur = silences[-1][1] - silences[-1][0]
-                trim_end = min(trail_dur, 2.0)  # Cap at 2s
-            print(f'{trim_start:.3f},{trim_end:.3f}')
-            " 2>/dev/null || echo "0.000,0.000")
-
-            TRIM_START=$(echo "$TRIM_DATA" | cut -d',' -f1)
-            TRIM_END=$(echo "$TRIM_DATA" | cut -d',' -f2)
-
-            if [ "$TRIM_START" != "0.000" ] || [ "$TRIM_END" != "0.000" ]; then
-              echo "  ✂️ $BASENAME: trimming ${TRIM_START}s lead / ${TRIM_END}s tail silence"
-            fi
-
-            # Copy video into Remotion's public/ folder so staticFile() works
-            mkdir -p public
-            cp "$clip" "public/${BASENAME}.mp4"
-
-            python3 -c "
-          import json
-          captions = open('../workspace/clips/${BASENAME}.captions.json').read()
-          props = {
-              'videoSrc': '${BASENAME}.mp4',
-              'durationInFrames': ${DURATION_FRAMES},
-              'captionsData': captions,
-              'captionStyle': '$STYLE',
-              'backgroundColor': '#000000',
-              'accentColor': '#39E508',
-              'fontSize': 68,
-              'trimStartSec': float('${TRIM_START}'),
-              'trimEndSec': float('${TRIM_END}')
-          }
-          print(json.dumps(props))
-          " > /tmp/remotion_props.json
-
-            echo "  Rendering $BASENAME (${CLIP_DURATION}s → ${DURATION_FRAMES} frames) with $STYLE style..."
-
-            npx remotion render CaptionedClip "$OUTPUT" \
-              --props="$(cat /tmp/remotion_props.json)" \
-              --codec=h264 \
-              --video-bitrate=8M \
-              --concurrency=2 \
-              --log=error || {
-                echo "  ⚠️ Remotion failed for $BASENAME — copying raw clip"
-                cp "$clip" "$OUTPUT"
-              }
-
-            # Clean up public/ to save disk between renders
-            rm -f "public/${BASENAME}.mp4"
-          done
-
-          echo "✅ Caption rendering complete"
-
-      # ─────────────────────────────────────────────────────────────
-      # 8. Generate Thumbnails
-      # ─────────────────────────────────────────────────────────────
       - name: Generate thumbnails
         run: |
-          echo "🖼️ Generating thumbnails..."
+          set -euo pipefail
+          echo "thumbnails" > workspace/.current_step
+          python3 - <<'PY'
+          import json, subprocess
+          from pathlib import Path
 
-          for clip in workspace/captioned/*_captioned.mp4; do
-            [ -f "$clip" ] || continue
-            BASENAME=$(basename "$clip" _captioned.mp4)
+          clips = sorted(Path("workspace/captioned").glob("*_captioned.mp4"))
+          moments = json.load(open("workspace/clips/viral_moments.json")).get("clips", [])
+          has_magick = subprocess.run(["which", "magick"], capture_output=True).returncode == 0
 
-            # Extract a keyframe near 2 s as thumbnail.
-            # -ss before -i = fast seek (key-frame accuracy, fine for thumbnails).
-            # -frames:v 1 takes exactly one frame.
-            ffmpeg -ss 2 -i "$clip" -frames:v 1 -update 1 -q:v 2 \
-              -vf "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2" \
-              "workspace/thumbnails/${BASENAME}_thumb.jpg" \
-              -y -loglevel warning || true
-          done
+          made = 0
+          for clip in clips:
+              index = int(clip.stem.split("_")[1])
+              raw = subprocess.run(
+                  ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                   "-of", "csv=p=0", str(clip)], capture_output=True, text=True).stdout.strip()
+              duration = float(raw or 3)
+              # 30% in is reliably past any intro and still shows the speaker.
+              at = max(0.5, duration * 0.3)
+              out = Path("workspace/thumbnails") / f"{clip.stem.replace('_captioned', '')}_thumb.jpg"
 
-          echo "✅ Thumbnails generated"
+              subprocess.run([
+                  "ffmpeg", "-ss", f"{at:.2f}", "-i", str(clip), "-frames:v", "1",
+                  "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,"
+                         "crop=1080:1920,gblur=sigma=14,eq=brightness=-0.12",
+                  "-q:v", "3", str(out), "-y", "-loglevel", "error",
+              ], check=False)
 
-      - name: Update job status → uploading
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "uploading", "progress": 80}'
+              title = str(moments[index].get("title", ""))[:70] if index < len(moments) else ""
+              if title and has_magick and out.exists():
+                  text_file = out.with_suffix(".txt")
+                  text_file.write_text(title.replace("\n", " "))
+                  # Wrap long titles so they do not run off the frame.
+                  subprocess.run([
+                      "magick", str(out),
+                      "-gravity", "center",
+                      "-font", "DejaVu-Sans-Bold", "-pointsize", "76",
+                      "-stroke", "black", "-strokewidth", "6", "-fill", "white",
+                      "-size", "900x", "-annotate", "+0+0", f"@{text_file}",
+                      str(out),
+                  ], check=False)
+                  text_file.unlink(missing_ok=True)
+              made += 1
 
-      # ─────────────────────────────────────────────────────────────
-      # 9. Upload to Google Drive via rclone
-      # ─────────────────────────────────────────────────────────────
-      - name: Setup rclone config
+          print(f"THUMBNAILS_OK count={made}")
+          if made == 0:
+              raise SystemExit("FATAL: no thumbnails generated")
+          PY
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 9. Upload
+      # ─────────────────────────────────────────────────────────────────────
+      - name: "Mark: uploading"
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status uploading --progress 88
+
+      - name: Configure rclone
         env:
           RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
         run: |
-          echo "🔧 Setting up rclone..."
+          set -euo pipefail
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
-          echo "✅ rclone configured"
+          rclone listremotes
 
       - name: Upload to Google Drive
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          JOB_ID: ${{ inputs.job_id }}
         run: |
-          echo "☁️ Uploading to Google Drive..."
+          set -euo pipefail
+          echo "upload" > workspace/.current_step
+          REMOTE=$(rclone listremotes | head -1 | tr -d ':')
+          BASE="ClipMint/${JOB_ID}"
 
-          JOB_ID="${{ inputs.job_id }}"
-          REMOTE_NAME=$(rclone listremotes | head -1 | tr -d ':')
-
-          # Upload captioned clips to Drive folder
-          rclone copy workspace/captioned/ \
-            "${REMOTE_NAME}:ClipMint/${JOB_ID}/clips/" \
+          rclone copy workspace/captioned/ "${REMOTE}:${BASE}/clips/" \
             --drive-root-folder-id="$GDRIVE_FOLDER_ID" \
-            -v
-
-          # Upload thumbnails
-          rclone copy workspace/thumbnails/ \
-            "${REMOTE_NAME}:ClipMint/${JOB_ID}/thumbnails/" \
+            --transfers 4 --checkers 8 --stats-one-line
+          rclone copy workspace/thumbnails/ "${REMOTE}:${BASE}/thumbnails/" \
             --drive-root-folder-id="$GDRIVE_FOLDER_ID" \
-            -v
+            --transfers 4 --checkers 8 --stats-one-line
 
-          # Build upload manifest (list uploaded files with Drive links)
-          python3 << PYEOF
-          import json, subprocess, os
+          python3 - <<'PY'
+          import json, os, subprocess
 
-          job_id = "$JOB_ID"
-          remote = "${REMOTE_NAME}"
+          job_id = os.environ["JOB_ID"]
           folder_id = os.environ["GDRIVE_FOLDER_ID"]
+          remote = subprocess.run(["rclone", "listremotes"], capture_output=True,
+                                  text=True).stdout.split(":")[0].strip()
+          base = f"ClipMint/{job_id}"
 
-          # List uploaded clips
-          result = subprocess.run(
-              ["rclone", "lsjson", f"{remote}:ClipMint/{job_id}/clips/",
-               f"--drive-root-folder-id={folder_id}"],
-              capture_output=True, text=True
-          )
+          def listing(path):
+              resp = subprocess.run(
+                  ["rclone", "lsjson", f"{remote}:{path}",
+                   f"--drive-root-folder-id={folder_id}"],
+                  capture_output=True, text=True)
+              if resp.returncode != 0:
+                  return []
+              try:
+                  return json.loads(resp.stdout or "[]")
+              except json.JSONDecodeError:
+                  return []
 
           clips = []
-          if result.returncode == 0:
-              files = json.loads(result.stdout)
-              for f in files:
-                  if f["Name"].endswith(".mp4"):
-                      file_id = f.get("ID", "")
-                      # Make clip publicly accessible via rclone link
-                      if file_id:
-                          subprocess.run(
-                              ["rclone", "link",
-                               f"{remote}:ClipMint/{job_id}/clips/{f['Name']}",
-                               f"--drive-root-folder-id={folder_id}"],
-                              capture_output=True, text=True
-                          )
-                      clips.append({
-                          "name": f["Name"],
-                          "url": f"https://drive.google.com/file/d/{file_id}/view" if file_id else "",
-                          "id": file_id
-                      })
+          for f in listing(f"{base}/clips"):
+              if f["Name"].endswith(".mp4"):
+                  fid = f.get("ID", "")
+                  clips.append({
+                      "name": f["Name"],
+                      "id": fid,
+                      "url": f"https://drive.google.com/file/d/{fid}/view" if fid else "",
+                  })
 
-          # List uploaded thumbnails and make them publicly accessible
-          thumb_result = subprocess.run(
-              ["rclone", "lsjson", f"{remote}:ClipMint/{job_id}/thumbnails/",
-               f"--drive-root-folder-id={folder_id}"],
-              capture_output=True, text=True
-          )
-          thumb_map = {}  # basename -> Drive URL
-          if thumb_result.returncode == 0:
-              for tf in json.loads(thumb_result.stdout):
-                  tid = tf.get("ID", "")
-                  if tid:
-                      # Make thumbnail publicly accessible via rclone link
-                      link_result = subprocess.run(
-                          ["rclone", "link",
-                           f"{remote}:ClipMint/{job_id}/thumbnails/{tf['Name']}",
-                           f"--drive-root-folder-id={folder_id}"],
-                          capture_output=True, text=True
-                      )
-                      # thumb file is e.g. clip_000_thumb.jpg -> base = clip_000
-                      base = tf["Name"].replace("_thumb.jpg", "").replace("_thumb.png", "")
-                      # Use the thumbnail API for a direct-viewable image
-                      thumb_map[base] = f"https://drive.google.com/thumbnail?id={tid}&sz=w540"
+          thumbs = {}
+          for f in listing(f"{base}/thumbnails"):
+              fid = f.get("ID", "")
+              if fid:
+                  thumbs[f["Name"].replace("_thumb.jpg", "")] = (
+                      f"https://drive.google.com/thumbnail?id={fid}&sz=w540"
+                  )
 
-          # Attach thumbnail_url to each clip entry
           for c in clips:
-              base = c["name"].replace("_captioned.mp4", "")
-              c["thumbnail_url"] = thumb_map.get(base, "")
+              c["thumbnail_url"] = thumbs.get(c["name"].replace("_captioned.mp4", ""), "")
 
-          manifest = {"job_id": job_id, "folder_id": folder_id, "clips": clips}
-          with open("workspace/upload_manifest.json", "w") as f:
-              json.dump(manifest, f, indent=2)
+          json.dump({"job_id": job_id, "folder_id": folder_id, "clips": clips},
+                    open("workspace/output/upload_manifest.json", "w"), indent=2)
+          print(f"UPLOAD_MANIFEST_OK clips={len(clips)} thumbs={len(thumbs)}")
+          if not clips:
+              raise SystemExit("FATAL: nothing was uploaded")
+          PY
 
-          print(f"✅ Uploaded {len(clips)} clips to Google Drive")
-          PYEOF
-
-      # ─────────────────────────────────────────────────────────────
-      # 10. Update Supabase Job Status + Insert Clip Records
-      # ─────────────────────────────────────────────────────────────
-      - name: Update job status → done + insert clips
+      # ─────────────────────────────────────────────────────────────────────
+      # 10. Record results
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Save results to Supabase
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOB_ID: ${{ inputs.job_id }}
         run: |
-          echo "📊 Updating job status in Supabase..."
-
-          python3 << 'PYTHON'
-          import json, requests, os
-
-          supabase_url = os.environ["SUPABASE_URL"]
-          service_key = os.environ["SUPABASE_SERVICE_KEY"]
-          job_id = "${{ inputs.job_id }}"
-
-          headers = {
-              "apikey": service_key,
-              "Authorization": f"Bearer {service_key}",
-              "Content-Type": "application/json",
-              "Prefer": "return=minimal"
-          }
-
-          # Load manifests
-          with open("workspace/upload_manifest.json") as f:
-              manifest = json.load(f)
-
-          moments = []
-          try:
-              with open("workspace/clips/moments_metadata.json") as f:
-                  moments = json.load(f)
-          except:
-              pass
-
-          clips = manifest.get("clips", [])
-          clips_count = len(clips)
-
-          # Get user_id from the job
-          job_resp = requests.get(
-              f"{supabase_url}/rest/v1/jobs?id=eq.{job_id}&select=user_id",
-              headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"}
-          )
-          jobs = job_resp.json()
-          user_id = jobs[0]["user_id"] if jobs else None
-
-          if not user_id:
-              print("❌ Could not find job user_id")
-              exit(1)
-
-          # Update job status to done
+          set -euo pipefail
+          echo "save_results" > workspace/.current_step
+          python3 - <<'PY'
+          import json, os, sys
           from datetime import datetime, timezone
-          now = datetime.now(timezone.utc).isoformat()
 
-          requests.patch(
-              f"{supabase_url}/rest/v1/jobs?id=eq.{job_id}",
-              headers=headers,
-              json={
-                  "status": "done",
-                  "progress": 100,
-                  "clips_count": clips_count,
-                  "drive_folder_id": manifest.get("folder_id", ""),
-                  "completed_at": now
-              }
-          )
-          print(f"✅ Job updated: status=done, clips_count={clips_count}")
+          sys.path.insert(0, "pipeline")
+          from db import Supabase
 
-          # Insert clip records with user_id
-          for i, clip in enumerate(clips):
-              moment = moments[i] if i < len(moments) else {}
+          job_id = os.environ["JOB_ID"]
+          db = Supabase()
 
-              clip_data = {
+          manifest = json.load(open("workspace/output/upload_manifest.json"))
+          prepared = {c["file"]: c for c in json.load(open("workspace/clips/clips_manifest.json"))}
+          moments = json.load(open("workspace/clips/viral_moments.json")).get("clips", [])
+          render = json.load(open("workspace/render_report.json"))
+          render_by_index = {r["index"]: r for r in render["results"]}
+
+          user_id = db.get_job(job_id)["user_id"]
+          rows, failed = [], []
+
+          for index, clip in enumerate(manifest["clips"]):
+              info = prepared.get(f"clip_{index:03d}.mp4", {})
+              moment = moments[index] if index < len(moments) else {}
+              rendered = render_by_index.get(index, {})
+              captured = bool(rendered.get("ok"))
+
+              rows.append({
                   "job_id": job_id,
                   "user_id": user_id,
-                  "clip_index": i,
+                  "clip_index": index,
                   "filename": clip["name"],
-                  "drive_file_id": clip.get("id", ""),
-                  "drive_url": clip.get("url", ""),
-                  "title": moment.get("title", f"Clip {i+1}"),
+                  "duration_seconds": info.get("duration"),
+                  "start_time": float(moment.get("start_time", 0) or 0),
+                  "end_time": float(moment.get("end_time", 0) or 0),
+                  "title": moment.get("title", f"Clip {index + 1}"),
                   "description": moment.get("description", ""),
                   "hashtags": moment.get("hashtags", []),
                   "hook_caption": moment.get("hook", ""),
-                  "viral_score": int(float(moment.get("viral_score", 50))),
-                  "start_time": float(moment.get("start_time", 0)),
-                  "end_time": float(moment.get("end_time", 0)),
+                  "viral_score": int(float(moment.get("viral_score", 50) or 50)),
+                  "drive_file_id": clip.get("id", ""),
+                  "drive_url": clip.get("url", ""),
                   "thumbnail_url": clip.get("thumbnail_url", ""),
-                  "status": "ready"
-              }
+                  # A clip whose captions failed to render is marked failed rather
+                  # than quietly delivered without captions.
+                  "status": "ready" if captured else "failed",
+              })
+              if not captured:
+                  failed.append(index)
 
-              resp = requests.post(
-                  f"{supabase_url}/rest/v1/clips",
-                  headers=headers,
-                  json=clip_data
-              )
-              if resp.status_code in [200, 201]:
-                  print(f"  ✅ Clip {i}: {clip['name']}")
-              else:
-                  print(f"  ⚠️ Clip {i} insert failed: {resp.status_code} {resp.text}")
+          inserted = db.insert_clips(job_id, rows)
 
-          print(f"✅ Inserted {clips_count} clip records into Supabase")
-          PYTHON
+          db.update_job(
+              job_id,
+              status="done",
+              progress=100,
+              clips_count=len(rows),
+              drive_folder_id=manifest.get("folder_id", ""),
+              completed_at=datetime.now(timezone.utc).isoformat(),
+              error_message=(
+                  f"{len(failed)} of {len(rows)} clips could not be captioned "
+                  f"(clip indexes {failed})."
+                  if failed else None
+              ),
+          )
+          print(f"SAVE_OK clips={inserted} caption_failures={len(failed)}")
+          if failed:
+              print("WARNING: some clips were delivered without captions and marked failed")
+          PY
 
-      # ─────────────────────────────────────────────────────────────
-      # 11. Error Handling — Mark Failed on Error
-      # ─────────────────────────────────────────────────────────────
-      - name: Mark job as failed on error
+      # ─────────────────────────────────────────────────────────────────────
+      # 11. Notifications
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Notify completion
+        if: always()
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          JOB_STATUS: ${{ job.status }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          set -uo pipefail
+          case "$JOB_STATUS" in
+            success)   export EMAIL_STATUS="done";      export ERROR_MSG="" ;;
+            cancelled) export EMAIL_STATUS="cancelled"; export ERROR_MSG="Processing was cancelled." ;;
+            *)         export EMAIL_STATUS="failed";    export ERROR_MSG="Video processing failed. Please try again." ;;
+          esac
+          export CURRENT_STEP="$(cat workspace/.current_step 2>/dev/null || echo unknown)"
+
+          if [ -n "${DASHBOARD_URL:-}" ] && [ -n "${WEBHOOK_SECRET:-}" ]; then
+            python3 - <<'PY'
+          import json, os, urllib.request
+          payload = json.dumps({
+              "job_id": os.environ["JOB_ID"],
+              "status": os.environ["EMAIL_STATUS"],
+              "error_message": os.environ.get("ERROR_MSG", ""),
+              "webhook_secret": os.environ["WEBHOOK_SECRET"],
+          }).encode()
+          req = urllib.request.Request(
+              os.environ["DASHBOARD_URL"].rstrip("/") + "/api/webhooks/job-status",
+              data=payload, headers={"Content-Type": "application/json"})
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  print("webhook:", resp.status, resp.read()[:200].decode(errors="ignore"))
+          except Exception as exc:
+              print("webhook failed (non-critical):", exc)
+          PY
+          fi
+
+          if [ -n "${DISCORD_WEBHOOK:-}" ]; then
+            python3 - <<'PY'
+          import json, os, urllib.request
+          status = os.environ["JOB_STATUS"]
+          if status == "success":
+              msg = f"✅ ClipMint job `{os.environ['JOB_ID']}` completed."
+          elif status == "cancelled":
+              msg = f"⚠️ ClipMint job `{os.environ['JOB_ID']}` was cancelled."
+          else:
+              msg = (f"❌ ClipMint job `{os.environ['JOB_ID']}` failed at step: "
+                     f"{os.environ.get('CURRENT_STEP', 'unknown')}.")
+          req = urllib.request.Request(
+              os.environ["DISCORD_WEBHOOK"],
+              data=json.dumps({"content": msg}).encode(),
+              headers={"Content-Type": "application/json"})
+          try:
+              urllib.request.urlopen(req, timeout=20)
+          except Exception as exc:
+              print("discord failed (non-critical):", exc)
+          PY
+          fi
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 12. Failure handling
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Record failure
         if: failure()
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOB_ID: ${{ inputs.job_id }}
         run: |
-          echo "❌ Pipeline failed — updating job status..."
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "failed", "error_message": "Video processing failed. Please try again or contact support.", "progress": 0}'
+          set -uo pipefail
+          STEP=$(cat workspace/.current_step 2>/dev/null || echo "unknown")
+          export STEP
 
-      - name: Mark job as failed on cancellation
-        if: cancelled()
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: |
-          echo "⚠️ Pipeline cancelled — updating job status..."
-          curl -s -X PATCH "$SUPABASE_URL/rest/v1/jobs?id=eq.${{ inputs.job_id }}" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"status": "cancelled", "error_message": "Processing was cancelled.", "progress": 0}'
+          # Translate the internal stage name into something the customer can act on.
+          case "$STEP" in
+            download)        export REASON="We could not download that video. Check that the link is public and is a supported source (YouTube, Instagram, Facebook, Vimeo, Google Drive or a direct video file)." ;;
+            extract_audio)   export REASON="The downloaded file had no readable audio track." ;;
+            transcribe)      export REASON="Speech transcription failed for this video." ;;
+            prepare_clips)   export REASON="We could not create clips from this video — it may be too short or contain no speech." ;;
+            render_captions) export REASON="Caption rendering failed. This is usually temporary — please retry." ;;
+            thumbnails)      export REASON="Thumbnail generation failed." ;;
+            upload)          export REASON="We could not upload the finished clips." ;;
+            save_results)    export REASON="We could not save the results." ;;
+            *)               export REASON="Processing failed while running: ${STEP}." ;;
+          esac
 
-      # ─────────────────────────────────────────────────────────────
-      # 12. Send Notifications (Email via Resend + Discord)
-      # ─────────────────────────────────────────────────────────────
-      - name: Send completion notification
-        if: always()
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
-        run: |
-          STATUS="${{ job.status }}"
-          JOB_ID="${{ inputs.job_id }}"
-
-          # ── Email + Discord Notification via our webhook API ──
-          if [ -n "$DASHBOARD_URL" ] && [ -n "$WEBHOOK_SECRET" ]; then
-            if [ "$STATUS" = "success" ]; then
-              EMAIL_STATUS="done"
-              ERROR_MSG=""
-            elif [ "$STATUS" = "cancelled" ]; then
-              EMAIL_STATUS="cancelled"
-              ERROR_MSG="Processing was cancelled."
-            else
-              EMAIL_STATUS="failed"
-              ERROR_MSG="Video processing failed. Please try again or contact support."
-            fi
-
-            echo "📧 Sending notification..."
-            curl -s -X POST "${DASHBOARD_URL}/api/webhooks/job-status" \
-              -H "Content-Type: application/json" \
-              -d "{\"job_id\": \"${JOB_ID}\", \"status\": \"${EMAIL_STATUS}\", \"error_message\": \"${ERROR_MSG}\", \"webhook_secret\": \"${WEBHOOK_SECRET}\"}" \
-              || echo "  ⚠️ Notification failed (non-critical)"
-          fi
-
-          # ── Admin Discord Notification ──
-          if [ "$STATUS" = "success" ]; then
-            EMOJI="✅"
-            MSG="ClipMint job **$JOB_ID** completed successfully!"
-          elif [ "$STATUS" = "cancelled" ]; then
-            EMOJI="⚠️"
-            MSG="ClipMint job **$JOB_ID** was cancelled."
-          else
-            EMOJI="❌"
-            MSG="ClipMint job **$JOB_ID** failed."
-          fi
-
-          if [ -n "$DISCORD_WEBHOOK" ]; then
-            curl -s -X POST "$DISCORD_WEBHOOK" \
-              -H "Content-Type: application/json" \
-              -d "{\"content\": \"$EMOJI $MSG\"}"
-          fi
-
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, "pipeline")
+          from db import Supabase
+          try:
+              Supabase().set_error(os.environ["JOB_ID"], os.environ["REASON"])
+              print("recorded failure — step:", os.environ.get("STEP"))
+          except Exception as exc:
+              print("could not record failure:", exc)
+          PY

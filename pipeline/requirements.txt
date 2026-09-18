@@ -1,0 +1,24 @@
+# Runtime dependencies for the ClipMint pipeline tools.
+#
+#   python -m pip install -r pipeline/requirements.txt
+#
+# These are needed ONLY by pipeline/smart_reframe.py (face tracking).
+# pipeline/enhance_audio.py has NO third-party dependencies - it shells out to
+# ffmpeg/ffprobe only, and will run on a bare python3.
+#
+# smart_reframe.py degrades gracefully if these are absent: it prints
+# `REFRAME_WARN opencv_missing` and falls back to a centre crop rather than
+# failing the job. So installing this file is an optimisation, not a hard
+# requirement for the workflow to stay green.
+#
+# opencv-python-headless (not opencv-python) is deliberate: the CI runner has no
+# display, and the headless wheel avoids pulling in GUI/GTK libraries.
+#
+# Tested on Python 3.11 / ubuntu-latest with the combination:
+#   opencv-python-headless==4.11.0  numpy==1.26.4
+# and also verified working with opencv-python-headless==5.0.0 (which resolves
+# numpy>=2). In a fresh virtualenv either resolution is fine; the pins below are
+# deliberately loose so the runner picks up security fixes.
+
+opencv-python-headless>=4.9
+numpy>=1.26
