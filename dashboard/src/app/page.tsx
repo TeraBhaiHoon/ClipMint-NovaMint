@@ -18,52 +18,17 @@ import {
   Star,
   Quote,
 } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { CAPTION_STYLES } from "@/lib/types";
 import { createClient } from "@/lib/supabase";
 import Navbar from "./components/Navbar";
 import Footer from "./components/Footer";
-
-/* ─── Scroll reveal hook ─── */
-function useReveal() {
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          el.classList.add("visible");
-          observer.unobserve(el);
-        }
-      },
-      { threshold: 0.1 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-  return ref;
-}
-
-function RevealSection({
-  children,
-  className = "",
-  delay = 0,
-}: {
-  children: React.ReactNode;
-  className?: string;
-  delay?: number;
-}) {
-  const ref = useReveal();
-  return (
-    <section
-      ref={ref}
-      className={`reveal ${delay ? `reveal-delay-${delay}` : ""} ${className}`}
-    >
-      {children}
-    </section>
-  );
-}
+import ScrollProgress from "./components/ScrollProgress";
+import { HeroGroup, HeroItem } from "./components/HeroMotion";
+import { SectionReveal, springSmooth } from "./components/SectionReveal";
+import StyleMarquee from "./components/StyleMarquee";
+import CountUp from "./components/CountUp";
 
 /* ─── FAQ Component ─── */
 function FAQ() {
@@ -108,14 +73,28 @@ function FAQ() {
         >
           <button
             className="faq-question w-full flex justify-between items-center text-left py-5 px-6 font-semibold"
+            aria-expanded={openIdx === i}
             onClick={() => setOpenIdx(openIdx === i ? null : i)}
           >
             <span>{faq.q}</span>
             <ChevronDown size={18} className="faq-chevron" />
           </button>
-          <div className="faq-answer px-6 pb-5 text-sm text-slate-400 leading-relaxed">
-            {faq.a}
-          </div>
+          <AnimatePresence initial={false}>
+            {openIdx === i && (
+              <motion.div
+                key="answer"
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={springSmooth}
+                className="overflow-hidden"
+              >
+                <div className="px-6 pb-5 text-sm text-slate-400 leading-relaxed">
+                  {faq.a}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       ))}
     </div>
@@ -138,94 +117,101 @@ export default function HomePage() {
   return (
     <main className="overflow-hidden min-h-screen bg-[#030305] text-[#f8fafc]">
       <Navbar />
+      <ScrollProgress />
 
       {/* ═══ 1. HERO ═══ */}
       <section className="relative min-h-screen flex flex-col justify-center items-center text-center px-6 pt-36 pb-24 md:pt-48 md:pb-36 bg-radial-gradient">
-        {/* Badge */}
-        <div className="animate-fade-in-up flex items-center gap-2 px-4 py-1.5 rounded-full bg-mint-500/10 border border-mint-500/20 text-xs font-semibold text-mint-300 mb-8">
-          <Sparkles size={13} className="text-mint-300" />
-          <span>Now in open beta · Free plan, no card</span>
-        </div>
+        <HeroGroup className="flex flex-col items-center w-full">
+          {/* Badge */}
+          <HeroItem className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-mint-500/10 border border-mint-500/20 text-xs font-semibold text-mint-300 mb-8">
+            <Sparkles size={13} className="text-mint-300" />
+            <span>Now in open beta · Free plan, no card</span>
+          </HeroItem>
 
-        <h1 className="animate-fade-in-up text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight leading-[1.05] max-w-4xl mb-6 font-[family-name:var(--font-display)]">
-          Ek video. <span className="text-mint-400">Das clips.</span>
-          <span className="block text-ink-300 text-3xl sm:text-5xl md:text-6xl mt-3 font-bold">
-            Cut, captioned, platform-ready.
-          </span>
-        </h1>
+          <HeroItem>
+            <h1 className="text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight leading-[1.05] max-w-4xl mb-6 font-[family-name:var(--font-display)]">
+              Ek video. <span className="text-mint-400">Das clips.</span>
+              <span className="block text-ink-300 text-3xl sm:text-5xl md:text-6xl mt-3 font-bold">
+                Cut, captioned, platform-ready.
+              </span>
+            </h1>
+          </HeroItem>
 
-        <p className="animate-fade-in-up text-base sm:text-lg md:text-xl text-slate-400 max-w-2xl leading-relaxed mb-10">
-          Upload a podcast, vlog, or lecture — AI detects viral moments,
-          clips them, and adds{" "}
-          <span className="text-ink-50 font-semibold underline decoration-mint-400 decoration-2 underline-offset-4">
-            animated captions that look studio-made
-          </span>
-          . Platform-ready in minutes.
-        </p>
+          <HeroItem>
+            <p className="text-base sm:text-lg md:text-xl text-slate-400 max-w-2xl leading-relaxed mb-10">
+              Upload a podcast, vlog, or lecture — AI detects viral moments,
+              clips them, and adds{" "}
+              <span className="text-ink-50 font-semibold underline decoration-mint-400 decoration-2 underline-offset-4">
+                animated captions that look studio-made
+              </span>
+              . Platform-ready in minutes.
+            </p>
+          </HeroItem>
 
-        <div className="animate-fade-in-up flex flex-col sm:flex-row gap-4 justify-center items-center w-full max-w-lg min-h-[58px]">
-          {loading ? (
-            <>
-              <div className="h-[54px] w-full sm:flex-1 skeleton rounded-xl" />
-              <div className="h-[54px] w-full sm:w-36 skeleton rounded-xl" />
-            </>
-          ) : (
-            <>
-              {user ? (
+          <HeroItem className="flex flex-col sm:flex-row gap-4 justify-center items-center w-full max-w-lg min-h-[58px]">
+            {loading ? (
+              <>
+                <div className="h-[54px] w-full sm:flex-1 skeleton rounded-xl" />
+                <div className="h-[54px] w-full sm:w-36 skeleton rounded-xl" />
+              </>
+            ) : (
+              <>
+                {user ? (
+                  <Link
+                    href="/dashboard"
+                    className="btn-primary py-4 px-8 text-base w-full sm:flex-1 flex items-center justify-center gap-2"
+                  >
+                    <Upload size={18} />
+                    <span>Go to Dashboard</span>
+                  </Link>
+                ) : (
+                  <Link
+                    href="/login"
+                    className="btn-primary py-4 px-8 text-base w-full sm:flex-1 flex items-center justify-center gap-2"
+                  >
+                    <Upload size={18} />
+                    <span>Start Free — No Card Required</span>
+                  </Link>
+                )}
                 <Link
-                  href="/dashboard"
-                  className="btn-primary py-4 px-8 text-base w-full sm:flex-1 flex items-center justify-center gap-2"
+                  href="/features"
+                  className="btn-secondary py-4 px-8 text-base w-full sm:w-36 flex items-center justify-center gap-2 flex-shrink-0"
                 >
-                  <Upload size={18} />
-                  <span>Go to Dashboard</span>
+                  <Play size={18} />
+                  <span>See Features</span>
                 </Link>
-              ) : (
-                <Link
-                  href="/login"
-                  className="btn-primary py-4 px-8 text-base w-full sm:flex-1 flex items-center justify-center gap-2"
-                >
-                  <Upload size={18} />
-                  <span>Start Free — No Card Required</span>
-                </Link>
-              )}
-              <Link
-                href="/features"
-                className="btn-secondary py-4 px-8 text-base w-full sm:w-36 flex items-center justify-center gap-2 flex-shrink-0"
-              >
-                <Play size={18} />
-                <span>See Features</span>
-              </Link>
-            </>
-          )}
-        </div>
+              </>
+            )}
+          </HeroItem>
 
-        {/* Trust badge */}
-        <div className="animate-fade-in-up flex items-center gap-2 mt-12 text-sm text-slate-500">
-          <CheckCircle2 size={16} className="text-[#10b981]" />
-          <span>Free plan. No credit card. Watermark-free on paid.</span>
-        </div>
+          {/* Trust badge */}
+          <HeroItem className="flex items-center gap-2 mt-12 text-sm text-slate-500">
+            <CheckCircle2 size={16} className="text-[#10b981]" />
+            <span>Free plan. No credit card. Watermark-free on paid.</span>
+          </HeroItem>
 
-        {/* Stats */}
-        <div className="animate-fade-in-up grid grid-cols-3 gap-8 md:gap-16 mt-16 max-w-2xl mx-auto border-t border-white/5 pt-8 w-full">
-          {[
-            { value: "9", label: "Caption Styles" },
-            { value: "1080×1920", label: "Face-Tracked Output" },
-            { value: "-14 LUFS", label: "Studio Loudness" },
-          ].map((stat) => (
-            <div key={stat.label} className="flex flex-col items-center">
-              <div className="gradient-text font-black text-2xl sm:text-3xl bg-text-mint-400">
-                {stat.value}
+          {/* Stats */}
+          <HeroItem className="grid grid-cols-3 gap-8 md:gap-16 mt-16 max-w-2xl mx-auto border-t border-white/5 pt-8 w-full">
+            {[
+              { value: "9", label: "Caption Styles" },
+              { value: "1080×1920", label: "Face-Tracked Output" },
+              { value: "-14 LUFS", label: "Studio Loudness" },
+            ].map((stat) => (
+              <div key={stat.label} className="flex flex-col items-center">
+                <div className="gradient-text font-black text-2xl sm:text-3xl bg-text-mint-400">
+                  <CountUp value={stat.value} />
+                </div>
+                <div className="text-[11px] sm:text-xs text-slate-500 font-medium uppercase tracking-wider mt-1">
+                  {stat.label}
+                </div>
               </div>
-              <div className="text-[11px] sm:text-xs text-slate-500 font-medium uppercase tracking-wider mt-1">
-                {stat.label}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </HeroItem>
+        </HeroGroup>
       </section>
 
       {/* ═══ 2. SOCIAL PROOF BAR ═══ */}
-      <RevealSection className="py-12 border-y border-white/5 bg-[#08080c]/30 text-center">
+      <SectionReveal className="py-12 border-y border-white/5 bg-[#08080c]/30 text-center">
         <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-6">
           Built for creators on
         </p>
@@ -241,10 +227,10 @@ export default function HomePage() {
             )
           )}
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 3. HOW IT WORKS ═══ */}
-      <RevealSection className="py-24 px-6 max-w-6xl mx-auto w-full">
+      <SectionReveal className="py-24 px-6 max-w-6xl mx-auto w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
           How It <span className="text-mint-400">Works</span>
         </h2>
@@ -296,10 +282,10 @@ export default function HomePage() {
             </div>
           ))}
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 4. FEATURES GRID ═══ */}
-      <RevealSection className="py-24 px-6 bg-gradient-to-b from-transparent via-mint-500/5 to-transparent">
+      <SectionReveal className="py-24 px-6 bg-gradient-to-b from-transparent via-mint-500/5 to-transparent">
         <div className="max-w-6xl mx-auto w-full">
           <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
             Powerful <span className="text-mint-400">Features</span>
@@ -361,10 +347,10 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 5. CAPTION STYLES SHOWCASE ═══ */}
-      <RevealSection className="py-24 px-6 max-w-6xl mx-auto w-full">
+      <SectionReveal className="py-24 px-6 max-w-6xl mx-auto w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
           <span className="text-mint-400">9 Caption Styles</span>
         </h2>
@@ -372,6 +358,8 @@ export default function HomePage() {
           Professional animated captions powered by Remotion — studio-quality,
           not flat text.
         </p>
+
+        <StyleMarquee />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
           {CAPTION_STYLES.map((style) => (
@@ -388,10 +376,10 @@ export default function HomePage() {
             </div>
           ))}
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 6. PRICING ═══ */}
-      <RevealSection className="py-24 px-6 bg-gradient-to-b from-transparent via-mint-500/5 to-transparent">
+      <SectionReveal className="py-24 px-6 bg-gradient-to-b from-transparent via-mint-500/5 to-transparent">
         <div className="max-w-6xl mx-auto w-full">
           <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
             Simple <span className="text-mint-400">Pricing</span>
@@ -513,10 +501,10 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 7. TESTIMONIALS ═══ */}
-      <RevealSection className="py-24 px-6 max-w-6xl mx-auto w-full">
+      <SectionReveal className="py-24 px-6 max-w-6xl mx-auto w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
           What ships in <span className="text-mint-400">every clip</span>
         </h2>
@@ -578,10 +566,10 @@ export default function HomePage() {
             </div>
           ))}
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 8. FAQ ═══ */}
-      <RevealSection className="py-24 px-6 border-t border-white/5 bg-[#08080c]/20 w-full">
+      <SectionReveal className="py-24 px-6 border-t border-white/5 bg-[#08080c]/20 w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
           Frequently Asked <span className="text-mint-400">Questions</span>
         </h2>
@@ -589,10 +577,10 @@ export default function HomePage() {
           Everything you need to know about ClipMint.
         </p>
         <FAQ />
-      </RevealSection>
+      </SectionReveal>
 
       {/* ═══ 9. CTA BANNER ═══ */}
-      <RevealSection className="py-20 px-6 text-center max-w-6xl mx-auto w-full">
+      <SectionReveal className="py-20 px-6 text-center max-w-6xl mx-auto w-full">
         <div className="relative p-10 md:p-16 rounded-3xl bg-ink-850 border border-mint-500/30 shadow-xl overflow-hidden">
           <div className="relative z-10 flex flex-col items-center gap-6">
             <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight">
@@ -622,7 +610,7 @@ export default function HomePage() {
             )}
           </div>
         </div>
-      </RevealSection>
+      </SectionReveal>
 
       <Footer />
     </main>
