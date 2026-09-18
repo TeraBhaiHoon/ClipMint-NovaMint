@@ -306,7 +306,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     <div className={`step-circle ${state}`}>
                                         {state === "completed" ? <Check size={14} /> : i + 1}
                                     </div>
-                                    <span className={`text-[10px] font-semibold mt-1.5 ${state === "active" ? "text-[#8b5cf6]" : state === "completed" ? "text-[#10b981]" : "text-[#64748b]"}`}>
+                                    <span className={`text-[10px] font-semibold mt-1.5 ${state === "active" ? "text-mint-400" : state === "completed" ? "text-[#10b981]" : "text-[#64748b]"}`}>
                                         {step.label}
                                     </span>
                                 </div>
@@ -382,7 +382,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
 
             {/* ─── Clips Gallery ─── */}
             <h2 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
-                <Film size={18} className="text-[#8b5cf6]" />
+                <Film size={18} className="text-mint-400" />
                 {clips.length} Clip{clips.length !== 1 ? "s" : ""} Generated
             </h2>
 
@@ -401,7 +401,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                         return (
                         <div 
                             key={clip.id} 
-                            className="glass-card animate-fade-in-up !p-0 overflow-hidden hover:border-[#8b5cf6]/35 shadow-lg flex flex-col" 
+                            className="glass-card animate-fade-in-up !p-0 overflow-hidden hover:border-mint-500/35 shadow-lg flex flex-col" 
                             style={{ animationDelay: `${i * 0.06}s` }}
                         >
                             {/* Preview area */}
@@ -470,7 +470,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     {clip.hashtags && clip.hashtags.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5 mb-3.5">
                                             {clip.hashtags.slice(0, 4).map((tag) => (
-                                                <span key={tag} className="text-[9px] px-2 py-0.5 rounded bg-[#8b5cf6]/10 text-[#c084fc] font-semibold border border-[#8b5cf6]/10">{tag}</span>
+                                                <span key={tag} className="text-[9px] px-2 py-0.5 rounded bg-mint-500/10 text-mint-300 font-semibold border border-mint-500/10">{tag}</span>
                                             ))}
                                         </div>
                                     )}

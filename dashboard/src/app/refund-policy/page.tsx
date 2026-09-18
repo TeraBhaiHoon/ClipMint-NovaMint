@@ -11,7 +11,7 @@ export default function RefundPolicyPage() {
             <Navbar />
 
             {/* Ambient Background Glow */}
-            <div className="absolute w-[400px] h-[400px] rounded-full bg-[#8b5cf6]/5 blur-[120px] pointer-events-none top-20 left-1/4" />
+            <div className="absolute w-[400px] h-[400px] rounded-full bg-mint-500/5 blur-[120px] pointer-events-none top-20 left-1/4" />
             <div className="absolute w-[300px] h-[300px] rounded-full bg-[#ec4899]/3 blur-[100px] pointer-events-none top-80 right-1/4" />
 
             <div className="max-w-4xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
@@ -30,7 +30,7 @@ export default function RefundPolicyPage() {
                         <span>7-Day Full Protection Window</span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
-                        Refund <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Policy</span>
+                        Refund <span className="gradient-text bg-text-mint-400">Policy</span>
                     </h1>
                     <p className="text-slate-400 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />
@@ -39,7 +39,7 @@ export default function RefundPolicyPage() {
                 </div>
 
                 {/* Main Legal Content Container */}
-                <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-[#8b5cf6]/3">
+                <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-mint-500/3">
                     <section className="border-b border-white/5 pb-6">
                         <p className="text-slate-300 leading-relaxed">
                             At NovaMint Networks, customer satisfaction is our top priority. We want you to be
@@ -58,15 +58,15 @@ export default function RefundPolicyPage() {
                         </p>
                         <ul className="list-none flex flex-col gap-3.5 pl-2 mt-2">
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>The refund request must be made within 7 calendar days of your initial payment.</span>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>The request should state clearly why the AI clipping or captions did not meet your creative expectations.</span>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>The account should have genuine usage (at least one video processed) rather than single sign-up with immediate cancellation.</span>
                             </li>
                         </ul>
@@ -80,8 +80,8 @@ export default function RefundPolicyPage() {
                             To initiate a refund request, simply email our billing support team:
                         </p>
                         <div className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-white/5 text-sm text-slate-300 max-w-md">
-                            <Mail size={16} className="text-[#8b5cf6] flex-shrink-0" />
-                            <a href="mailto:ClipMint.Billing@gmail.com" className="hover:text-white transition-colors font-bold text-[#c084fc]">
+                            <Mail size={16} className="text-mint-400 flex-shrink-0" />
+                            <a href="mailto:ClipMint.Billing@gmail.com" className="hover:text-white transition-colors font-bold text-mint-300">
                                 ClipMint.Billing@gmail.com
                             </a>
                         </div>

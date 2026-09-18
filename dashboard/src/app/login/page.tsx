@@ -97,7 +97,7 @@ export default function LoginPage() {
     return (
         <div className="min-h-screen bg-[#030305] text-[#f8fafc] flex flex-col justify-center items-center p-6 relative">
             {/* Ambient Background Glow */}
-            <div className="absolute w-[350px] h-[350px] rounded-full bg-[#8b5cf6]/10 blur-[100px] pointer-events-none -top-12" />
+            <div className="absolute w-[350px] h-[350px] rounded-full bg-mint-500/10 blur-[100px] pointer-events-none -top-12" />
             <div className="absolute w-[350px] h-[350px] rounded-full bg-[#06b6d4]/5 blur-[120px] pointer-events-none -bottom-12" />
 
             <Link href="/" className="absolute top-8 left-8 flex items-center gap-2 text-sm text-slate-400 no-underline hover:text-slate-200 transition-colors">
@@ -111,7 +111,7 @@ export default function LoginPage() {
                     <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 shadow-md">
                         <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
                     </div>
-                    <span className="gradient-text font-black text-2xl tracking-tight bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">
+                    <span className="gradient-text font-black text-2xl tracking-tight bg-text-mint-400">
                         ClipMint
                     </span>
                 </div>
@@ -195,7 +195,7 @@ export default function LoginPage() {
                                     <button
                                         type="button"
                                         onClick={switchToForgotPassword}
-                                        className="bg-transparent border-none text-[#c084fc] hover:text-[#8b5cf6] cursor-pointer text-xs font-semibold transition-colors"
+                                        className="bg-transparent border-none text-mint-300 hover:text-mint-400 cursor-pointer text-xs font-semibold transition-colors"
                                     >
                                         Forgot?
                                     </button>
@@ -234,7 +234,7 @@ export default function LoginPage() {
                     <button
                         type="submit"
                         disabled={loading}
-                        className="btn-primary w-full py-3.5 mt-2 flex items-center justify-center gap-2 text-sm font-semibold shadow-lg shadow-[#8b5cf6]/20 transition-all duration-300"
+                        className="btn-primary w-full py-3.5 mt-2 flex items-center justify-center gap-2 text-sm font-semibold shadow-lg shadow-mint-500/20 transition-all duration-300"
                     >
                         {loading ? (
                             <Loader2 size={16} className="animate-spin" />
@@ -266,7 +266,7 @@ export default function LoginPage() {
                     {isForgotPassword ? (
                         <button
                             onClick={switchToLogin}
-                            className="bg-transparent border-none text-[#c084fc] hover:text-[#8b5cf6] cursor-pointer font-semibold text-sm inline-flex items-center gap-1.5 transition-colors"
+                            className="bg-transparent border-none text-mint-300 hover:text-mint-400 cursor-pointer font-semibold text-sm inline-flex items-center gap-1.5 transition-colors"
                         >
                             <ArrowLeft size={13} /> Back to Sign In
                         </button>
@@ -279,7 +279,7 @@ export default function LoginPage() {
                                     setError(null);
                                     setMessage(null);
                                 }}
-                                className="bg-transparent border-none text-[#c084fc] hover:text-[#8b5cf6] cursor-pointer font-bold text-sm transition-colors ml-1"
+                                className="bg-transparent border-none text-mint-300 hover:text-mint-400 cursor-pointer font-bold text-sm transition-colors ml-1"
                             >
                                 {isSignUp ? "Sign In" : "Sign Up"}
                             </button>

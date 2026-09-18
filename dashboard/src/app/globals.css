@@ -7,38 +7,55 @@
   --color-foreground: var(--text-primary);
 }
 
-/* ─── Premium Design Tokens (V2) ─── */
+/* ─── ClipMint Identity Tokens (ink / mint / marigold) ───
+   Mint is the accent because it is literally the color the render engine
+   paints captions with — the product's own frames are the brand. */
 :root {
-    --bg-primary: #030305;
-    --bg-secondary: #08080c;
-    --bg-card: #0d0c12;
-    --bg-card-hover: #12101b;
-    --border-subtle: rgba(255, 255, 255, 0.06);
-    --border-active: #8b5cf6;
-    
-    --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
-    --text-muted: #64748b;
-    
-    --accent-primary: #8b5cf6;      /* Brand Purple */
-    --accent-secondary: #c084fc;    /* Light Purple */
-    --accent-cyan: #06b6d4;         /* Cyan Accent */
-    --accent-pink: #ec4899;         /* Pink Accent */
-    --accent-green: #10b981;        /* Success */
-    --accent-orange: #f59e0b;       /* Warning */
-    --accent-red: #ef4444;          /* Danger */
-    
-    /* Glimmering Gradients */
-    --gradient-hero: linear-gradient(135deg, #8b5cf6 0%, #d946ef 50%, #06b6d4 100%);
-    --gradient-card: linear-gradient(145deg, rgba(139, 92, 246, 0.07) 0%, rgba(236, 72, 153, 0.03) 50%, rgba(6, 182, 212, 0.03) 100%);
-    --gradient-glow: radial-gradient(circle, rgba(139, 92, 246, 0.15) 0%, transparent 75%);
-    
-    /* Glassmorphism Configuration */
-    --glass-bg: rgba(13, 12, 18, 0.6);
-    --glass-border: rgba(255, 255, 255, 0.07);
-    --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+    --bg-primary: #060B07;          /* ink-950 */
+    --bg-secondary: #0C130E;        /* ink-900 */
+    --bg-card: #141C16;             /* ink-850 */
+    --bg-card-hover: #1F2921;       /* ink-800 */
+    --border-subtle: rgba(227, 234, 226, 0.07);
+    --border-active: #39E508;       /* mint-500 */
 
-    /* Typography scale */
+    --text-primary: #F3F7F2;        /* ink-50, never pure white */
+    --text-secondary: #A3B2A5;      /* ink-300 */
+    --text-muted: #5C6E61;          /* ink-500 */
+
+    --accent-primary: #39E508;      /* mint-500 — the render engine accent */
+    --accent-secondary: #ADF368;    /* mint-300 */
+    --accent-cyan: #7BEC2D;         /* retired cyan slot -> mint-400 */
+    --accent-pink: #FFB92B;         /* retired pink slot -> marigold-400 */
+    --accent-green: #2DC204;        /* mint-600 success */
+    --accent-orange: #F5A300;       /* marigold-500 warning */
+    --accent-red: #ef4444;          /* danger, neutral red kept */
+
+    /* Solid surfaces only — glassmorphism and gradient meshes are retired. */
+    --gradient-hero: linear-gradient(0deg, #060B07 0%, #060B07 100%);
+    --gradient-card: linear-gradient(0deg, #141C16 0%, #141C16 100%);
+    --gradient-glow: radial-gradient(circle, rgba(57, 229, 8, 0.10) 0%, transparent 70%);
+
+    /* "Glass" slots re-pointed at solid surfaces (names kept for compatibility). */
+    --glass-bg: #141C16;
+    --glass-border: rgba(227, 234, 226, 0.07);
+    --glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35);
+
+    /* Full ramps + semantics for direct use */
+    --ink-50:#F3F7F2; --ink-100:#E3EAE2; --ink-200:#C7D3C7; --ink-300:#A3B2A5;
+    --ink-400:#7C8D80; --ink-500:#5C6E61; --ink-600:#46574B; --ink-700:#333F36;
+    --ink-800:#1F2921; --ink-850:#141C16; --ink-900:#0C130E; --ink-950:#060B07;
+    --mint-50:#F4FEE9; --mint-100:#E6FDCB; --mint-200:#CDFB9F; --mint-300:#ADF368;
+    --mint-400:#7BEC2D; --mint-500:#39E508; --mint-600:#2DC204; --mint-700:#259D07;
+    --mint-800:#217D0C; --mint-900:#1D6610; --mint-950:#0A3706;
+    --marigold-50:#FFF9EB; --marigold-100:#FFF0C9; --marigold-200:#FFE08F;
+    --marigold-300:#FFCD55; --marigold-400:#FFB92B; --marigold-500:#F5A300;
+    --marigold-600:#CC8300; --marigold-700:#A36600; --marigold-800:#7A4C02;
+    --marigold-900:#5C3906; --marigold-950:#332000;
+    --ring-focus: rgba(57, 229, 8, 0.40);
+    --shadow-rest: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.35);
+    --shadow-lift: 0 12px 32px rgba(0,0,0,.45), 0 0 0 1px rgba(57,229,8,.08);
+    --shadow-accent: 0 8px 32px rgba(57,229,8,.14);
+
     --fs-xs: clamp(11px, 1.2vw, 12px);
     --fs-sm: clamp(13px, 1.4vw, 14px);
     --fs-base: clamp(14px, 1.5vw, 16px);
@@ -66,7 +83,7 @@
 }
 
 body {
-    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--font-body), "Figtree", -apple-system, sans-serif;
     background-color: var(--bg-primary);
     color: var(--text-primary);
     min-height: 100vh;
@@ -76,7 +93,7 @@ body {
 
 /* ─── Headers Typography ─── */
 h1, h2, h3, h4, h5, h6 {
-    font-family: "Outfit", "Inter", sans-serif;
+    font-family: var(--font-display), "Bricolage Grotesque", sans-serif;
     font-weight: 700;
     letter-spacing: -0.02em;
 }
@@ -113,15 +130,7 @@ h1, h2, h3, h4, h5, h6 {
     overflow: hidden;
 }
 
-.glass-card::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 16px;
-    background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, transparent 60%);
-    pointer-events: none;
-    transition: opacity 0.3s ease;
-}
+
 
 .glass-card:hover {
     border-color: rgba(139, 92, 246, 0.3);
@@ -130,12 +139,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* ─── Gradient text ─── */
-.gradient-text {
-    background: var(--gradient-hero);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
+.gradient-text { color: var(--mint-400); }
 
 /* ─── Buttons ─── */
 .btn-primary {
@@ -158,18 +162,9 @@ h1, h2, h3, h4, h5, h6 {
     box-shadow: 0 4px 18px rgba(139, 92, 246, 0.25);
 }
 
-.btn-primary::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(105deg, transparent 40%, rgba(255, 255, 255, 0.2) 45%, rgba(255, 255, 255, 0.05) 55%, transparent 60%);
-    transform: translateX(-100%);
-    transition: transform 0.6s ease;
-}
 
-.btn-primary:hover::after {
-    transform: translateX(100%);
-}
+
+
 
 .btn-primary:hover {
     box-shadow: 0 6px 24px rgba(139, 92, 246, 0.45);
@@ -329,47 +324,13 @@ input[type="range"]::-webkit-slider-thumb:hover {
 }
 
 /* ─── Grid patterns & meshes ─── */
-.bg-grid {
-    background-image:
-        linear-gradient(rgba(139, 92, 246, 0.02) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(139, 92, 246, 0.02) 1px, transparent 1px);
-    background-size: 50px 50px;
-}
 
-.gradient-mesh {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    top: 0;
-    left: 0;
-    z-index: 0;
-    overflow: hidden;
-    pointer-events: none;
-}
 
-.gradient-mesh::before {
-    content: "";
-    position: absolute;
-    top: -30%;
-    left: -20%;
-    width: 70%;
-    height: 70%;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, transparent 70%);
-    animation: float 12s ease-in-out infinite;
-}
 
-.gradient-mesh::after {
-    content: "";
-    position: absolute;
-    bottom: -20%;
-    right: -10%;
-    width: 60%;
-    height: 60%;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(6, 182, 212, 0.07) 0%, transparent 70%);
-    animation: float 15s ease-in-out infinite reverse;
-}
+
+
+
+
 
 /* ─── FAQ Accordion ─── */
 .faq-item {
@@ -438,32 +399,11 @@ input[type="range"]::-webkit-slider-thumb:hover {
     }
 }
 
-@keyframes pulse-glow {
-    0%, 100% {
-        box-shadow: 0 0 16px rgba(139, 92, 246, 0.25);
-    }
-    50% {
-        box-shadow: 0 0 32px rgba(139, 92, 246, 0.45);
-    }
-}
 
-@keyframes float {
-    0%, 100% {
-        transform: translateY(0px) scale(1);
-    }
-    50% {
-        transform: translateY(-8px) scale(1.02);
-    }
-}
 
-@keyframes shimmer {
-    0% {
-        background-position: -200% 0;
-    }
-    100% {
-        background-position: 200% 0;
-    }
-}
+
+
+
 
 @keyframes slideInFromRight {
     from {
@@ -491,13 +431,9 @@ input[type="range"]::-webkit-slider-thumb:hover {
     animation: fadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
-.animate-pulse-glow {
-    animation: pulse-glow 3s ease-in-out infinite;
-}
 
-.animate-float {
-    animation: float 5s ease-in-out infinite;
-}
+
+
 
 .animate-scale-in {
     animation: scaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
@@ -505,9 +441,8 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 /* ─── Skeleton Loading ─── */
 .skeleton {
-    background: linear-gradient(90deg, rgba(255, 255, 255, 0.02) 25%, rgba(255, 255, 255, 0.06) 50%, rgba(255, 255, 255, 0.02) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s ease-in-out infinite;
+    background: var(--ink-800);
+    animation: opacity-pulse 1.6s ease-in-out infinite;
     border-radius: 8px;
 }
 
@@ -758,8 +693,7 @@ input[type="range"]::-webkit-slider-thumb:hover {
 
 .step-circle.active {
     background: var(--accent-primary);
-    color: white;
-    animation: pulse-glow 2.5s infinite;
+    color: var(--ink-950);
 }
 
 .step-circle.pending {
@@ -988,3 +922,37 @@ input[type="range"]::-webkit-slider-thumb:hover {
         transform: rotate(360deg);
     }
 }
+
+/* ─── Identity @theme (Tailwind v4) ─── */
+@theme inline {
+  --color-ink-50: var(--ink-50);   --color-ink-100: var(--ink-100);
+  --color-ink-200: var(--ink-200); --color-ink-300: var(--ink-300);
+  --color-ink-400: var(--ink-400); --color-ink-500: var(--ink-500);
+  --color-ink-600: var(--ink-600); --color-ink-700: var(--ink-700);
+  --color-ink-800: var(--ink-800); --color-ink-850: var(--ink-850);
+  --color-ink-900: var(--ink-900); --color-ink-950: var(--ink-950);
+  --color-mint-50: var(--mint-50); --color-mint-100: var(--mint-100);
+  --color-mint-200: var(--mint-200); --color-mint-300: var(--mint-300);
+  --color-mint-400: var(--mint-400); --color-mint-500: var(--mint-500);
+  --color-mint-600: var(--mint-600); --color-mint-700: var(--mint-700);
+  --color-mint-800: var(--mint-800); --color-mint-900: var(--mint-900);
+  --color-mint-950: var(--mint-950);
+  --color-marigold-100: var(--marigold-100); --color-marigold-300: var(--marigold-300);
+  --color-marigold-400: var(--marigold-400); --color-marigold-500: var(--marigold-500);
+  --font-display: var(--font-display), "Bricolage Grotesque", sans-serif;
+  --font-body: var(--font-body), "Figtree", sans-serif;
+  --font-mono: var(--font-mono), "Fira Code", monospace;
+}
+
+/* Primary CTA rule: mint bg + ink-950 text — white on mint fails contrast. */
+.btn-primary, .btn-primary:not(:disabled) {
+    color: var(--ink-950) !important;
+}
+.btn-primary:hover { filter: brightness(1.06); }  /* no moving highlights */
+
+/* Skeletons: opacity pulse, never shimmer */
+.skeleton, .shimmer, .animate-shimmer {
+    background: var(--ink-800) !important;
+    animation: opacity-pulse 1.6s ease-in-out infinite !important;
+}
+@keyframes opacity-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }

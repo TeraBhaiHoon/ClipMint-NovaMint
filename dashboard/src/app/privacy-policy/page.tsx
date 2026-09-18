@@ -11,7 +11,7 @@ export default function PrivacyPolicyPage() {
             <Navbar />
 
             {/* Ambient Background Glow */}
-            <div className="absolute w-[400px] h-[400px] rounded-full bg-[#8b5cf6]/5 blur-[120px] pointer-events-none top-20 left-1/4" />
+            <div className="absolute w-[400px] h-[400px] rounded-full bg-mint-500/5 blur-[120px] pointer-events-none top-20 left-1/4" />
             <div className="absolute w-[300px] h-[300px] rounded-full bg-[#06b6d4]/3 blur-[100px] pointer-events-none top-80 right-1/4" />
 
             <div className="max-w-4xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
@@ -25,12 +25,12 @@ export default function PrivacyPolicyPage() {
                 </Link>
 
                 <div className="text-center mb-12">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 text-xs font-semibold text-[#c084fc] mb-4">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-mint-500/10 border border-mint-500/20 text-xs font-semibold text-mint-300 mb-4">
                         <ShieldCheck size={13} />
                         <span>GDPR-Compliant Security</span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
-                        Privacy <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Policy</span>
+                        Privacy <span className="gradient-text bg-text-mint-400">Policy</span>
                     </h1>
                     <p className="text-slate-400 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />
@@ -39,7 +39,7 @@ export default function PrivacyPolicyPage() {
                 </div>
 
                 {/* Main Legal Content Container */}
-                <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-[#8b5cf6]/3">
+                <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-mint-500/3">
                     <section className="border-b border-white/5 pb-6">
                         <p className="text-slate-300 leading-relaxed">
                             NovaMint Networks (&quot;we&quot;, &quot;us&quot;, &quot;our&quot;) operates ClipMint
@@ -59,7 +59,7 @@ export default function PrivacyPolicyPage() {
                         </p>
                         <ul className="list-none flex flex-col gap-3.5 pl-2 mt-2">
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <div>
                                     <strong className="text-slate-300">Account Information:</strong> Name, email address, and
                                     profile picture when you create an account via email signup or
@@ -67,7 +67,7 @@ export default function PrivacyPolicyPage() {
                                 </div>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <div>
                                     <strong className="text-slate-300">Video Content:</strong> Video URLs or uploaded video files
                                     that you submit for processing. These are processed temporarily
@@ -75,7 +75,7 @@ export default function PrivacyPolicyPage() {
                                 </div>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <div>
                                     <strong className="text-slate-300">Usage Data:</strong> Information about how you use the
                                     Service, including clips generated, styles used, and
@@ -83,7 +83,7 @@ export default function PrivacyPolicyPage() {
                                 </div>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <div>
                                     <strong className="text-slate-300">Payment Information:</strong> When you subscribe to a paid
                                     plan, payment details are processed securely by Cashfree. We do
@@ -186,13 +186,13 @@ export default function PrivacyPolicyPage() {
                         </h3>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-white/5 text-xs text-slate-300">
-                                <Mail size={16} className="text-[#8b5cf6] flex-shrink-0" />
+                                <Mail size={16} className="text-mint-400 flex-shrink-0" />
                                 <a href="mailto:ClipMint.Support@gmail.com" className="hover:text-white transition-colors break-all">
                                     ClipMint.Support@gmail.com
                                 </a>
                             </div>
                             <div className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-white/5 text-xs text-slate-300">
-                                <Building size={16} className="text-[#06b6d4] flex-shrink-0" />
+                                <Building size={16} className="text-mint-400 flex-shrink-0" />
                                 <span>NovaMint Networks</span>
                             </div>
                             <div className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-white/5 text-xs text-slate-300">

@@ -222,7 +222,7 @@ export default function SettingsPage() {
             {activeTab === "profile" && (
                 <div className="glass-card p-6 sm:p-8">
                     <div className="flex items-center gap-5 mb-8">
-                        <div className="w-16 h-16 rounded-full bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4] flex items-center justify-center text-2xl font-black text-white shadow-lg shadow-[#8b5cf6]/10 flex-shrink-0">
+                        <div className="w-16 h-16 rounded-full bg-text-mint-400 flex items-center justify-center text-2xl font-black text-white shadow-lg shadow-mint-500/10 flex-shrink-0">
                             {initial}
                         </div>
                         <div>
@@ -266,14 +266,14 @@ export default function SettingsPage() {
                                     onClick={() => setDefaultStyle(style.value)}
                                     className={`p-3.5 rounded-xl text-left transition-all duration-200 flex items-center justify-between border ${
                                         defaultStyle === style.value
-                                            ? "border-[#8b5cf6] bg-[#8b5cf6]/10 text-slate-100"
+                                            ? "border-mint-500 bg-mint-500/10 text-slate-100"
                                             : "border-white/5 bg-[#08080c]/30 hover:border-white/10 text-[#94a3b8] hover:text-slate-200"
                                     }`}
                                 >
                                     <span className="text-sm font-semibold">
                                         {style.label}
                                     </span>
-                                    {defaultStyle === style.value && <Check size={14} className="text-[#8b5cf6]" />}
+                                    {defaultStyle === style.value && <Check size={14} className="text-mint-400" />}
                                 </button>
                             ))}
                         </div>
@@ -285,7 +285,7 @@ export default function SettingsPage() {
             {activeTab === "notifications" && (
                 <div className="glass-card p-6 sm:p-8">
                     <h3 className="text-lg font-bold text-slate-100 mb-6 flex items-center gap-2">
-                        <Bell size={18} className="text-[#8b5cf6]" />
+                        <Bell size={18} className="text-mint-400" />
                         Notification Preferences
                     </h3>
                     <div className="flex flex-col gap-6">
@@ -324,7 +324,7 @@ export default function SettingsPage() {
                                             href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks"
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-1.5 mt-2.5 text-xs text-[#8b5cf6] hover:text-[#a78bfa] transition-colors no-underline font-medium"
+                                            className="inline-flex items-center gap-1.5 mt-2.5 text-xs text-mint-400 hover:text-[#a78bfa] transition-colors no-underline font-medium"
                                         >
                                             <ExternalLink size={12} />
                                             <span>How to create a Discord webhook</span>
@@ -345,8 +345,8 @@ export default function SettingsPage() {
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-6">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
-                                    <Crown size={20} className={planKey === "free" ? "text-[#64748b]" : "text-[#8b5cf6]"} />
-                                    <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4] text-xl font-extrabold">
+                                    <Crown size={20} className={planKey === "free" ? "text-[#64748b]" : "text-mint-400"} />
+                                    <span className="gradient-text bg-text-mint-400 text-xl font-extrabold">
                                         {planInfo.label} Plan
                                     </span>
                                 </div>
@@ -368,7 +368,7 @@ export default function SettingsPage() {
                                 <span>{usagePercent}%</span>
                             </div>
                             <div className="h-2 w-full rounded-full bg-[#08080c] overflow-hidden">
-                                <div className="h-full rounded-full bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4] transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
+                                <div className="h-full rounded-full bg-text-mint-400 transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
                             </div>
                         </div>
                     </div>
@@ -377,7 +377,7 @@ export default function SettingsPage() {
                     {planKey !== "free" && (
                         <div className="glass-card p-6 sm:p-8">
                             <h3 className="text-base font-bold text-slate-100 mb-6 flex items-center gap-2.5">
-                                <CreditCard size={16} className="text-[#8b5cf6]" />
+                                <CreditCard size={16} className="text-mint-400" />
                                 Subscription Details
                             </h3>
 
@@ -406,11 +406,11 @@ export default function SettingsPage() {
                                     </div>
                                     <div className="flex items-center gap-2 text-sm font-bold text-slate-200">
                                         {profile?.plan_period === "one_time" ? (
-                                            <><Zap size={14} className="text-[#06b6d4]" /> <span>One-time</span></>
+                                            <><Zap size={14} className="text-mint-400" /> <span>One-time</span></>
                                         ) : profile?.plan_period === "annual" ? (
-                                            <><Calendar size={14} className="text-[#8b5cf6]" /> <span>Annual</span></>
+                                            <><Calendar size={14} className="text-mint-400" /> <span>Annual</span></>
                                         ) : (
-                                            <><RefreshCw size={14} className="text-[#8b5cf6]" /> <span>Monthly</span></>
+                                            <><RefreshCw size={14} className="text-mint-400" /> <span>Monthly</span></>
                                         )}
                                     </div>
                                 </div>
@@ -470,7 +470,7 @@ export default function SettingsPage() {
                     {planKey === "free" && (
                         <div className="glass-card p-6 sm:p-8">
                             <h3 className="text-base font-bold text-slate-100 mb-5 flex items-center gap-2">
-                                <Sparkles size={16} className="text-[#8b5cf6]" />
+                                <Sparkles size={16} className="text-mint-400" />
                                 What you get with Creator Plan
                             </h3>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
@@ -501,7 +501,7 @@ export default function SettingsPage() {
                     {payments.length > 0 && (
                         <div className="glass-card p-6 sm:p-8">
                             <h3 className="text-base font-bold text-slate-100 mb-6 flex items-center gap-2.5">
-                                <Receipt size={16} className="text-[#8b5cf6]" />
+                                <Receipt size={16} className="text-mint-400" />
                                 Payment History
                             </h3>
                             <div className="flex flex-col">
@@ -547,7 +547,7 @@ export default function SettingsPage() {
                 <div className="flex flex-col gap-6">
                     <div className="glass-card p-6 sm:p-8">
                         <h3 className="text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
-                            <Lock size={16} className="text-[#8b5cf6]" /> Password
+                            <Lock size={16} className="text-mint-400" /> Password
                         </h3>
                         <p className="text-sm text-[#64748b] mb-6">
                             Change your password or set one if you signed up with Google OAuth

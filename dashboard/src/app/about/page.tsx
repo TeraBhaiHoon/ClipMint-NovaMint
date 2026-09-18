@@ -16,7 +16,7 @@ export default function AboutPage() {
 
             <div className="max-w-4xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
                 {/* Ambient glow */}
-                <div className="absolute w-[250px] h-[250px] rounded-full bg-[#8b5cf6]/5 blur-[80px] pointer-events-none top-24 left-1/3" />
+                <div className="absolute w-[250px] h-[250px] rounded-full bg-mint-500/5 blur-[80px] pointer-events-none top-24 left-1/3" />
 
                 {/* Hero */}
                 <div className="text-center mb-16">
@@ -24,12 +24,12 @@ export default function AboutPage() {
                         <div className="w-9 h-9 rounded-lg overflow-hidden border border-white/10 shadow-md">
                             <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
                         </div>
-                        <span className="gradient-text font-black text-3xl tracking-tight bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">
+                        <span className="gradient-text font-black text-3xl tracking-tight bg-text-mint-400">
                             ClipMint
                         </span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
-                        Turning Long Videos Into <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Viral Moments</span>
+                        Turning Long Videos Into <span className="gradient-text bg-text-mint-400">Viral Moments</span>
                     </h1>
                     <p className="text-base sm:text-lg text-slate-400 max-w-xl mx-auto leading-relaxed">
                         ClipMint was built to solve a simple problem: content creators
@@ -78,7 +78,7 @@ export default function AboutPage() {
                             key={item.title}
                             className="glass-card p-8 flex flex-col gap-4"
                         >
-                            <div className="w-11 h-11 rounded-xl bg-[#8b5cf6]/10 flex items-center justify-center text-[#8b5cf6] border border-[#8b5cf6]/15">
+                            <div className="w-11 h-11 rounded-xl bg-mint-500/10 flex items-center justify-center text-mint-400 border border-mint-500/20">
                                 {item.icon}
                             </div>
                             <h3 className="text-lg font-bold text-slate-200">
@@ -99,7 +99,7 @@ export default function AboutPage() {
                     <p className="mt-2">
                         <a
                             href="mailto:ClipMintApp@gmail.com"
-                            className="text-[#c084fc] hover:text-[#8b5cf6] no-underline font-medium transition-colors"
+                            className="text-mint-300 hover:text-mint-400 no-underline font-medium transition-colors"
                         >
                             ClipMintApp@gmail.com
                         </a>

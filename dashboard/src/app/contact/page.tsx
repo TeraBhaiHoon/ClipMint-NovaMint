@@ -45,11 +45,11 @@ export default function ContactPage() {
 
             <div className="max-w-5xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
                 {/* Ambient glow */}
-                <div className="absolute w-[280px] h-[280px] rounded-full bg-[#8b5cf6]/5 blur-[90px] pointer-events-none top-20 right-1/4" />
+                <div className="absolute w-[280px] h-[280px] rounded-full bg-mint-500/5 blur-[90px] pointer-events-none top-20 right-1/4" />
 
                 <div className="text-center mb-16">
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
-                        Get In <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Touch</span>
+                        Get In <span className="gradient-text bg-text-mint-400">Touch</span>
                     </h1>
                     <p className="text-base sm:text-lg text-slate-400 max-w-md mx-auto leading-relaxed">
                         Have a question, suggestion, or need help? We'd love to hear from you.
@@ -86,17 +86,17 @@ export default function ContactPage() {
                                 key={info.title}
                                 className="glass-card p-6 flex items-start gap-4"
                             >
-                                <div className="w-11 h-11 rounded-xl bg-[#8b5cf6]/10 flex items-center justify-center text-[#8b5cf6] border border-[#8b5cf6]/15 flex-shrink-0">
+                                <div className="w-11 h-11 rounded-xl bg-mint-500/10 flex items-center justify-center text-mint-400 border border-mint-500/20 flex-shrink-0">
                                     {info.icon}
                                 </div>
                                 <div>
-                                    <div className="text-[10px] font-bold text-[#8b5cf6] tracking-wider uppercase mb-1">
+                                    <div className="text-[10px] font-bold text-mint-400 tracking-wider uppercase mb-1">
                                         {info.title}
                                     </div>
                                     {info.href ? (
                                         <a
                                             href={info.href}
-                                            className="text-slate-200 hover:text-[#c084fc] no-underline text-base font-semibold transition-colors"
+                                            className="text-slate-200 hover:text-mint-300 no-underline text-base font-semibold transition-colors"
                                         >
                                             {info.value}
                                         </a>
@@ -109,7 +109,7 @@ export default function ContactPage() {
                             </div>
                         ))}
 
-                        <div className="glass-card p-6 bg-gradient-to-r from-[#8b5cf6]/10 via-[#06b6d4]/5 to-transparent">
+                        <div className="glass-card p-6 bg-mint-500/5">
                             <div className="text-sm font-bold text-slate-300 mb-2">
                                 Follow us
                             </div>
@@ -117,7 +117,7 @@ export default function ContactPage() {
                                 href="https://instagram.com/clipmintapp"
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-[#c084fc] hover:text-[#8b5cf6] no-underline text-xs sm:text-sm font-medium transition-colors"
+                                className="text-mint-300 hover:text-mint-400 no-underline text-xs sm:text-sm font-medium transition-colors"
                             >
                                 @ClipMintApp on Instagram →
                             </a>

@@ -11,7 +11,7 @@ export default function TermsPage() {
             <Navbar />
 
             {/* Ambient Background Glow */}
-            <div className="absolute w-[400px] h-[400px] rounded-full bg-[#8b5cf6]/5 blur-[120px] pointer-events-none top-20 left-1/4" />
+            <div className="absolute w-[400px] h-[400px] rounded-full bg-mint-500/5 blur-[120px] pointer-events-none top-20 left-1/4" />
             <div className="absolute w-[300px] h-[300px] rounded-full bg-[#06b6d4]/3 blur-[100px] pointer-events-none top-80 right-1/4" />
 
             <div className="max-w-4xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
@@ -25,12 +25,12 @@ export default function TermsPage() {
                 </Link>
 
                 <div className="text-center mb-12">
-                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#06b6d4]/10 border border-[#06b6d4]/20 text-xs font-semibold text-[#67e8f9] mb-4">
+                    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-mint-500/10 border border-mint-500/3020 text-xs font-semibold text-[#67e8f9] mb-4">
                         <Scale size={13} />
                         <span>Platform Terms of Service</span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
-                        Terms &amp; <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Conditions</span>
+                        Terms &amp; <span className="gradient-text bg-text-mint-400">Conditions</span>
                     </h1>
                     <p className="text-slate-400 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />
@@ -39,7 +39,7 @@ export default function TermsPage() {
                 </div>
 
                 {/* Main Legal Content Container */}
-                <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-[#8b5cf6]/3">
+                <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-mint-500/3">
                     <section className="border-b border-white/5 pb-6">
                         <p className="text-slate-300 leading-relaxed">
                             These Terms &amp; Conditions (&quot;Terms&quot;) govern your use of ClipMint,
@@ -54,15 +54,15 @@ export default function TermsPage() {
                         </h2>
                         <ul className="list-none flex flex-col gap-3 pl-2">
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>You must provide accurate, current, and complete details when creating an account profile.</span>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>You are solely responsible for securing your login sessions and API credential tokens.</span>
                             </li>
                             <li className="text-sm text-slate-400 flex items-start gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#8b5cf6] mt-2 flex-shrink-0" />
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>Platform access is limited to individuals who are at least 13 years of age.</span>
                             </li>
                         </ul>
@@ -134,9 +134,9 @@ export default function TermsPage() {
                     </section>
 
                     <section className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-white/5 text-sm text-slate-300 max-w-md">
-                        <Mail size={16} className="text-[#8b5cf6] flex-shrink-0" />
+                        <Mail size={16} className="text-mint-400 flex-shrink-0" />
                         <span>Questions? Contact us at: </span>
-                        <a href="mailto:ClipMint.Support@gmail.com" className="hover:text-white transition-colors font-bold text-[#c084fc]">
+                        <a href="mailto:ClipMint.Support@gmail.com" className="hover:text-white transition-colors font-bold text-mint-300">
                             ClipMint.Support@gmail.com
                         </a>
                     </section>

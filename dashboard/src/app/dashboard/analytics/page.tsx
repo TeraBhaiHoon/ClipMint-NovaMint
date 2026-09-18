@@ -330,7 +330,7 @@ export default function AnalyticsPage() {
                     {/* ─── Activity Chart ─── */}
                     <div className="glass-card p-6 md:p-8 mb-6">
                         <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
-                            <BarChart3 size={18} className="text-[#8b5cf6]" />
+                            <BarChart3 size={18} className="text-mint-400" />
                             Clips Activity
                         </h3>
                         {s && s.totalClips === 0 ? (
@@ -348,7 +348,7 @@ export default function AnalyticsPage() {
                         {/* Caption Style Distribution */}
                         <div className="glass-card p-6 md:p-8">
                             <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
-                                <Hash size={18} className="text-[#8b5cf6]" />
+                                <Hash size={18} className="text-mint-400" />
                                 Style Distribution
                             </h3>
                             {s && Object.keys(s.clipsByStyle).length === 0 ? (
@@ -363,7 +363,7 @@ export default function AnalyticsPage() {
                         {/* 30-Day Heatmap */}
                         <div className="glass-card p-6 md:p-8">
                             <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
-                                <Calendar size={18} className="text-[#8b5cf6]" />
+                                <Calendar size={18} className="text-mint-400" />
                                 Activity Calendar
                             </h3>
                             {s && <ActivityHeatmap data={s.heatmap} />}
@@ -373,7 +373,7 @@ export default function AnalyticsPage() {
                     {/* ─── Top Viral Clips Leaderboard ─── */}
                     <div className="glass-card p-6 md:p-8">
                         <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
-                            <Sparkles size={18} className="text-[#8b5cf6]" />
+                            <Sparkles size={18} className="text-mint-400" />
                             Top Performing Clips
                         </h3>
                         {s && s.topClips.length === 0 ? (
@@ -385,7 +385,7 @@ export default function AnalyticsPage() {
                                 {s?.topClips.map((clip, i) => (
                                     <div
                                         key={clip.id}
-                                        className="flex items-center gap-3.5 px-4.5 py-3.5 rounded-xl bg-[#08080c] border border-white/5 transition-all duration-300 hover:border-[#8b5cf6]/35 hover:translate-x-1 animate-fade-in-up"
+                                        className="flex items-center gap-3.5 px-4.5 py-3.5 rounded-xl bg-[#08080c] border border-white/5 transition-all duration-300 hover:border-mint-500/35 hover:translate-x-1 animate-fade-in-up"
                                         style={{ animationDelay: `${i * 0.06}s` }}
                                     >
                                         {/* Rank */}

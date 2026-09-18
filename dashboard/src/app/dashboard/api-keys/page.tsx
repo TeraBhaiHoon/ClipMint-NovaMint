@@ -169,8 +169,8 @@ export default function ApiKeysPage() {
                 <div className="stat-card">
                     <div className="flex justify-between items-center mb-2.5">
                         <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">Active Keys</span>
-                        <div className="stat-icon-bg bg-[#8b5cf6]/10 border border-[#8b5cf6]/10">
-                            <Key size={18} className="text-[#8b5cf6]" />
+                        <div className="stat-icon-bg bg-mint-500/10 border border-mint-500/10">
+                            <Key size={18} className="text-mint-400" />
                         </div>
                     </div>
                     <div className="text-3xl font-bold tracking-tight text-slate-100">{loading ? <div className="skeleton h-8 w-10" /> : activeKeys}</div>
@@ -187,8 +187,8 @@ export default function ApiKeysPage() {
                 <div className="stat-card">
                     <div className="flex justify-between items-center mb-2.5">
                         <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">Total Keys</span>
-                        <div className="stat-icon-bg bg-[#06b6d4]/10 border border-[#06b6d4]/10">
-                            <Shield size={18} className="text-[#06b6d4]" />
+                        <div className="stat-icon-bg bg-mint-500/10 border border-mint-500/3010">
+                            <Shield size={18} className="text-mint-400" />
                         </div>
                     </div>
                     <div className="text-3xl font-bold tracking-tight text-slate-100">{loading ? <div className="skeleton h-8 w-10" /> : keys.length}</div>
@@ -199,7 +199,7 @@ export default function ApiKeysPage() {
             <div className="glass-card p-5 mb-6">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div className="flex items-start gap-3">
-                        <Code2 size={20} className="text-[#8b5cf6] flex-shrink-0 mt-0.5" />
+                        <Code2 size={20} className="text-mint-400 flex-shrink-0 mt-0.5" />
                         <div>
                             <div className="text-sm font-semibold text-slate-200 mb-1">API Documentation</div>
                             <p className="text-xs text-slate-400 leading-relaxed">
@@ -242,7 +242,7 @@ export default function ApiKeysPage() {
                                     setCopiedPrefix("snippet");
                                     setTimeout(() => setCopiedPrefix(null), 2000);
                                 }}
-                                className="absolute top-2 right-12 bg-[#0d0c12] border border-white/5 hover:border-[#8b5cf6]/35 rounded-lg px-2.5 py-1.5 cursor-pointer text-[#64748b] hover:text-slate-200 text-[10px] flex items-center gap-1 transition-all"
+                                className="absolute top-2 right-12 bg-[#0d0c12] border border-white/5 hover:border-mint-500/35 rounded-lg px-2.5 py-1.5 cursor-pointer text-[#64748b] hover:text-slate-200 text-[10px] flex items-center gap-1 transition-all"
                             >
                                 {copiedPrefix === "snippet" ? <><Check size={11} className="text-[#10b981]" /> Copied</> : <><Copy size={11} /> Copy</>}
                             </button>

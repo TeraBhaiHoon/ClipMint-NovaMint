@@ -141,27 +141,24 @@ export default function HomePage() {
 
       {/* ═══ 1. HERO ═══ */}
       <section className="relative min-h-screen flex flex-col justify-center items-center text-center px-6 pt-36 pb-24 md:pt-48 md:pb-36 bg-radial-gradient">
-        <div className="gradient-mesh" />
-
         {/* Badge */}
-        <div className="animate-fade-in-up flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#8b5cf6]/10 border border-[#8b5cf6]/20 text-xs font-semibold text-[#c084fc] mb-8 shadow-sm">
-          <Sparkles size={13} className="text-[#c084fc]" />
-          <span>AI-Powered Content Repurposer</span>
+        <div className="animate-fade-in-up flex items-center gap-2 px-4 py-1.5 rounded-full bg-mint-500/10 border border-mint-500/20 text-xs font-semibold text-mint-300 mb-8">
+          <Sparkles size={13} className="text-mint-300" />
+          <span>Now in open beta · Free plan, no card</span>
         </div>
 
-        <h1 className="animate-fade-in-up text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight leading-[1.05] max-w-4xl mb-6">
-          One Video In,{" "}
-          <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] via-[#d946ef] to-[#06b6d4]">
-            10+ Viral Clips
-          </span>{" "}
-          Out
+        <h1 className="animate-fade-in-up text-4xl sm:text-6xl md:text-7xl font-extrabold tracking-tight leading-[1.05] max-w-4xl mb-6 font-[family-name:var(--font-display)]">
+          Ek video. <span className="text-mint-400">Das clips.</span>
+          <span className="block text-ink-300 text-3xl sm:text-5xl md:text-6xl mt-3 font-bold">
+            Cut, captioned, platform-ready.
+          </span>
         </h1>
 
         <p className="animate-fade-in-up text-base sm:text-lg md:text-xl text-slate-400 max-w-2xl leading-relaxed mb-10">
           Upload a podcast, vlog, or lecture — AI detects viral moments,
           clips them, and adds{" "}
-          <span className="text-slate-200 font-semibold underline decoration-[#8b5cf6] decoration-2 underline-offset-4">
-            professional animated captions
+          <span className="text-ink-50 font-semibold underline decoration-mint-400 decoration-2 underline-offset-4">
+            animated captions that look studio-made
           </span>
           . Platform-ready in minutes.
         </p>
@@ -205,18 +202,18 @@ export default function HomePage() {
         {/* Trust badge */}
         <div className="animate-fade-in-up flex items-center gap-2 mt-12 text-sm text-slate-500">
           <CheckCircle2 size={16} className="text-[#10b981]" />
-          <span>Trusted by 500+ content creators worldwide</span>
+          <span>Free plan. No credit card. Watermark-free on paid.</span>
         </div>
 
         {/* Stats */}
         <div className="animate-fade-in-up grid grid-cols-3 gap-8 md:gap-16 mt-16 max-w-2xl mx-auto border-t border-white/5 pt-8 w-full">
           {[
             { value: "9", label: "Caption Styles" },
-            { value: "50K+", label: "Clips Generated" },
-            { value: "< 15 min", label: "Avg Processing" },
+            { value: "1080×1920", label: "Face-Tracked Output" },
+            { value: "-14 LUFS", label: "Studio Loudness" },
           ].map((stat) => (
             <div key={stat.label} className="flex flex-col items-center">
-              <div className="gradient-text font-black text-2xl sm:text-3xl bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">
+              <div className="gradient-text font-black text-2xl sm:text-3xl bg-text-mint-400">
                 {stat.value}
               </div>
               <div className="text-[11px] sm:text-xs text-slate-500 font-medium uppercase tracking-wider mt-1">
@@ -249,7 +246,7 @@ export default function HomePage() {
       {/* ═══ 3. HOW IT WORKS ═══ */}
       <RevealSection className="py-24 px-6 max-w-6xl mx-auto w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
-          How It <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Works</span>
+          How It <span className="text-mint-400">Works</span>
         </h2>
         <p className="section-subheading text-center text-slate-400 mb-16 max-w-md mx-auto">
           Three steps. Zero editing skills required.
@@ -281,10 +278,10 @@ export default function HomePage() {
               className="glass-card p-8 flex flex-col gap-6"
             >
               <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-xl bg-[#8b5cf6]/10 flex items-center justify-center text-[#8b5cf6] border border-[#8b5cf6]/20">
+                <div className="w-12 h-12 rounded-xl bg-mint-500/10 flex items-center justify-center text-mint-400 border border-mint-500/20">
                   {item.icon}
                 </div>
-                <span className="text-xs font-bold text-[#8b5cf6] tracking-widest uppercase">
+                <span className="text-xs font-bold text-mint-400 tracking-widest uppercase">
                   Step {item.step}
                 </span>
               </div>
@@ -302,10 +299,10 @@ export default function HomePage() {
       </RevealSection>
 
       {/* ═══ 4. FEATURES GRID ═══ */}
-      <RevealSection className="py-24 px-6 bg-gradient-to-b from-transparent via-[#8b5cf6]/2 to-transparent">
+      <RevealSection className="py-24 px-6 bg-gradient-to-b from-transparent via-mint-500/5 to-transparent">
         <div className="max-w-6xl mx-auto w-full">
           <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
-            Powerful <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Features</span>
+            Powerful <span className="text-mint-400">Features</span>
           </h2>
           <p className="section-subheading text-center text-slate-400 mb-16 max-w-lg mx-auto">
             Everything you need to turn long-form content into viral
@@ -349,7 +346,7 @@ export default function HomePage() {
                 key={feat.title}
                 className="glass-card p-6 flex flex-col gap-4"
               >
-                <div className="w-11 h-11 rounded-xl bg-[#8b5cf6]/10 flex items-center justify-center text-[#8b5cf6] border border-[#8b5cf6]/15">
+                <div className="w-11 h-11 rounded-xl bg-mint-500/10 flex items-center justify-center text-mint-400 border border-mint-500/30">
                   {feat.icon}
                 </div>
                 <div>
@@ -369,7 +366,7 @@ export default function HomePage() {
       {/* ═══ 5. CAPTION STYLES SHOWCASE ═══ */}
       <RevealSection className="py-24 px-6 max-w-6xl mx-auto w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
-          <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">9 Caption Styles</span>
+          <span className="text-mint-400">9 Caption Styles</span>
         </h2>
         <p className="section-subheading text-center text-slate-400 mb-16 max-w-md mx-auto">
           Professional animated captions powered by Remotion — studio-quality,
@@ -380,7 +377,7 @@ export default function HomePage() {
           {CAPTION_STYLES.map((style) => (
             <div
               key={style.value}
-              className="glass-card p-6 hover:border-[#8b5cf6]/40 cursor-default"
+              className="glass-card p-6 hover:border-mint-500/40 cursor-default"
             >
               <h3 className="text-base font-bold text-slate-200 mb-2">
                 {style.label}
@@ -394,10 +391,10 @@ export default function HomePage() {
       </RevealSection>
 
       {/* ═══ 6. PRICING ═══ */}
-      <RevealSection className="py-24 px-6 bg-gradient-to-b from-transparent via-[#8b5cf6]/2 to-transparent">
+      <RevealSection className="py-24 px-6 bg-gradient-to-b from-transparent via-mint-500/5 to-transparent">
         <div className="max-w-6xl mx-auto w-full">
           <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
-            Simple <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Pricing</span>
+            Simple <span className="text-mint-400">Pricing</span>
           </h2>
           <p className="section-subheading text-center text-slate-400 mb-16 max-w-md mx-auto">
             Start free. Upgrade when you're ready to go pro.
@@ -468,12 +465,12 @@ export default function HomePage() {
               <div
                 key={plan.name}
                 className={`glass-card p-6 flex flex-col justify-between ${
-                  plan.highlighted ? "border-[#8b5cf6] border-2 shadow-lg shadow-[#8b5cf6]/10" : ""
+                  plan.highlighted ? "border-mint-500 border-2" : ""
                 }`}
               >
                 <div>
                   {plan.highlighted && (
-                    <div className="absolute top-3 right-4 bg-[#8b5cf6] text-white px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                    <div className="absolute top-3 right-4 bg-mint-500 text-ink-950 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
                       Popular
                     </div>
                   )}
@@ -521,31 +518,32 @@ export default function HomePage() {
       {/* ═══ 7. TESTIMONIALS ═══ */}
       <RevealSection className="py-24 px-6 max-w-6xl mx-auto w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
-          Loved by <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Creators</span>
+          What ships in <span className="text-mint-400">every clip</span>
         </h2>
         <p className="section-subheading text-center text-slate-400 mb-16 max-w-md mx-auto">
-          See what content creators are saying about ClipMint.
+          We won't invent testimonials — the product has no users yet. Here is
+          exactly what the pipeline delivers instead.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
             {
-              name: "Priya Sharma",
-              role: "YouTube Creator · 120K subs",
-              text: "ClipMint reduced my editing time from 4 hours to 15 minutes. The AI accurately picks the most engaging moments and the animated captions look professional.",
-              stars: 5,
+              name: "Face-tracked 1080×1920",
+              role: "Auto-reframe",
+              text: "The speaker stays centered as the camera moves. Landscape sources become true vertical clips — no decapitation, no letterbox bars.",
+              stars: 0,
             },
             {
-              name: "Rahul Mehta",
-              role: "Podcast Host · The Daily Grind",
-              text: "I upload my 1-hour podcast episode and get 12+ clips ready for Reels and Shorts. The Hormozi-style captions are exactly what I needed. Game changer.",
-              stars: 5,
+              name: "-14 LUFS · -1 dBTP",
+              role: "Studio loudness",
+              text: "Every clip is measured and normalised to the level Reels, Shorts and TikTok normalize to, with denoise when the source needs it.",
+              stars: 0,
             },
             {
-              name: "Ananya Gupta",
-              role: "Social Media Manager",
-              text: "We manage 8 client accounts and ClipMint handles all our short-form content now. The batch processing and API access on the Pro plan make it seamless.",
-              stars: 5,
+              name: "Silence-snapped cuts",
+              role: "Clean boundaries",
+              text: "Clip boundaries snap to natural speech pauses and scene changes, so clips start on words and end on silence — not mid-sentence.",
+              stars: 0,
             },
           ].map((t) => (
             <div
@@ -565,7 +563,7 @@ export default function HomePage() {
                 </div>
                 <Quote
                   size={18}
-                  className="text-[#8b5cf6] opacity-20 mb-3"
+                  className="text-mint-400 opacity-20 mb-3"
                 />
                 <p className="text-xs sm:text-sm text-slate-400 leading-relaxed mb-6">
                   {t.text}
@@ -585,7 +583,7 @@ export default function HomePage() {
       {/* ═══ 8. FAQ ═══ */}
       <RevealSection className="py-24 px-6 border-t border-white/5 bg-[#08080c]/20 w-full">
         <h2 className="section-heading text-3xl sm:text-4xl font-extrabold text-center mb-4">
-          Frequently Asked <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">Questions</span>
+          Frequently Asked <span className="text-mint-400">Questions</span>
         </h2>
         <p className="section-subheading text-center text-slate-400 mb-16 max-w-md mx-auto">
           Everything you need to know about ClipMint.
@@ -595,15 +593,13 @@ export default function HomePage() {
 
       {/* ═══ 9. CTA BANNER ═══ */}
       <RevealSection className="py-20 px-6 text-center max-w-6xl mx-auto w-full">
-        <div className="relative p-10 md:p-16 rounded-3xl bg-gradient-to-br from-[#8b5cf6]/10 to-[#06b6d4]/5 border border-[#8b5cf6]/15 shadow-xl overflow-hidden">
-          <div className="gradient-mesh opacity-50" />
+        <div className="relative p-10 md:p-16 rounded-3xl bg-ink-850 border border-mint-500/30 shadow-xl overflow-hidden">
           <div className="relative z-10 flex flex-col items-center gap-6">
             <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight">
-              Ready to <span className="gradient-text bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">10x Your Content</span>?
+              Shuru karo. <span className="text-mint-400">Free hai.</span>
             </h2>
             <p className="text-slate-400 text-sm sm:text-base max-w-lg leading-relaxed">
-              Join 500+ creators already using ClipMint. Start free — no credit
-              card required.
+              5 clips a month, free forever. Upgrade when it earns its keep.
             </p>
             {loading ? (
               <div className="h-12 w-44 skeleton rounded-xl" />

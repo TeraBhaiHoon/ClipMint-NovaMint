@@ -74,7 +74,7 @@ export default function Footer() {
                             className="w-full h-full object-cover"
                         />
                     </div>
-                    <span className="gradient-text font-bold text-md bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">
+                    <span className="gradient-text font-bold text-md bg-text-mint-400">
                         ClipMint
                     </span>
                 </div>

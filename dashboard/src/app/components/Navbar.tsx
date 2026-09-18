@@ -59,14 +59,14 @@ export default function Navbar() {
                     href="/"
                     className="flex items-center gap-2.5 no-underline group"
                 >
-                    <div className="relative overflow-hidden rounded-lg w-9 h-9 border border-white/10 transition-transform duration-300 group-hover:scale-105 shadow-md shadow-[#8b5cf6]/10">
+                    <div className="relative overflow-hidden rounded-lg w-9 h-9 border border-white/10 transition-transform duration-300 group-hover:scale-105 shadow-md shadow-mint-500/10">
                         <img
                             src="/clipmint-logo.jpg"
                             alt="ClipMint"
                             className="w-full h-full object-cover"
                         />
                     </div>
-                    <span className="gradient-text font-extrabold text-2xl tracking-tight bg-gradient-to-r from-[#8b5cf6] to-[#06b6d4]">
+                    <span className="gradient-text font-extrabold text-2xl tracking-tight bg-text-mint-400">
                         ClipMint
                     </span>
                 </Link>
@@ -81,7 +81,7 @@ export default function Navbar() {
                                 href={link.href}
                                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-300 ${
                                     isActive
-                                        ? "text-[#c084fc] bg-[#8b5cf6]/10"
+                                        ? "text-mint-300 bg-mint-500/10"
                                         : "text-slate-400 hover:text-slate-200 hover:bg-white/5"
                                 }`}
                             >
@@ -140,7 +140,7 @@ export default function Navbar() {
                                 href={link.href}
                                 className={`px-5 py-4 rounded-xl text-lg font-semibold transition-all ${
                                     isActive
-                                        ? "text-[#c084fc] bg-[#8b5cf6]/10"
+                                        ? "text-mint-300 bg-mint-500/10"
                                         : "text-slate-200 hover:bg-white/5"
                                 }`}
                             >

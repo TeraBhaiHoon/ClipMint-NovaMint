@@ -217,7 +217,7 @@ export default function JobsPage() {
                 </div>
                 <div ref={filterRef} className="relative">
                     <button
-                        className={`btn-secondary w-full sm:w-auto px-4 py-3 text-xs font-semibold justify-center gap-2 h-full ${statusFilter !== "all" ? "border-[#8b5cf6] bg-[#8b5cf6]/10 text-white" : ""}`}
+                        className={`btn-secondary w-full sm:w-auto px-4 py-3 text-xs font-semibold justify-center gap-2 h-full ${statusFilter !== "all" ? "border-mint-500 bg-mint-500/10 text-white" : ""}`}
                         onClick={() => setShowFilterDropdown(!showFilterDropdown)}
                     >
                         <Filter size={14} />
@@ -232,7 +232,7 @@ export default function JobsPage() {
                                 <button
                                     key={opt.value}
                                     onClick={() => { setStatusFilter(opt.value); setShowFilterDropdown(false); }}
-                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-[#8b5cf6]/15 text-[#f8fafc]" : "bg-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"}`}
+                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-mint-500/15 text-[#f8fafc]" : "bg-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"}`}
                                 >
                                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: opt.color }} />
                                     {opt.label}
@@ -252,8 +252,8 @@ export default function JobsPage() {
                 </div>
             ) : filteredJobs.length === 0 ? (
                 <div className="glass-card flex flex-col items-center justify-center text-center py-20 px-6 max-w-lg mx-auto">
-                    <div className="w-20 h-20 rounded-2xl bg-[#8b5cf6]/10 border border-[#8b5cf6]/15 flex items-center justify-center mb-6 shadow-inner mx-auto">
-                        <Film size={44} className="text-[#8b5cf6] animate-pulse-glow" />
+                    <div className="w-20 h-20 rounded-2xl bg-mint-500/10 border border-mint-500/20 flex items-center justify-center mb-6 shadow-inner mx-auto">
+                        <Film size={44} className="text-mint-400 animate-pulse-glow" />
                     </div>
                     <h3 className="text-lg font-bold text-slate-200 mb-2">
                         {statusFilter !== "all" ? "No matching jobs" : "No jobs yet"}
@@ -276,13 +276,13 @@ export default function JobsPage() {
                             <Link
                                 key={job.id}
                                 href={`/dashboard/${job.id}`}
-                                className="glass-card p-4 flex items-center gap-4 no-underline text-inherit animate-fade-in-up hover:border-[#8b5cf6]/35"
+                                className="glass-card p-4 flex items-center gap-4 no-underline text-inherit animate-fade-in-up hover:border-mint-500/35"
                                 style={{
                                     animationDelay: `${i * 0.04}s`,
                                 }}
                             >
                                 {/* Thumbnail placeholder */}
-                                <div className="w-12 h-12 rounded-xl flex-shrink-0 bg-gradient-to-br from-[#8b5cf6]/5 to-[#06b6d4]/5 flex items-center justify-center border border-white/5">
+                                <div className="w-12 h-12 rounded-xl flex-shrink-0 bg-mint-500/5 flex items-center justify-center border border-white/5">
                                     <Film size={20} className="text-[#64748b]/60" />
                                 </div>
 
