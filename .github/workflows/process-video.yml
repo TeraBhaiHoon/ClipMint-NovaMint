@@ -65,6 +65,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
 
+    # Supabase credentials are job-level because almost every stage reports
+    # progress or results. Declaring them once prevents the class of bug where a
+    # status step silently lacks credentials and fails the whole run — which is
+    # exactly what happened on the first attempt at this workflow.
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
     steps:
       # ─────────────────────────────────────────────────────────────────────
       # 1. Setup
