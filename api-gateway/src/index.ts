@@ -161,6 +161,26 @@ function validateVideoUrl(raw: unknown): UrlValidationResult {
     return { ok: true, url: normalizeVideoUrl(trimmed), provider };
 }
 
+// ─── Body limit ──────────────────────────────────────────────────────────────
+
+// Backlog 6.4: every accepted body is JSON a few hundred bytes long (video_url,
+// caption_style, max_clips). Reject oversized bodies BEFORE reading/parsing so
+// a large payload can never consume Worker CPU or memory — the 100 MB Worker
+// request limit would otherwise allow abuse through this free endpoint.
+const MAX_BODY_BYTES = 10240;
+
+function bodyTooLarge(request: Request, env: Env): Response | null {
+    const contentLength = request.headers.get("content-length");
+    if (!contentLength) return null;
+    const bytes = parseInt(contentLength, 10);
+    if (Number.isNaN(bytes) || bytes <= MAX_BODY_BYTES) return null;
+    return errorResponse(
+        `Request body too large (max ${MAX_BODY_BYTES} bytes).`,
+        413,
+        env
+    );
+}
+
 // ─── CORS Headers ────────────────────────────────────────────────────────────
 
 function corsHeaders(origin: string): HeadersInit {
@@ -602,6 +622,10 @@ export default {
                 headers: corsHeaders(env.CORS_ORIGIN),
             });
         }
+
+        // Reject oversized bodies before any route/auth work reads them.
+        const oversized = bodyTooLarge(request, env);
+        if (oversized) return oversized;
 
         const url = new URL(request.url);
         const path = url.pathname;

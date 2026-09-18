@@ -17,6 +17,9 @@ import { validateVideoUrl } from "@/lib/validateUrl";
 
 type SupabaseLike = NonNullable<ReturnType<typeof createServiceClient>>;
 
+const VALID_CAPTION_PACES = ["fast", "balanced", "slow"] as const;
+type CaptionPace = (typeof VALID_CAPTION_PACES)[number];
+
 /** Mark a job as failed with a user-facing message (best effort). */
 async function failJob(supabase: SupabaseLike, jobId: string, message: string) {
     const { error } = await supabase
@@ -48,6 +51,16 @@ export async function POST(request: NextRequest) {
             { status: 400 }
         );
     }
+
+    // ── Two optional pipeline inputs (neither is security-sensitive — they do
+    //    not reach a shell line, only typed workflow inputs) ──
+    // `resume`: retry from the saved transcription checkpoint when one exists.
+    const resumeRequested = body?.resume === true;
+    // `caption_pace`: fast | balanced | slow (workflow defaults to balanced).
+    const paceInput = typeof body?.caption_pace === "string" ? body.caption_pace : "balanced";
+    const captionPace: CaptionPace = (VALID_CAPTION_PACES as readonly string[]).includes(paceInput)
+        ? (paceInput as CaptionPace)
+        : "balanced";
 
     // Verify the job belongs to this user and read the *stored* configuration.
     const { data: job, error: jobError } = await supabase
@@ -156,6 +169,8 @@ export async function POST(request: NextRequest) {
                     video_url: validation.url,
                     caption_style: job.caption_style || "hormozi",
                     max_clips: String(effectiveMaxClips),
+                    caption_pace: captionPace,
+                    resume_from_checkpoint: resumeRequested ? "true" : "false",
                 },
             }),
         });

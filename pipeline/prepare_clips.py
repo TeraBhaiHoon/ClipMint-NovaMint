@@ -5,16 +5,25 @@ ClipMint pipeline — turn AI-selected moments into finished vertical clips.
 For every moment this module, in order:
 
   1. Snaps the boundaries to nearby silence so cuts land in pauses, not
-     mid-word, and enforces sane length limits.
-  2. Cuts the source with a single precise re-encode (no double encoding: the
-     reframe and the loudness pass below operate on this file only).
-  3. Reframes to 1080x1920 with face-aware crop tracking when the source is
+     mid-word — and, when a scene cut lands within 0.6 s of that boundary, to
+     the scene change itself (a cut on a visual change beats a cut mid-shot).
+     Enforces sane length limits.
+  2. Validates the clip's caption window (`pipeline/validate_captions.py`)
+     BEFORE encoding: a clip whose captions are empty, negative-timed,
+     overlapping or mostly uncovered is dropped with a logged reason instead
+     of wasting a render.
+  3. Cuts the source with a single precise re-encode (no double encoding: the
+     reframe and the loudness pass below operate on this file only). When the
+     job asks for formats beyond 9x16, this pre-reframe cut is KEPT on disk so
+     the render step can produce 1x1 / 16x9 variants from it.
+  4. Reframes to 1080x1920 with face-aware crop tracking when the source is
      not already vertical (`pipeline/smart_reframe.py`).
-  4. Normalises loudness to -14 LUFS / -1 dBTP with optional denoise
+  5. Normalises loudness to -14 LUFS / -1 dBTP with optional denoise
      (`pipeline/enhance_audio.py`).
-  5. Writes the clip-relative caption words, re-zeroed to the ACTUAL cut
+  6. Writes the clip-relative caption words, re-zeroed to the ACTUAL cut
      start so captions cannot drift out of sync with the picture.
-  6. Records per-clip metadata (duration, has_audio) for the render step.
+  7. Records per-clip metadata (duration, has_audio, mood, kept cut file) for
+     the render step.
 
 Doing the trim here — rather than inside Remotion — is deliberate. Trimming in
 the renderer meant the video timeline shifted while caption timestamps did not,
@@ -27,7 +36,8 @@ Usage:
       --captions workspace/audio/full_captions.json \
       --silences workspace/audio/silences.txt \
       --outdir workspace/clips \
-      [--min-seconds 15] [--max-seconds 90] [--no-reframe] [--no-enhance]
+      [--formats 9x16,1x1,16x9] [--min-seconds 10] [--max-seconds 90] \
+      [--no-scene-detect] [--no-reframe] [--no-enhance]
 """
 
 from __future__ import annotations
@@ -36,15 +46,20 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-MIN_CLIP_SECONDS = 15.0
+MIN_CLIP_SECONDS = 10.0
 MAX_CLIP_SECONDS = 90.0
 SNAP_MAX_SHIFT = 3.0
 SNAP_MIN_SILENCE = 0.18
+SCENE_THRESHOLD = 0.3
+SCENE_MAX_SHIFT = 0.6
+
+VALID_FORMATS = ("9x16", "1x1", "16x9")
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 
@@ -117,6 +132,72 @@ def snap(t: float, gaps: list[tuple[float, float]], prefer: str) -> float:
             continue
         best, best_dist = mid, dist
     return best
+
+
+# ---------------------------------------------------------------------------
+# Scene detection (backlog 2.1)
+# ---------------------------------------------------------------------------
+def detect_scenes(source: Path) -> list[float]:
+    """Timestamps (seconds) where the picture changes by more than 30%.
+
+    One ffmpeg decode pass writes ffmpeg's metadata-print output; every frame
+    that survives the `select` filter IS a scene change, so parsing is just
+    collecting `pts_time` values. The marks file is a RELATIVE path and the
+    command runs with cwd=source.parent: ffmpeg filter arguments cannot carry
+    a Windows drive colon (the `C:` is eaten as an option separator) or
+    unescaped spaces. Any failure (odd codec, missing filter, unreadable file)
+    returns [] — scene snapping is an enhancement, never a gate.
+    """
+    marks_name = "_clipmint_scene_marks.txt"
+    marks_file = source.parent / marks_name
+    try:
+        resp = run([
+            "ffmpeg", "-i", source.name,
+            "-vf", f"select='gt(scene,{SCENE_THRESHOLD})',metadata=print:file={marks_name}",
+            "-an", "-f", "null", "-", "-y", "-loglevel", "error",
+        ], cwd=str(source.parent))
+        if resp.returncode != 0 or not marks_file.exists():
+            print(f"scene detect unavailable: {(resp.stderr or '').strip()[:200]}")
+            return []
+        times: list[float] = []
+        for line in marks_file.read_text(errors="ignore").splitlines():
+            m = re.search(r"pts_time:(-?\d+\.?\d*)", line)
+            if m:
+                times.append(float(m.group(1)))
+        return sorted(set(round(t, 3) for t in times))
+    except Exception as exc:  # noqa: BLE001
+        print(f"scene detect failed ({exc}) — continuing without scene data")
+        return []
+    finally:
+        marks_file.unlink(missing_ok=True)
+
+
+def snap_with_scenes(
+    t: float,
+    gaps: list[tuple[float, float]],
+    scenes: list[float],
+    prefer: str,
+) -> float:
+    """Snap to a boundary that is BOTH a silence midpoint and near a scene cut
+    when one exists within 0.6 s; otherwise fall back gracefully:
+
+      1. silence-snapped boundary + scene cut within 0.6 s of it → scene cut
+         (aligned cuts land in the pause AND on a visual change)
+      2. plain silence snap (previous behaviour)
+      3. scene cut within 0.6 s when there is no usable silence nearby
+      4. the original timestamp
+    """
+    near_scenes = [s for s in scenes if abs(s - t) <= SCENE_MAX_SHIFT]
+    if not gaps:
+        if near_scenes:
+            return min(near_scenes, key=lambda s: abs(s - t))
+        return t
+
+    mid = snap(t, gaps, prefer)
+    both = [s for s in near_scenes if abs(s - mid) <= SCENE_MAX_SHIFT]
+    if both:
+        return min(both, key=lambda s: abs(s - mid))
+    return mid
 
 
 def clamp_length(start: float, end: float, source_duration: float) -> tuple[float, float]:
@@ -213,6 +294,8 @@ def build_clip(
     do_reframe: bool,
     do_enhance: bool,
     src_height: int,
+    keep_cut: bool = False,
+    window: list[dict] | None = None,
 ) -> ClipResult:
     warnings: list[str] = []
     cut = outdir / f"clip_{index:03d}_cut.mp4"
@@ -252,7 +335,8 @@ def build_clip(
                 print(f"  reframe[{index}]: {marker}")
             if marker.startswith("REFRAME_WARN"):
                 warnings.append(marker)
-            current.unlink(missing_ok=True)
+            if not keep_cut:
+                current.unlink(missing_ok=True)
             current = vertical
         else:
             # Reframing is an enhancement: fall back to the cut rather than
@@ -279,11 +363,19 @@ def build_clip(
             warnings.append("enhance_failed")
 
     if current != vertical:
-        current.replace(vertical)
+        if keep_cut and current == cut:
+            # Multi-format: the render step builds 1x1/16x9 variants from this
+            # pre-reframe cut, so it must stay on disk — copy, don't move.
+            shutil.copy2(cut, vertical)
+        else:
+            current.replace(vertical)
         current = vertical
 
     # ── 4. Captions re-zeroed to the real cut ─────────────────────────────
-    window = captions_for_window(captions, start, end)
+    # The window was computed and validated before the cut; writing the exact
+    # same object keeps what was checked identical to what ships.
+    if window is None:
+        window = captions_for_window(captions, start, end)
     (outdir / f"clip_{index:03d}.captions.json").write_text(json.dumps(window))
 
     # ── 5. Verify what we actually produced ───────────────────────────────
@@ -322,6 +414,9 @@ def main() -> int:
     ap.add_argument("--captions", required=True)
     ap.add_argument("--silences", default="")
     ap.add_argument("--outdir", required=True)
+    ap.add_argument("--formats", default="9x16",
+                    help="CSV of output aspect ratios (9x16,1x1,16x9)")
+    ap.add_argument("--no-scene-detect", action="store_true")
     ap.add_argument("--no-reframe", action="store_true")
     ap.add_argument("--no-enhance", action="store_true")
     args = ap.parse_args()
@@ -329,6 +424,18 @@ def main() -> int:
     source = Path(args.source)
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+
+    requested_formats = [f.strip() for f in args.formats.split(",") if f.strip()]
+    bad_formats = [f for f in requested_formats if f not in VALID_FORMATS]
+    if bad_formats:
+        print(f"FATAL: unsupported formats {bad_formats} — allowed: {', '.join(VALID_FORMATS)}",
+              file=sys.stderr)
+        return 2
+    if "9x16" not in requested_formats:
+        requested_formats = ["9x16"] + requested_formats
+    # Formats beyond 9x16 are re-rendered from the pre-reframe cut, so that
+    # file must survive the pipeline instead of being consumed by the reframe.
+    keep_cut = any(f != "9x16" for f in requested_formats)
 
     src = probe(source)
     print(f"source: {src['width']}x{src['height']} {src['duration']:.1f}s audio={src['has_audio']}")
@@ -338,9 +445,19 @@ def main() -> int:
         moments = moments.get("clips", [])
     captions = json.loads(Path(args.captions).read_text())
     gaps = parse_silences(Path(args.silences)) if args.silences else []
-    print(f"moments={len(moments)} caption_words={len(captions)} silence_gaps={len(gaps)}")
+
+    scenes: list[float] = []
+    if args.no_scene_detect:
+        print("scene detection disabled")
+    else:
+        scenes = detect_scenes(source)
+    print(f"moments={len(moments)} caption_words={len(captions)} silence_gaps={len(gaps)} "
+          f"scene_cuts={len(scenes)} formats={','.join(requested_formats)}")
+
+    from validate_captions import validate_captions
 
     results: list[ClipResult] = []
+    dropped: list[dict] = []
     for i, m in enumerate(moments):
         try:
             raw_start = float(m.get("start_time", 0))
@@ -349,12 +466,23 @@ def main() -> int:
             print(f"[{i}] skipped: non-numeric boundaries")
             continue
 
-        start = snap(raw_start, gaps, "start")
-        end = snap(raw_end, gaps, "end")
+        start = snap_with_scenes(raw_start, gaps, scenes, "start")
+        end = snap_with_scenes(raw_end, gaps, scenes, "end")
         start, end = clamp_length(start, end, src["duration"])
 
         if end - start < 5:
             print(f"[{i}] skipped: window too small ({end - start:.1f}s)")
+            continue
+
+        # ── Caption quality gate (backlog 2.4) ────────────────────────────
+        # Validating the exact window that would be written lets a broken clip
+        # die BEFORE the encode instead of after a wasted render.
+        window = captions_for_window(captions, start, end)
+        ok, defects = validate_captions(window, end - start)
+        if not ok:
+            print(f"[{i}] DROPPED by caption validator: {'; '.join(defects)}")
+            dropped.append({"index": i, "start": start, "end": end,
+                            "reasons": defects})
             continue
 
         try:
@@ -363,6 +491,8 @@ def main() -> int:
                 do_reframe=not args.no_reframe,
                 do_enhance=not args.no_enhance,
                 src_height=src["height"],
+                keep_cut=keep_cut,
+                window=window,
             )
             results.append(res)
             snapped = "" if (start == raw_start and end == raw_end) else (
@@ -385,11 +515,17 @@ def main() -> int:
             "has_audio": r.has_audio,
             "caption_words": r.caption_words,
             "warnings": r.warnings,
+            # Render inputs for variants and BGM selection (backlogs 3.4 + mood).
+            "mood": (moments[r.index].get("mood") if r.index < len(moments) else None),
+            **({"cut_file": f"clip_{r.index:03d}_cut.mp4"}
+               if keep_cut and (outdir / f"clip_{r.index:03d}_cut.mp4").exists() else {}),
         }
         for r in results
     ]
     (outdir / "clips_manifest.json").write_text(json.dumps(manifest, indent=2))
-    print(f"PREPARE_OK clips={len(manifest)}")
+    if dropped:
+        (outdir / "dropped_clips.json").write_text(json.dumps(dropped, indent=2))
+    print(f"PREPARE_OK clips={len(manifest)} dropped_by_validator={len(dropped)}")
 
     if not manifest:
         print("FATAL: no clips could be prepared", file=sys.stderr)

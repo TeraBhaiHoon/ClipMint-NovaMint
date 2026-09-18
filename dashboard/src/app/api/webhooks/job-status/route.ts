@@ -165,10 +165,12 @@ export async function POST(request: NextRequest) {
     let notifyJobComplete = true;
     let notifyJobFailed = true;
     let discordWebhookUrl: string | null = null;
+    let userWebhookUrl: string | null = null;
+    let notifyWebhook = false;
 
     try {
       const profileNotifRes = await fetch(
-        `${supabaseUrl}/rest/v1/profiles?id=eq.${job.user_id}&select=notify_email,notify_discord,notify_job_complete,notify_job_failed,discord_webhook_url`,
+        `${supabaseUrl}/rest/v1/profiles?id=eq.${job.user_id}&select=notify_email,notify_discord,notify_job_complete,notify_job_failed,notify_webhook,discord_webhook_url,user_webhook_url`,
         {
           headers: {
             apikey: serviceKey,
@@ -184,6 +186,8 @@ export async function POST(request: NextRequest) {
         notifyJobComplete = prefs.notify_job_complete ?? true;
         notifyJobFailed = prefs.notify_job_failed ?? true;
         discordWebhookUrl = prefs.discord_webhook_url || null;
+        userWebhookUrl = prefs.user_webhook_url || null;
+        notifyWebhook = prefs.notify_webhook ?? false;
       }
     } catch (err) {
       console.warn("Could not fetch notification prefs, using defaults:", err);
@@ -256,6 +260,41 @@ export async function POST(request: NextRequest) {
         console.log(`Discord notification sent for job ${job_id}`);
       } catch (err) {
         console.error("Failed to send Discord notification:", err);
+      }
+    }
+
+    // ── Send user webhook (backlog 8.5) ──
+    // The user's own endpoint gets a flat JSON event when they opted in
+    // (profiles.notify_webhook + profiles.user_webhook_url). Strictly
+    // best-effort: 5 s timeout, failures logged and never thrown, so a slow
+    // or broken user endpoint cannot delay or fail the pipeline webhook.
+    const webhookEvent =
+      status === "done"
+        ? "job.completed"
+        : status === "failed"
+          ? "job.failed"
+          : status === "cancelled"
+            ? "job.cancelled"
+            : null;
+    if (webhookEvent && notifyWebhook && userWebhookUrl) {
+      const payload = JSON.stringify({
+        event: webhookEvent,
+        job_id,
+        status,
+        clips_count: job.clips_count || 0,
+        error_message: error_message || null,
+        timestamp: new Date().toISOString(),
+      });
+      try {
+        const resp = await fetch(userWebhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payload,
+          signal: AbortSignal.timeout(5000),
+        });
+        console.log(`User webhook POST ${userWebhookUrl} -> ${resp.status} for job ${job_id}`);
+      } catch (err) {
+        console.error("User webhook failed (non-critical):", err);
       }
     }
 

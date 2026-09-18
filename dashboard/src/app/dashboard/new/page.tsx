@@ -16,11 +16,21 @@ const STEPS = [
     { num: 3, label: "Config" },
 ];
 
+/** Caption pacing: page size + gap between caption pages. */
+const CAPTION_PACES = [
+    { value: "fast", label: "Fast", hint: "3 words · snappy" },
+    { value: "balanced", label: "Balanced", hint: "4 words · default" },
+    { value: "slow", label: "Slow", hint: "5 words · relaxed" },
+] as const;
+
+type CaptionPace = (typeof CAPTION_PACES)[number]["value"];
+
 export default function NewVideoPage() {
     const router = useRouter();
     const supabase = createClient();
     const [videoUrl, setVideoUrl] = useState("");
     const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("hormozi");
+    const [captionPace, setCaptionPace] = useState<CaptionPace>("balanced");
     const [maxClips, setMaxClips] = useState(10);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -108,7 +118,7 @@ export default function NewVideoPage() {
             try {
                 const res = await fetch("/api/trigger-pipeline", {
                     method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ job_id: data.id }),
+                    body: JSON.stringify({ job_id: data.id, caption_pace: captionPace }),
                 });
                 if (!res.ok) {
                     const payload = await res.json().catch(() => null);
@@ -244,6 +254,29 @@ export default function NewVideoPage() {
                                     {captionStyle === style.value && <Check size={14} className="text-[#8b5cf6]" />}
                                 </div>
                                 <span className="text-[10px] text-[#64748b] leading-tight block">{style.description}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* ─── Caption Pace ─── */}
+                <div className="mb-6">
+                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">Caption Pace</label>
+                    <div className="grid grid-cols-3 gap-2.5">
+                        {CAPTION_PACES.map((pace) => (
+                            <button
+                                key={pace.value} type="button"
+                                onClick={() => setCaptionPace(pace.value)}
+                                className={`glass-card p-3 text-center cursor-pointer transition-all ${
+                                    captionPace === pace.value
+                                        ? "border-[#8b5cf6] bg-[#8b5cf6]/10"
+                                        : "hover:border-white/10"
+                                }`}
+                            >
+                                <span className={`block text-xs font-bold ${captionPace === pace.value ? "text-[#8b5cf6]" : "text-slate-300"}`}>
+                                    {pace.label}
+                                </span>
+                                <span className="block text-[10px] text-[#64748b] mt-0.5">{pace.hint}</span>
                             </button>
                         ))}
                     </div>

@@ -45,6 +45,8 @@ export interface Profile {
     notify_job_failed: boolean;
     notify_weekly_report: boolean;
     discord_webhook_url: string | null;
+    user_webhook_url: string | null;
+    notify_webhook: boolean;
     cashfree_customer_id: string | null;
     cashfree_subscription_id: string | null;
     cashfree_order_id: string | null;
@@ -87,6 +89,7 @@ export interface Job {
     transcript_srt: string | null;
     viral_moments: unknown;
     github_run_id: string | null;
+    checkpoint_url: string | null;
     started_at: string | null;
     completed_at: string | null;
     created_at: string;
@@ -98,6 +101,8 @@ export interface Clip {
     job_id: string;
     user_id: string;
     clip_index: number;
+    /** Aspect tag: '9x16' master, or a variant of the same master ('1x1', '16x9'). */
+    variant: string | null;
     filename: string;
     duration_seconds: number | null;
     start_time: number | null;

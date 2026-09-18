@@ -22,3 +22,11 @@
 
 opencv-python-headless>=4.9
 numpy>=1.26
+
+# NVIDIA Riva gRPC client — used ONLY by pipeline/transcribe_providers.py for
+# the NIM speech-to-text fallback (grpc.nvcf.nvidia.com:443, function-id
+# b702f636-f60c-4a3d-a6f4-f3568c13bd7d, model family openai/whisper-large-v3).
+# The import there is lazy, so every other pipeline module (and the Groq /
+# Deepgram STT providers) works fine when this package is absent.
+nvidia-riva-client>=2.14
+

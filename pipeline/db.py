@@ -109,6 +109,22 @@ class Supabase:
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    # -- checkpoints -------------------------------------------------------
+    def get_checkpoint_url(self, job_id: str) -> str:
+        """The Drive URL recorded for this job's transcription checkpoint, or
+        "" when none was saved (or the column does not exist yet, i.e. the
+        migration has not been applied — callers treat "" as "no resume")."""
+        try:
+            return str(self.get_job(job_id).get("checkpoint_url") or "")
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001 — a missing column must not kill the run
+            print(f"  ! checkpoint lookup failed: {exc}")
+            return ""
+
+    def set_checkpoint_url(self, job_id: str, url: str) -> None:
+        self.update_job(job_id, checkpoint_url=url)
+
     # -- clips -------------------------------------------------------------
     def insert_clips(self, job_id: str, clips: list[dict[str, Any]]) -> int:
         """Insert clip rows. Clears any previous rows for the job first so a
@@ -157,6 +173,13 @@ def main() -> None:
     p = sub.add_parser("get-job")
     p.add_argument("--job-id", required=True)
 
+    p = sub.add_parser("get-checkpoint")
+    p.add_argument("--job-id", required=True)
+
+    p = sub.add_parser("set-checkpoint")
+    p.add_argument("--job-id", required=True)
+    p.add_argument("--url", required=True)
+
     p = sub.add_parser("insert-clips")
     p.add_argument("--clips-json", required=True)
 
@@ -171,6 +194,11 @@ def main() -> None:
         print(f"OK error recorded ({args.status})")
     elif args.cmd == "get-job":
         print(json.dumps(db.get_job(args.job_id)))
+    elif args.cmd == "get-checkpoint":
+        print(db.get_checkpoint_url(args.job_id))
+    elif args.cmd == "set-checkpoint":
+        db.set_checkpoint_url(args.job_id, args.url)
+        print(f"OK checkpoint_url recorded")
     elif args.cmd == "insert-clips":
         with open(args.clips_json) as fh:
             clips = json.load(fh)

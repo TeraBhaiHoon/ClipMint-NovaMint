@@ -1,7 +1,9 @@
 # ClipMint — Video Processing Pipeline
 #
-# Flow: download → transcribe → analyse → prepare clips (vertical + loudness)
-#       → render animated captions → thumbnails → upload → record results
+# Flow: download (+metadata) → transcribe (Groq→Deepgram→NIM) → analyse
+#       → viral moments (LLM chain) → prepare clips (vertical + loudness)
+#       → render animated captions (+ 1x1/16x9 variants) → thumbnails
+#       → upload → record results
 #
 # Triggered by the API Gateway or the dashboard via workflow_dispatch.
 #
@@ -16,6 +18,12 @@
 #  3. Every step records its name, so a failure can name the exact stage.
 #  4. Trimming happens in ffmpeg, not in the renderer, so video and caption
 #     timelines cannot drift apart.
+#  5. Nothing depends on a single provider. Transcription falls through
+#     Groq → Deepgram → NIM and every LLM call falls through Groq → NIM
+#     (pipeline/llm.py); each provider retries transient failures itself.
+#  6. Expensive intermediates are checkpointed to Drive after transcription
+#     and after viral detection, so a retry with resume_from_checkpoint=true
+#     skips straight to clip preparation instead of paying for STT twice.
 
 name: Process Video
 
@@ -49,6 +57,25 @@ on:
         description: "Maximum number of clips to generate"
         required: false
         default: "10"
+        type: string
+      output_formats:
+        description: "Output aspect ratios, CSV of 9x16,1x1,16x9"
+        required: false
+        default: "9x16"
+        type: string
+      caption_pace:
+        description: "Caption pacing"
+        required: false
+        default: "balanced"
+        type: choice
+        options:
+          - fast
+          - balanced
+          - slow
+      resume_from_checkpoint:
+        description: "Resume from saved transcription checkpoint (true/false)"
+        required: false
+        default: "false"
         type: string
 
 concurrency:
@@ -103,6 +130,17 @@ jobs:
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
 
+      # rclone is configured once, up front: the checkpoint/resume step, the
+      # checkpoint uploads and the final upload all need it.
+      - name: Configure rclone
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
+          rclone listremotes
+
       - name: Install Remotion dependencies
         working-directory: remotion-captions
         run: |
@@ -136,12 +174,14 @@ jobs:
         env:
           JOB_ID: ${{ inputs.job_id }}
           VIDEO_URL: ${{ inputs.video_url }}
+          OUTPUT_FORMATS: ${{ inputs.output_formats }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import os, re, sys
           job_id = os.environ["JOB_ID"].strip()
           url = os.environ["VIDEO_URL"].strip()
+          formats = [f.strip() for f in os.environ.get("OUTPUT_FORMATS", "9x16").split(",") if f.strip()]
           errors = []
           if not re.fullmatch(r"[0-9a-fA-F-]{36}", job_id):
               errors.append(f"job_id is not a UUID: {job_id!r}")
@@ -155,20 +195,132 @@ jobs:
               errors.append("video_url contains whitespace, control characters or unsafe metacharacters")
           if not url.lower().startswith(("http://", "https://")):
               errors.append("video_url must be an http(s) URL")
+          bad_formats = [f for f in formats if f not in ("9x16", "1x1", "16x9")]
+          if bad_formats:
+              errors.append(f"output_formats contains unsupported values: {bad_formats}")
+          if not formats:
+              errors.append("output_formats is empty")
           if errors:
               print("INPUT_VALIDATION_FAILED:", "; ".join(errors))
               sys.exit(1)
-          print(f"inputs ok: job={job_id} host={url.split('/')[2]}")
+          print(f"inputs ok: job={job_id} host={url.split('/')[2]} formats={','.join(formats)}")
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 2. Download
+      # 2. Checkpoint resume (backlog 4.2)
+      # ─────────────────────────────────────────────────────────────────────
+      # A retry can skip transcription entirely when a previous run of the same
+      # job checkpointed its captions. The source video cannot live in the
+      # checkpoint (too large), so a resumed run re-fetches it here; everything
+      # from audio extraction through viral detection is then skipped.
+      - name: Resolve checkpoint
+        id: resolve
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          VIDEO_URL: ${{ inputs.video_url }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+          RESUME_REQUESTED: ${{ inputs.resume_from_checkpoint }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+        run: |
+          set -euo pipefail
+          echo "resume_checkpoint" > workspace/.current_step
+          echo "resumed=false" >> "$GITHUB_OUTPUT"
+          echo "viral_ready=false" >> "$GITHUB_OUTPUT"
+
+          CKPT_URL="$(python3 pipeline/db.py get-checkpoint --job-id "$JOB_ID" || true)"
+          if [ "${RESUME_REQUESTED:-false}" != "true" ] || [ -z "$CKPT_URL" ]; then
+            echo "resume: not requested or no checkpoint recorded — running the full pipeline"
+            exit 0
+          fi
+          echo "resume: checkpoint recorded ($CKPT_URL)"
+
+          REMOTE=$(rclone listremotes | head -1 | tr -d ':')
+          CKPT_DIR="workspace/_checkpoint"
+          mkdir -p "$CKPT_DIR" workspace/audio workspace/clips workspace/source
+          if ! rclone copy "${REMOTE}:ClipMint/${JOB_ID}/_checkpoints/" "$CKPT_DIR/" \
+              --drive-root-folder-id="$GDRIVE_FOLDER_ID" \
+              --transfers 4 --checkers 8 --stats-one-line; then
+            echo "resume: checkpoint download failed — running the full pipeline"
+            exit 0
+          fi
+
+          for f in full_captions.json detected_language.txt silences.txt; do
+            if [ -s "$CKPT_DIR/$f" ]; then cp "$CKPT_DIR/$f" "workspace/audio/$f"; fi
+          done
+          VIRAL_READY=false
+          if [ -s "$CKPT_DIR/viral_moments.json" ]; then
+            cp "$CKPT_DIR/viral_moments.json" "workspace/clips/viral_moments.json"
+            VIRAL_READY=true
+          fi
+
+          if [ ! -s workspace/audio/full_captions.json ]; then
+            echo "resume: checkpoint has no captions — running the full pipeline"
+            rm -f workspace/audio/detected_language.txt workspace/audio/silences.txt \
+                  workspace/clips/viral_moments.json
+            exit 0
+          fi
+          echo "resume: captions restored ($(wc -c < workspace/audio/full_captions.json) bytes), viral_ready=$VIRAL_READY"
+
+          if [ ! -s workspace/source/source.mp4 ]; then
+            if [ -n "${YOUTUBE_COOKIES:-}" ]; then
+              printf '%s' "$YOUTUBE_COOKIES" > /tmp/yt_cookies.txt
+              COOKIE_ARG="--cookies /tmp/yt_cookies.txt"
+            else
+              COOKIE_ARG=""
+            fi
+            FETCHED=0
+            ATTEMPTS=(
+              "--extractor-args youtube:player_client=default,tv,web_safari"
+              ""
+            )
+            for i in "${!ATTEMPTS[@]}"; do
+              EXTRA="${ATTEMPTS[$i]}"
+              echo "── resume source fetch attempt $((i + 1))/${#ATTEMPTS[@]} ──"
+              # shellcheck disable=SC2086
+              if yt-dlp \
+                  --js-runtimes deno \
+                  --remote-components ejs:github \
+                  --force-ipv4 \
+                  --retries 5 --fragment-retries 5 --retry-sleep 3 \
+                  --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
+                  --merge-output-format mp4 \
+                  --output "workspace/source/source.%(ext)s" \
+                  --no-playlist --socket-timeout 60 \
+                  --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+                  $COOKIE_ARG $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp_resume.log; then
+                if [ -s workspace/source/source.mp4 ]; then FETCHED=1; break; fi
+              fi
+              rm -f workspace/source/source.*
+            done
+            if [ "$FETCHED" -ne 1 ]; then
+              echo "RESUME_SOURCE_FAILED: the source video could not be re-downloaded for the resumed run"
+              tail -15 /tmp/ytdlp_resume.log || true
+              exit 1
+            fi
+          fi
+
+          SIZE=$(stat --printf='%s' workspace/source/source.mp4)
+          DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 workspace/source/source.mp4 || echo 0)
+          echo "resume source: ${SIZE} bytes, ${DURATION}s"
+          if [ "$SIZE" -lt 10240 ]; then
+            echo "RESUME_SOURCE_INVALID: file is under 10 KB"; exit 1
+          fi
+
+          echo "resumed=true" >> "$GITHUB_OUTPUT"
+          echo "viral_ready=$VIRAL_READY" >> "$GITHUB_OUTPUT"
+          echo "duration=$DURATION" >> "$GITHUB_OUTPUT"
+          echo "RESUME_OK viral_ready=$VIRAL_READY"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 3. Download
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: downloading"
+        if: steps.resolve.outputs.resumed != 'true'
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status downloading --progress 5
 
       - name: Download source video
         id: download
+        if: steps.resolve.outputs.resumed != 'true'
         env:
           VIDEO_URL: ${{ inputs.video_url }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
@@ -260,12 +412,61 @@ jobs:
             echo "DOWNLOAD_INVALID: duration under 5 seconds (${DURATION})"; exit 1
           fi
 
+          # ── Source metadata (backlog 2.2) ────────────────────────────────
+          # Chapters feed the viral step extra context and a small score boost.
+          # Only page-style providers carry useful metadata; a direct file or
+          # Drive link is skipped, and ANY failure here is ignored — metadata
+          # is an optimisation, never a gate.
+          python3 - <<'PY'
+          import json, os, subprocess
+
+          url = os.environ["VIDEO_URL"]
+          path_only = url.split("?")[0].lower()
+          if "drive.google.com" in path_only or path_only.endswith((".mp4", ".mov", ".m4v", ".webm")):
+              print("metadata: skipped (non-page provider)")
+          else:
+              cookie = []
+              if os.path.exists("/tmp/yt_cookies.txt") and os.path.getsize("/tmp/yt_cookies.txt") > 0:
+                  cookie = ["--cookies", "/tmp/yt_cookies.txt"]
+              raw = {}
+              try:
+                  dump = subprocess.run(
+                      ["yt-dlp", "--dump-json", "--no-playlist", *cookie, url],
+                      capture_output=True, text=True, timeout=180)
+                  if dump.returncode == 0 and dump.stdout.strip():
+                      raw = json.loads(dump.stdout.strip().splitlines()[0])
+              except Exception as exc:  # noqa: BLE001 — best effort only
+                  print(f"metadata: dump failed ({exc}) — continuing without it")
+              if raw:
+                  meta = {
+                      "title": str(raw.get("title") or "")[:300],
+                      "duration": float(raw.get("duration") or 0),
+                      "uploader": str(raw.get("uploader") or "")[:200],
+                      "description": str(raw.get("description") or "")[:2000],
+                      "tags": [str(t) for t in (raw.get("tags") or [])][:50],
+                      "chapters": [
+                          {
+                              "title": str(c.get("title") or "")[:200],
+                              "start_time": float(c.get("start_time") or 0),
+                              "end_time": float(c.get("end_time") or 0),
+                          }
+                          for c in (raw.get("chapters") or [])
+                          if isinstance(c, dict)
+                      ][:60],
+                  }
+                  json.dump(meta, open("workspace/source/metadata.json", "w"))
+                  print(f"METADATA_OK chapters={len(meta['chapters'])} title={meta['title'][:60]!r}")
+              else:
+                  print("metadata: dump empty — continuing without it")
+          PY
+
           echo "duration=$DURATION" >> "$GITHUB_OUTPUT"
 
       # ─────────────────────────────────────────────────────────────────────
-      # 3. Audio
+      # 4. Audio
       # ─────────────────────────────────────────────────────────────────────
       - name: Extract audio
+        if: steps.resolve.outputs.resumed != 'true'
         run: |
           set -euo pipefail
           echo "extract_audio" > workspace/.current_step
@@ -274,26 +475,27 @@ jobs:
             workspace/audio/audio.wav -y -loglevel warning
 
       - name: "Mark: transcribing"
+        if: steps.resolve.outputs.resumed != 'true'
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status transcribing --progress 20
 
+      # ─────────────────────────────────────────────────────────────────────
+      # 5. Transcription — provider chain Groq → Deepgram → NIM (BUILD 1)
+      # ─────────────────────────────────────────────────────────────────────
       - name: Transcribe audio
+        if: steps.resolve.outputs.resumed != 'true'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
           echo "transcribe" > workspace/.current_step
           python3 - <<'PY'
-          import glob, json, os, re, sys, time
-          import requests
+          import glob, json, os, re, sys
 
-          key = os.environ.get("GROQ_API_KEY", "").strip()
-          if not key:
-              print("FATAL: GROQ_API_KEY is not set"); sys.exit(1)
+          sys.path.insert(0, "pipeline")
+          from transcribe_providers import transcribe
 
-          GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-          # large-v3-turbo is much faster at nearly identical accuracy; the full
-          # v3 model is the accuracy fallback when turbo is rate limited.
-          MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]
           SEGMENT_SECONDS = 300
           MAX_BYTES = 24_000_000
 
@@ -317,47 +519,6 @@ jobs:
           if not chunks:
               print("FATAL: no audio chunks produced"); sys.exit(1)
           print(f"chunks: {len(chunks)}")
-
-          def post_chunk(path, model, language=None):
-              form = {
-                  "model": model,
-                  "response_format": "verbose_json",
-                  "timestamp_granularities[]": "word",
-              }
-              if language:
-                  form["language"] = language
-              with open(path, "rb") as fh:
-                  return requests.post(
-                      GROQ_URL,
-                      headers={"Authorization": f"Bearer {key}"},
-                      files={"file": (os.path.basename(path), fh, "audio/wav")},
-                      data=form, timeout=300,
-                  )
-
-          def transcribe_chunk(path, language=None):
-              """First successful response for one chunk, across models."""
-              for model in MODELS:
-                  for attempt in range(3):
-                      try:
-                          resp = post_chunk(path, model, language)
-                      except requests.RequestException as exc:
-                          wait = 2 ** attempt * 5
-                          print(f"  {model}: network error ({exc}); retry in {wait}s")
-                          time.sleep(wait); continue
-                      if resp.status_code == 200:
-                          data = resp.json()
-                          if data.get("words") or data.get("segments"):
-                              print(f"  {model}: ok (lang={data.get('language')})")
-                              return data
-                          print(f"  {model}: HTTP 200 but no words/segments")
-                          break
-                      if resp.status_code in (429, 500, 502, 503):
-                          wait = 2 ** attempt * 5
-                          print(f"  {model}: HTTP {resp.status_code}; retry in {wait}s")
-                          time.sleep(wait); continue
-                      print(f"  {model}: HTTP {resp.status_code} {resp.text[:200]}")
-                      break
-              return None
 
           HALLUCINATIONS = {
               "thank you for watching", "thanks for watching",
@@ -416,52 +577,27 @@ jobs:
           for idx, chunk in enumerate(chunks):
               offset = idx * SEGMENT_SECONDS
               print(f"chunk {idx + 1}/{len(chunks)} (offset {offset}s)")
-              data = transcribe_chunk(chunk, detected)
-              if data is None:
-                  print(f"FATAL: transcription failed on chunk {idx + 1}")
+
+              # Once a chunk has locked the language, Hindi/Hinglish content
+              # prefers Deepgram nova-3 first (best code-switched accuracy).
+              prefer_hindi_first = detected == "hi"
+              # "multi" is not a valid Groq language hint; only pass real codes.
+              forced = detected if (detected and detected != "multi") else None
+              try:
+                  result = transcribe(chunk, offset, forced_language=forced,
+                                      prefer_hindi_first=prefer_hindi_first)
+              except Exception as exc:  # noqa: BLE001
+                  print(f"FATAL: transcription failed on chunk {idx + 1}: {exc}")
                   sys.exit(1)
 
               if detected is None:
-                  raw = (data.get("language") or "en").lower()
-                  detected = {
-                      "hindi": "hi", "english": "en", "hinglish": "hi", "urdu": "ur",
-                      "punjabi": "pa", "tamil": "ta", "telugu": "te", "bengali": "bn",
-                      "marathi": "mr", "gujarati": "gu", "kannada": "kn", "malayalam": "ml",
-                  }.get(raw, raw)
-                  print(f"language locked: {detected}")
+                  detected = (result.get("language") or "en").lower()
+                  print(f"language locked: {detected} (provider={result.get('provider')})")
 
-              words = [
-                  {
-                      # Text is kept verbatim. The renderer groups caption pages by
-                      # word count / pause / punctuation and NEVER by leading
-                      # whitespace, so this cannot collapse the pages the way the
-                      # previous TikTok-grouping helper did.
-                      "text": w.get("word", w.get("text", "")).strip(),
-                      "startMs": int((w["start"] + offset) * 1000),
-                      "endMs": int((w["end"] + offset) * 1000),
-                      "timestampMs": None,
-                      "confidence": w.get("probability"),
-                  }
-                  for w in (data.get("words") or [])
-                  if w.get("start") is not None
-              ]
-
-              if not words and data.get("segments"):
-                  # Spread each segment's words evenly so captions still get
-                  # per-word timings when the provider omits word granularity.
-                  for seg in data["segments"]:
-                      tokens = (seg.get("text") or "").split()
-                      if not tokens:
-                          continue
-                      span = (seg["end"] - seg["start"]) / len(tokens)
-                      for i, tok in enumerate(tokens):
-                          words.append({
-                              "text": tok,
-                              "startMs": int((seg["start"] + offset + i * span) * 1000),
-                              "endMs": int((seg["start"] + offset + (i + 1) * span) * 1000),
-                              "timestampMs": None,
-                              "confidence": None,
-                          })
+              words = result["words"]
+              if not words:
+                  print(f"FATAL: chunk {idx + 1} produced an empty transcript")
+                  sys.exit(1)
               all_words.extend(words)
 
           if not all_words:
@@ -478,19 +614,22 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 4. Hinglish transliteration
+      # 6. Hinglish transliteration — via pipeline/llm.py (BUILD 2)
       # ─────────────────────────────────────────────────────────────────────
       - name: Transliterate Devanagari to Hinglish
+        if: steps.resolve.outputs.resumed != 'true'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
           echo "transliterate" > workspace/.current_step
           python3 - <<'PY'
-          import json, os, re, sys, time
-          import requests
+          import json, os, re, sys
 
-          key = os.environ.get("GROQ_API_KEY", "").strip()
+          sys.path.insert(0, "pipeline")
+          from llm import ask
+
           captions = json.load(open("workspace/audio/full_captions.json"))
           devanagari = re.compile(r"[\u0900-\u097F]")
           targets = [i for i, c in enumerate(captions) if devanagari.search(c["text"])]
@@ -500,7 +639,6 @@ jobs:
               sys.exit(0)
 
           print(f"{len(targets)} of {len(captions)} words are Devanagari")
-          MODEL = os.environ.get("CLIPMINT_LLM_MODEL", "openai/gpt-oss-120b")
           BATCH = 60
           failed_batches = 0
 
@@ -519,46 +657,35 @@ jobs:
                   'return ONLY JSON {"words": [...]} in the same order.\n\n'
                   f"Words:\n{enriched}"
               )
-              done = False
+              values = None
+              # ask() already retries transient failures across both providers;
+              # this loop only re-rolls malformed/short responses.
               for attempt in range(3):
                   try:
-                      resp = requests.post(
-                          "https://api.groq.com/openai/v1/chat/completions",
-                          headers={"Authorization": f"Bearer {key}",
-                                   "Content-Type": "application/json"},
-                          json={
-                              "model": MODEL,
-                              "messages": [
-                                  {"role": "system", "content": "You romanise Hindi to natural Hinglish. Return only JSON."},
-                                  {"role": "user", "content": prompt},
-                              ],
-                              "temperature": 0.1,
-                              "max_tokens": 3000,
-                              "response_format": {"type": "json_object"},
-                          },
-                          timeout=120,
+                      content = ask(
+                          prompt,
+                          system="You romanise Hindi to natural Hinglish. Return only JSON.",
+                          is_json=True, max_tokens=3000,
                       )
-                      if resp.status_code != 200:
-                          print(f"  HTTP {resp.status_code}: {resp.text[:200]}")
-                          time.sleep(2 ** attempt * 3)
-                          continue
-                      parsed = json.loads(resp.json()["choices"][0]["message"]["content"])
+                      parsed = json.loads(content)
                       out = parsed.get("words") if isinstance(parsed, dict) else parsed
-                      if not isinstance(out, list) or len(out) != len(group):
-                          print("  length mismatch; retrying")
-                          time.sleep(2)
-                          continue
-                      for idx, value in zip(group, out):
-                          value = str(value).strip()
-                          if value:
-                              captions[idx]["text"] = value
-                      done = True
+                      if isinstance(out, list) and len(out) == len(group):
+                          values = [str(v).strip() for v in out]
+                          break
+                      print(f"  length mismatch ({len(out) if isinstance(out, list) else 'non-list'} vs {len(group)}); retrying")
+                  except RuntimeError as exc:
+                      # Every provider failed for this batch: keep the job alive
+                      # and ship the un-romanised words rather than failing.
+                      print(f"  batch failed ({exc}); continuing with original text")
                       break
                   except Exception as exc:  # noqa: BLE001
                       print(f"  error: {exc}")
-                      time.sleep(2 ** attempt * 3)
-              if not done:
+              if values is None:
                   failed_batches += 1
+                  continue
+              for idx, value in zip(group, values):
+                  if value:
+                      captions[idx]["text"] = value
 
           json.dump(captions, open("workspace/audio/full_captions.json", "w"))
           remaining = sum(1 for c in captions if devanagari.search(c["text"]))
@@ -566,9 +693,10 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 5. Audio analysis
+      # 7. Audio analysis
       # ─────────────────────────────────────────────────────────────────────
       - name: Analyse audio energy
+        if: steps.resolve.outputs.resumed != 'true'
         run: |
           set -euo pipefail
           echo "audio_energy" > workspace/.current_step
@@ -578,6 +706,7 @@ jobs:
           echo "energy samples: $(grep -c RMS_level workspace/audio/energy.txt 2>/dev/null || echo 0)"
 
       - name: Detect silence gaps
+        if: steps.resolve.outputs.resumed != 'true'
         run: |
           set -euo pipefail
           echo "silence_detect" > workspace/.current_step
@@ -606,24 +735,71 @@ jobs:
           echo "silence markers: $(wc -l < workspace/audio/silences.txt)"
 
       # ─────────────────────────────────────────────────────────────────────
-      # 6. Viral moment detection
+      # 8. Checkpoints (backlog 4.2) — best-effort uploads, never gates
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Upload transcription checkpoint
+        if: steps.resolve.outputs.resumed != 'true'
+        continue-on-error: true
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          set -euo pipefail
+          REMOTE=$(rclone listremotes | head -1 | tr -d ':')
+          BASE="ClipMint/${JOB_ID}/_checkpoints"
+          for f in full_captions.json detected_language.txt silences.txt; do
+            rclone copy "workspace/audio/$f" "${REMOTE}:${BASE}/" \
+              --drive-root-folder-id="$GDRIVE_FOLDER_ID" --stats-one-line
+          done
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "pipeline")
+          from db import Supabase
+
+          job_id = os.environ["JOB_ID"]
+          folder_id = os.environ["GDRIVE_FOLDER_ID"]
+          remote = subprocess.run(["rclone", "listremotes"], capture_output=True,
+                                  text=True).stdout.split(":")[0].strip()
+          listing = subprocess.run(
+              ["rclone", "lsjson", f"{remote}:ClipMint/{job_id}/_checkpoints/full_captions.json",
+               f"--drive-root-folder-id={folder_id}"],
+              capture_output=True, text=True)
+          fid = ""
+          try:
+              rows = json.loads(listing.stdout or "[]")
+              fid = rows[0].get("ID", "") if rows else ""
+          except (ValueError, IndexError, AttributeError):
+              pass
+          if fid:
+              Supabase().set_checkpoint_url(job_id, f"https://drive.google.com/file/d/{fid}/view")
+              print("CHECKPOINT_OK captions checkpoint recorded in jobs.checkpoint_url")
+          else:
+              print("WARNING: checkpoint uploaded but file id not resolved — resume stays unavailable")
+          PY
+
+      # ─────────────────────────────────────────────────────────────────────
+      # 9. Viral moment detection — via pipeline/llm.py (BUILD 2)
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: analyzing"
+        if: steps.resolve.outputs.viral_ready != 'true'
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status analyzing --progress 40
 
       - name: Detect viral moments
+        if: steps.resolve.outputs.viral_ready != 'true'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
           MAX_CLIPS: ${{ inputs.max_clips }}
-          VIDEO_DURATION: ${{ steps.download.outputs.duration }}
+          VIDEO_DURATION: ${{ steps.download.outputs.duration || steps.resolve.outputs.duration }}
         run: |
           set -euo pipefail
           echo "viral_detection" > workspace/.current_step
           python3 - <<'PY'
-          import json, os, re, statistics, sys, time
-          import requests
+          import json, os, re, statistics, sys
 
-          key = os.environ["GROQ_API_KEY"].strip()
+          sys.path.insert(0, "pipeline")
+          from llm import ask
+
           max_clips = max(1, min(int(os.environ.get("MAX_CLIPS", "10") or 10), 20))
           duration = float(os.environ.get("VIDEO_DURATION", "0") or 0)
 
@@ -632,49 +808,23 @@ jobs:
           if not captions:
               print("FATAL: no captions to analyse"); sys.exit(1)
 
-          # gpt-oss-120b replaced the retired llama-3.3-70b-versatile, which now
-          # returns HTTP 404 model_not_found on this account.
-          MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+          # ── Source metadata / chapters (backlog 2.2) ─────────────────────
+          chapters = []
+          try:
+              meta = json.load(open("workspace/source/metadata.json"))
+              for c in meta.get("chapters") or []:
+                  try:
+                      s, e = float(c.get("start_time")), float(c.get("end_time"))
+                  except (TypeError, ValueError):
+                      continue
+                  title = str(c.get("title") or "").strip()
+                  if title and e > s:
+                      chapters.append({"title": title, "start": s, "end": e})
+          except (OSError, ValueError):
+              pass
+          print(f"chapters: {len(chapters)}")
 
-          def ask(prompt, is_json, max_tokens=4096):
-              last = None
-              for model in MODELS:
-                  for attempt in range(3):
-                      try:
-                          resp = requests.post(
-                              "https://api.groq.com/openai/v1/chat/completions",
-                              headers={"Authorization": f"Bearer {key}",
-                                       "Content-Type": "application/json"},
-                              json={
-                                  "model": model,
-                                  "messages": [
-                                      {"role": "system", "content": (
-                                          "You are a short-form video editor who finds "
-                                          "clips that perform on Reels, Shorts and TikTok."
-                                          + (" Return only valid JSON." if is_json else "")
-                                      )},
-                                      {"role": "user", "content": prompt},
-                                  ],
-                                  "temperature": 0.6,
-                                  "max_tokens": max_tokens,
-                                  **({"response_format": {"type": "json_object"}} if is_json else {}),
-                              },
-                              timeout=180,
-                          )
-                          if resp.status_code == 200:
-                              return resp.json()["choices"][0]["message"]["content"]
-                          last = f"{model} HTTP {resp.status_code}: {resp.text[:200]}"
-                          if resp.status_code in (429, 500, 502, 503):
-                              time.sleep(2 ** attempt * 5)
-                              continue
-                          break
-                      except requests.RequestException as exc:
-                          last = f"{model}: {exc}"
-                          time.sleep(2 ** attempt * 4)
-                  print(f"  model {model} exhausted: {last}")
-              raise RuntimeError(f"all models failed: {last}")
-
-          # ── Time-indexed transcript windows ────────────────────────────
+          # ── Time-indexed transcript windows ──────────────────────────────
           text, timemap = "", []
           for c in captions:
               for ch in c["text"] + " ":
@@ -705,6 +855,25 @@ jobs:
               if duration > 0 else ""
           )
 
+          # Backlog 2.3: per-content-type duration guidance.
+          DURATION_GUIDANCE = (
+              "Ideal clip duration by content type:\n"
+              "- HOOK / punchy statement: 15-25 seconds\n"
+              "- STORY / anecdote: 25-45 seconds\n"
+              "- EXPLANATION / tutorial: 40-60 seconds\n"
+              "- OPINION / hot take: 20-40 seconds"
+          )
+
+          def chapters_for(w_start: float, w_end: float) -> str:
+              lines = [
+                  f"[chapter] {c['title']} ({c['start']:.0f}-{c['end']:.0f}s)"
+                  for c in chapters
+                  if c["start"] < w_end and c["end"] > w_start
+              ]
+              if not lines:
+                  return ""
+              return "\n\nVideo chapters covering this section:\n" + "\n".join(lines)
+
           moments = []
           for i, w in enumerate(windows):
               print(f"window {i + 1}/{len(windows)} ({w['start']:.0f}s–{w['end']:.0f}s)")
@@ -712,10 +881,16 @@ jobs:
                   "Read this transcript section and list every moment that could stand "
                   f"alone as a short vertical video.{length_hint} Be generous, but only "
                   "include moments with a clear beginning and end.\n\n"
-                  f"Transcript:\n{w['text']}"
+                  f"{DURATION_GUIDANCE}\n\n"
+                  f"Transcript:\n{w['text']}{chapters_for(w['start'], w['end'])}"
               )
               try:
-                  candidates = ask(discovery, is_json=False)
+                  candidates = ask(
+                      discovery,
+                      system=("You are a short-form video editor who finds "
+                              "clips that perform on Reels, Shorts and TikTok."),
+                      is_json=False,
+                  )
               except Exception as exc:  # noqa: BLE001
                   print(f"  discovery failed: {exc}")
                   continue
@@ -730,13 +905,21 @@ jobs:
                   'Return JSON: {"clips": [{"start_time": <float seconds>, '
                   '"end_time": <float seconds>, "viral_score": <sum of the five scores, 5-100>, '
                   '"title": "...", "description": "...", "hashtags": ["#a", ...5 items], '
-                  '"hook": "..."}]}\n'
+                  '"hook": "...", '
+                  '"duration_reason": "<one short sentence: why this length suits the content>", '
+                  '"mood": "energetic"|"calm"|"corporate"|"inspiring"}]}\n'
                   f"start_time must fall between {w['start']:.1f} and {w['end']:.1f}. "
                   "Aim for 20-60 second clips unless the idea genuinely needs longer.\n\n"
                   f"Candidates:\n{candidates}"
               )
               try:
-                  parsed = json.loads(ask(ranking, is_json=True))
+                  parsed = json.loads(ask(
+                      ranking,
+                      system=("You are a short-form video editor who finds "
+                              "clips that perform on Reels, Shorts and TikTok. "
+                              "Return only valid JSON."),
+                      is_json=True,
+                  ))
                   found = parsed.get("clips", [])
                   print(f"  {len(found)} candidate(s)")
                   moments.extend(found)
@@ -747,6 +930,7 @@ jobs:
               print("FATAL: no moments identified"); sys.exit(1)
 
           # ── Normalise, clamp, de-duplicate ──────────────────────────────
+          MOODS = ("energetic", "calm", "corporate", "inspiring")
           clean = []
           for m in moments:
               try:
@@ -758,8 +942,11 @@ jobs:
               if duration > 0:
                   s = max(0.0, min(s, duration - 5))
                   e = max(s + 5, min(e, duration))
+              mood = str(m.get("mood", "")).lower()
               clean.append({**m, "start_time": s, "end_time": e,
-                            "viral_score": max(0.0, min(100.0, float(m.get("viral_score", 50))))})
+                            "viral_score": max(0.0, min(100.0, float(m.get("viral_score", 50)))),
+                            "mood": mood if mood in MOODS else "energetic",
+                            "duration_reason": str(m.get("duration_reason", ""))[:300]})
 
           clean.sort(key=lambda m: m["viral_score"], reverse=True)
           kept = []
@@ -770,6 +957,21 @@ jobs:
               kept.append(m)
               if len(kept) >= max_clips * 2:   # spares for the prepare step
                   break
+
+          # ── Chapter boost (backlog 2.2) ─────────────────────────────────
+          # A moment that sits inside a matching named chapter gets +5 and
+          # remembers the chapter, so the dashboard can show why it was picked.
+          boosted = 0
+          for m in kept:
+              for c in chapters:
+                  if c["start"] - 0.5 <= m["start_time"] <= c["end"] + 0.5:
+                      m["chapter_title"] = c["title"]
+                      if m["end_time"] <= c["end"] + 0.5:
+                          m["viral_score"] = min(100.0, m["viral_score"] + 5)
+                          boosted += 1
+                      break
+          if boosted:
+              kept.sort(key=lambda m: m["viral_score"], reverse=True)
 
           # ── Audio-energy boost ──────────────────────────────────────────
           energy = []
@@ -800,16 +1002,32 @@ jobs:
           kept.sort(key=lambda m: m["viral_score"], reverse=True)
           kept = kept[:max_clips]
           json.dump({"clips": kept}, open("workspace/clips/viral_moments.json", "w"), indent=2)
-          print(f"VIRAL_OK moments={len(kept)} top_score={kept[0]['viral_score']:.0f}")
+          print(f"VIRAL_OK moments={len(kept)} top_score={kept[0]['viral_score']:.0f} "
+                f"chapter_boosts={boosted}")
           PY
 
+      - name: Upload viral checkpoint
+        if: steps.resolve.outputs.viral_ready != 'true'
+        continue-on-error: true
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          set -euo pipefail
+          REMOTE=$(rclone listremotes | head -1 | tr -d ':')
+          rclone copy workspace/clips/viral_moments.json "${REMOTE}:ClipMint/${JOB_ID}/_checkpoints/" \
+            --drive-root-folder-id="$GDRIVE_FOLDER_ID" --stats-one-line
+          echo "VIRAL_CHECKPOINT_OK"
+
       # ─────────────────────────────────────────────────────────────────────
-      # 7. Prepare clips: cut → vertical reframe → loudness → captions
+      # 10. Prepare clips: cut → vertical reframe → loudness → captions
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: clipping"
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status clipping --progress 55
 
       - name: Prepare vertical clips
+        env:
+          OUTPUT_FORMATS: ${{ inputs.output_formats }}
         run: |
           set -euo pipefail
           echo "prepare_clips" > workspace/.current_step
@@ -818,15 +1036,19 @@ jobs:
             --moments workspace/clips/viral_moments.json \
             --captions workspace/audio/full_captions.json \
             --silences workspace/audio/silences.txt \
-            --outdir workspace/clips
+            --outdir workspace/clips \
+            --formats "$OUTPUT_FORMATS"
 
       # ─────────────────────────────────────────────────────────────────────
-      # 8. Render captions (parallel; failures are reported, never hidden)
+      # 11. Render captions (parallel; failures are reported, never hidden)
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: captioning"
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status captioning --progress 70
 
       - name: Render captions
+        env:
+          OUTPUT_FORMATS: ${{ inputs.output_formats }}
+          CAPTION_PACE: ${{ inputs.caption_pace }}
         run: |
           set -euo pipefail
           echo "render_captions" > workspace/.current_step
@@ -836,6 +1058,8 @@ jobs:
             --remotion-dir remotion-captions \
             --style "${{ inputs.caption_style }}" \
             --platform tiktok \
+            --caption-pace "$CAPTION_PACE" \
+            --formats "$OUTPUT_FORMATS" \
             --concurrency 2 \
             --report workspace/render_report.json
 
@@ -891,19 +1115,10 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 9. Upload
+      # 12. Upload
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: uploading"
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status uploading --progress 88
-
-      - name: Configure rclone
-        env:
-          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.config/rclone
-          echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
-          rclone listremotes
 
       - name: Upload to Google Drive
         env:
@@ -961,18 +1176,26 @@ jobs:
                       f"https://drive.google.com/thumbnail?id={fid}&sz=w540"
                   )
 
+          # Masters (clip_XXX_captioned.mp4) and aspect variants
+          # (clip_XXX_1x1.mp4 / clip_XXX_16x9.mp4) share the master's thumbnail.
+          def thumb_key(name):
+              for suffix in ("_captioned.mp4", "_1x1.mp4", "_16x9.mp4", ".mp4"):
+                  if name.endswith(suffix):
+                      return name[: -len(suffix)]
+              return name
+
           for c in clips:
-              c["thumbnail_url"] = thumbs.get(c["name"].replace("_captioned.mp4", ""), "")
+              c["thumbnail_url"] = thumbs.get(thumb_key(c["name"]), "")
 
           json.dump({"job_id": job_id, "folder_id": folder_id, "clips": clips},
                     open("workspace/output/upload_manifest.json", "w"), indent=2)
-          print(f"UPLOAD_MANIFEST_OK clips={len(clips)} thumbs={len(thumbs)}")
+          print(f"UPLOAD_MANIFEST_OK files={len(clips)} thumbs={len(thumbs)}")
           if not clips:
               raise SystemExit("FATAL: nothing was uploaded")
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 10. Record results
+      # 13. Record results
       # ─────────────────────────────────────────────────────────────────────
       - name: Save results to Supabase
         env:
@@ -996,21 +1219,39 @@ jobs:
           prepared = {c["file"]: c for c in json.load(open("workspace/clips/clips_manifest.json"))}
           moments = json.load(open("workspace/clips/viral_moments.json")).get("clips", [])
           render = json.load(open("workspace/render_report.json"))
-          render_by_index = {r["index"]: r for r in render["results"]}
+          # (clip index, variant) → render result, so every uploaded file maps
+          # to the render that actually produced it.
+          render_by = {(r["index"], r.get("variant", "9x16")): r for r in render["results"]}
+
+          def variant_of(name):
+              for variant, suffix in (("9x16", "_captioned.mp4"), ("1x1", "_1x1.mp4"),
+                                      ("16x9", "_16x9.mp4")):
+                  if name.endswith(suffix):
+                      return variant, name[: -len(suffix)]
+              return "9x16", name[: -len(".mp4")]
 
           user_id = db.get_job(job_id)["user_id"]
           rows, failed = [], []
 
-          for index, clip in enumerate(manifest["clips"]):
+          for clip in manifest["clips"]:
+              variant, base = variant_of(clip["name"])
+              try:
+                  index = int(base.split("_")[1])
+              except (IndexError, ValueError):
+                  print(f"  ! skipping unrecognised upload file: {clip['name']}")
+                  continue
               info = prepared.get(f"clip_{index:03d}.mp4", {})
               moment = moments[index] if index < len(moments) else {}
-              rendered = render_by_index.get(index, {})
+              rendered = render_by.get((index, variant), {})
               captured = bool(rendered.get("ok"))
 
               rows.append({
                   "job_id": job_id,
                   "user_id": user_id,
                   "clip_index": index,
+                  # One row per variant (3.4): the same master clip appears once
+                  # per delivered aspect ratio, tagged in clips.variant.
+                  "variant": variant,
                   "filename": clip["name"],
                   "duration_seconds": info.get("duration"),
                   # Prefer the window ffmpeg ACTUALLY rendered (silence-snapped
@@ -1031,7 +1272,7 @@ jobs:
                   "status": "ready" if captured else "failed",
               })
               if not captured:
-                  failed.append(index)
+                  failed.append(f"{index}:{variant}")
 
           inserted = db.insert_clips(job_id, rows)
 
@@ -1054,7 +1295,7 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 11. Notifications
+      # 14. Notifications
       # ─────────────────────────────────────────────────────────────────────
       - name: Notify completion
         if: always()
@@ -1116,7 +1357,7 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────────────────────
-      # 12. Failure handling
+      # 15. Failure handling
       # ─────────────────────────────────────────────────────────────────────
       - name: Record failure
         if: failure()
@@ -1132,8 +1373,10 @@ jobs:
           # Translate the internal stage name into something the customer can act on.
           case "$STEP" in
             download)        export REASON="We could not download that video. Check that the link is public and is a supported source (YouTube, Instagram, Facebook, Vimeo, Google Drive or a direct video file)." ;;
+            resume_checkpoint) export REASON="We could not restore the saved progress for this retry. Please try the retry again — it will fall back to full processing." ;;
             extract_audio)   export REASON="The downloaded file had no readable audio track." ;;
             transcribe)      export REASON="Speech transcription failed for this video." ;;
+            transliterate)   export REASON="We could not process the transcript language." ;;
             prepare_clips)   export REASON="We could not create clips from this video — it may be too short or contain no speech." ;;
             render_captions) export REASON="Caption rendering failed. This is usually temporary — please retry." ;;
             thumbnails)      export REASON="Thumbnail generation failed." ;;
