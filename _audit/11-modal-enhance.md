@@ -1,3 +1,11 @@
+> **SUPERSEDED 2026-09-19:** Modal requires a payment method on file before it
+> will run GPU functions, even on the free \$30/month Starter credits. The
+> owner cannot add a card, so the entire Modal HD tier was REMOVED (code,
+> workflow step, GitHub secrets, local token). Free GPU alternatives
+> (Colab/Kaggle) have no automation API. The HD tier can be rebuilt if a
+> card-eligible GPU provider is ever adopted — this report documents the design
+> for that day. Kept for historical reference.
+
 # Modal GPU Enhance — build report (2026-09-18)
 
 Built in-session by the coordinator after two agent attempts died on
