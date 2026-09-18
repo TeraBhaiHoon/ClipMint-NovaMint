@@ -1013,8 +1013,11 @@ jobs:
                   "clip_index": index,
                   "filename": clip["name"],
                   "duration_seconds": info.get("duration"),
-                  "start_time": float(moment.get("start_time", 0) or 0),
-                  "end_time": float(moment.get("end_time", 0) or 0),
+                  # Prefer the window ffmpeg ACTUALLY rendered (silence-snapped
+                  # and length-clamped) over the raw moment, so the stored span
+                  # always matches the delivered clip.
+                  "start_time": float(info.get("start", moment.get("start_time", 0)) or 0),
+                  "end_time": float(info.get("end", moment.get("end_time", 0)) or 0),
                   "title": moment.get("title", f"Clip {index + 1}"),
                   "description": moment.get("description", ""),
                   "hashtags": moment.get("hashtags", []),

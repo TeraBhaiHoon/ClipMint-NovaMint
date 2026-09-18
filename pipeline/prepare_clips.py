@@ -197,6 +197,8 @@ class ClipResult:
     duration: float
     has_audio: bool
     caption_words: int
+    start: float = 0.0
+    end: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -293,6 +295,10 @@ def build_clip(
         duration=info["duration"],
         has_audio=info["has_audio"],
         caption_words=len(window),
+        # The window actually rendered, after silence snapping and length
+        # clamping. Stored so the UI cannot report a span the clip does not have.
+        start=round(start, 3),
+        end=round(end, 3),
         warnings=warnings,
     )
 
@@ -363,6 +369,8 @@ def main() -> int:
             "index": r.index,
             "file": os.path.basename(r.path),
             "duration": round(r.duration, 3),
+            "start": r.start,
+            "end": r.end,
             "has_audio": r.has_audio,
             "caption_words": r.caption_words,
             "warnings": r.warnings,
