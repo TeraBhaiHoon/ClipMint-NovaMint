@@ -1,0 +1,66 @@
+# ClipMint — NIM probe #3: ONLY the gRPC Riva ASR test
+name: NIM Probe 3 (gRPC ASR)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  grpc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: gRPC ASR attempts
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -uo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install -q requests nvidia-riva-client
+          python3 - <<'PY'
+          import os, subprocess, glob
+
+          key = os.environ["NVIDIA_NIM_API_KEY"].strip()
+          os.system("ffmpeg -f lavfi -i 'sine=frequency=440:duration=3' "
+                    "-ar 16000 -ac 1 /tmp/probe16k.wav -y -loglevel quiet")
+
+          if not glob.glob("/opt/python-clients/**/transcribe_file_offline.py", recursive=True):
+              for repo in ("https://github.com/NVIDIA-ISAAC-OSS/python-clients",
+                           "https://github.com/NVIDIA/python-clients"):
+                  if os.system(f"git clone -q --depth 1 {repo} /opt/python-clients") == 0:
+                      break
+
+          script = None
+          hits = glob.glob("/opt/python-clients/**/transcribe_file_offline.py", recursive=True)
+          if hits:
+              script = hits[0]
+          print("transcribe script:", script)
+          if not script:
+              print("SKIP: python-clients unavailable"); raise SystemExit(0)
+
+          TARGETS = [
+              ("openai/whisper-large-v3", "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"),
+              ("nvidia/canary-1b-asr", "b0e8b4a5-217c-40b7-9b96-17d84e666317"),
+              ("nvidia/parakeet-tdt-0.6b-v2", "d3fe9151-442b-4204-a70d-5fcc597fd610"),
+          ]
+          for model, fid in TARGETS:
+              print(f"── {model} (function-id {fid[:8]}...) ──")
+              cmd = ["python3", script,
+                     "--server", "grpc.nvcf.nvidia.com:443", "--use-ssl",
+                     "--metadata", "function-id", fid,
+                     "--metadata", "authorization", f"Bearer {key}",
+                     "--input-file", "/tmp/probe16k.wav",
+                     "--language-code", "multi",
+                     "--word-time-offsets", "--automatic-punctuation"]
+              try:
+                  r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+                  out = (r.stdout or "") + (r.stderr or "")
+                  print("  rc:", r.returncode)
+                  print("  out:", " | ".join(out.split("\n"))[:700])
+              except subprocess.TimeoutExpired:
+                  print("  TIMEOUT after 240s")
+          PY
