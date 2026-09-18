@@ -26,7 +26,7 @@ app = modal.App("clipmint-enhance")
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "libgl1", "libglib2.0-0")
+    .apt_install("ffmpeg", "libgl1", "libglib2.0-0", "curl")
     .pip_install(
         "torch==2.4.1",
         "torchvision==0.19.1",
