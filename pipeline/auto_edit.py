@@ -136,9 +136,12 @@ def apply_cuts(
         v, a, vl, al = [], [], [], []
         for i, (s, e) in enumerate(segments_s):
             v.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}]")
+            # The video inputs exist whether or not audio does; appending them
+            # only under `has_audio` left the video-only concat with 0 inputs
+            # (n=N but nothing wired in) so audio-less sources failed to cut.
+            vl.append(f"[v{i}]")
             if has_audio:
                 a.append(f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS[a{i}]")
-                vl.append(f"[v{i}]")
                 al.append(f"[a{i}]")
         graph = ";".join(v + a) + ";"
         if has_audio:

@@ -289,6 +289,14 @@ def render_one(
         (public_dir / public_clip).unlink(missing_ok=True)
         props_file.unlink(missing_ok=True)
 
+    # A render that failed validation (too short, no video stream, timeout-mid-
+    # write) can still leave a partial/broken file on disk. The upload, R2 and
+    # thumbnail steps glob *.mp4 blindly, so leaving it here would SHIP a broken
+    # clip and still record a clip row with a drive URL. Delete it: a failed
+    # render must not deliver anything.
+    if not result["ok"]:
+        output.unlink(missing_ok=True)
+
     return result
 
 

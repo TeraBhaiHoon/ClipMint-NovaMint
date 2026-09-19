@@ -395,12 +395,27 @@ jobs:
           # plain HTTP is faster and completely cookie-free.
           URL_PATH="${VIDEO_URL%%?*}"
           case "${URL_PATH,,}" in
-            *.mp4|*.mov|*.m4v|*.webm)
+            *.mp4|*.mov|*.m4v|*.webm|*.mkv|*.avi|*.flv|*.3gp|*.mpg|*.mpeg)
               echo "direct media URL -- fetching with curl"
               if curl -fsSL --retry 3 --retry-delay 2 --max-time 1800 \
                    -o workspace/source/source.mp4 "$VIDEO_URL"; then
-                DOWNLOADED=1
-                echo "direct download ok: $(stat --printf='%s' workspace/source/source.mp4) bytes"
+                # A direct link can "download successfully" and still not be
+                # video (an error page, an HTML redirect target). Detect that
+                # here and fall through to yt-dlp instead of hard-failing the
+                # job at the duration check below.
+                CURL_GOOD=0
+                CURL_DUR=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 \
+                  workspace/source/source.mp4 2>/dev/null || true)
+                if python3 -c "import sys; sys.exit(0 if float('${CURL_DUR:-0}' or 0) >= 5 else 1)" 2>/dev/null; then
+                  CURL_GOOD=1
+                fi
+                if [ "$CURL_GOOD" = 1 ]; then
+                  DOWNLOADED=1
+                  echo "direct download ok: $(stat --printf='%s' workspace/source/source.mp4) bytes, ${CURL_DUR}s"
+                else
+                  rm -f workspace/source/source.mp4
+                  echo "direct download produced no valid video -- falling back to yt-dlp"
+                fi
               else
                 rm -f workspace/source/source.mp4
                 echo "direct download failed -- falling back to yt-dlp"
@@ -556,7 +571,7 @@ jobs:
           set -euo pipefail
           echo "transcribe" > workspace/.current_step
           python3 - <<'PY'
-          import glob, json, os, re, sys
+          import glob, json, math, os, re, subprocess, sys
 
           sys.path.insert(0, "pipeline")
           from transcribe_providers import transcribe
@@ -573,16 +588,49 @@ jobs:
 
           if size > MAX_BYTES:
               print("splitting into 5-minute chunks")
-              os.system(
-                  f'ffmpeg -i {wav} -f segment -segment_time {SEGMENT_SECONDS} '
-                  f'-c copy "workspace/audio/chunk_%03d.wav" -y -loglevel error'
+              split = subprocess.run(
+                  ["ffmpeg", "-i", wav, "-f", "segment",
+                   "-segment_time", str(SEGMENT_SECONDS), "-c", "copy",
+                   "workspace/audio/chunk_%03d.wav", "-y", "-loglevel", "error"],
+                  capture_output=True, text=True,
               )
+              if split.returncode != 0:
+                  print("FATAL: audio split failed:",
+                        (split.stderr or split.stdout or "").strip()[-400:])
+                  sys.exit(1)
           else:
-              os.system(f'cp {wav} workspace/audio/chunk_000.wav')
+              copy = subprocess.run(["cp", wav, "workspace/audio/chunk_000.wav"],
+                                    capture_output=True, text=True)
+              if copy.returncode != 0:
+                  print("FATAL: could not stage audio chunk:",
+                        (copy.stderr or copy.stdout or "").strip()[-400:])
+                  sys.exit(1)
 
           chunks = sorted(glob.glob("workspace/audio/chunk_*.wav"))
           if not chunks:
               print("FATAL: no audio chunks produced"); sys.exit(1)
+
+          # A partial split (disk full, runner killed mid-encode, odd codec)
+          # silently drops the video's TAIL: the chunks that exist still
+          # transcribe, and the step reports TRANSCRIBE_OK with a transcript
+          # that is missing the last N minutes. Verify the chunks re-cover the
+          # whole audio before paying for transcription of a truncated file.
+          probe = subprocess.run(
+              ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+               "-of", "csv=p=0", wav],
+              capture_output=True, text=True,
+          )
+          src_dur = 0.0
+          try:
+              src_dur = float((probe.stdout or "").strip() or 0)
+          except ValueError:
+              src_dur = 0.0
+          if src_dur > 0:
+              expected = int(math.ceil(src_dur / SEGMENT_SECONDS))
+              if len(chunks) < expected:
+                  print(f"FATAL: audio split produced {len(chunks)}/{expected} "
+                        f"chunks — the transcript would be truncated; aborting")
+                  sys.exit(1)
           print(f"chunks: {len(chunks)}")
 
           HALLUCINATIONS = {
@@ -1230,8 +1278,15 @@ jobs:
                   "-q:v", "3", str(out), "-y", "-loglevel", "error",
               ], check=False)
 
+              # A failed frame grab produces NO file while the step would still
+              # count it below — that silently reported THUMBNAILS_OK with an
+              # empty folder. Only count files that actually exist.
+              if not out.exists():
+                  print(f"  ! thumbnail failed for {clip.name} (no output file)")
+                  continue
+
               title = str(moments[index].get("title", ""))[:70] if index < len(moments) else ""
-              if title and has_magick and out.exists():
+              if title and has_magick:
                   text_file = out.with_suffix(".txt")
                   text_file.write_text(title.replace("\n", " "))
                   # Wrap long titles so they do not run off the frame.
@@ -1531,6 +1586,43 @@ jobs:
               })
               if not captured:
                   failed.append(f"{index}:{variant}")
+
+          # Renders that FAILED are deleted by render_clips.py (so a broken file
+          # never ships), which means they never appear in the upload manifest
+          # and the loop above would silently drop them. Re-surface every
+          # non-ok render result as an explicit failed row so the dashboard
+          # still shows what happened instead of just fewer clips.
+          delivered = {(r["index"], r.get("variant", "9x16")) for r in rows}
+          for r in render["results"]:
+              key = (r["index"], r.get("variant", "9x16"))
+              if r.get("ok") or key in delivered:
+                  continue
+              index, variant = key
+              moment = moments[index] if index < len(moments) else {}
+              suffix = "_captioned.mp4" if variant == "9x16" else f"_{variant}.mp4"
+              rows.append({
+                  "job_id": job_id,
+                  "user_id": user_id,
+                  "clip_index": index,
+                  "variant": variant,
+                  "filename": f"clip_{index:03d}{suffix} (render failed, not delivered)",
+                  "duration_seconds": None,
+                  "start_time": float(moment.get("start_time", 0) or 0),
+                  "end_time": float(moment.get("end_time", 0) or 0),
+                  "title": moment.get("title", f"Clip {index + 1}"),
+                  "description": moment.get("description", ""),
+                  "hashtags": moment.get("hashtags", []),
+                  "hook_caption": moment.get("hook", ""),
+                  "viral_score": int(float(moment.get("viral_score", 50) or 50)),
+                  "drive_file_id": "",
+                  "drive_url": "",
+                  "thumbnail_url": "",
+                  "storage_path": None,
+                  "thumbnail_path": None,
+                  "thumbnail_drive_id": None,
+                  "status": "failed",
+              })
+              failed.append(f"{index}:{variant}")
 
           inserted = db.insert_clips(job_id, rows)
 

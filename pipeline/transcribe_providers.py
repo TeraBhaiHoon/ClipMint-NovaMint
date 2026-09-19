@@ -189,7 +189,14 @@ def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[
                 continue
 
             if resp.status_code == 200:
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    # A 200 with a non-JSON body is a provider bug, not a
+                    # transient error — log it and move to the next model
+                    # rather than burning the whole provider.
+                    print(f"  groq/{model}: HTTP 200 with non-JSON body ({exc})")
+                    break
                 if data.get("words") or data.get("segments"):
                     words, lang = parse_groq_payload(data, offset_s)
                     if words:
@@ -257,7 +264,11 @@ def _transcribe_deepgram(path: str, offset_s: float, language: str | None = None
             continue
 
         if resp.status_code == 200:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                print(f"  deepgram: HTTP 200 with non-JSON body ({exc})")
+                break
             words = parse_deepgram_payload(data, offset_s, duration)
             if words:
                 detected = ""

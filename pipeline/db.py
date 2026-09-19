@@ -132,8 +132,14 @@ class Supabase:
         if not clips:
             return 0
 
-        # Deleting first makes this idempotent under retry.
-        self._request("DELETE", f"clips?job_id=eq.{job_id}")
+        # Deleting first makes this idempotent under retry. The DELETE clears
+        # the previous run's rows; if it silently fails (transient 4xx, proxy),
+        # the POST below would duplicate the gallery on the retry — check it.
+        del_resp = self._request("DELETE", f"clips?job_id=eq.{job_id}")
+        if del_resp.status_code not in (200, 204):
+            raise RuntimeError(
+                f"clip reset failed (HTTP {del_resp.status_code}): {del_resp.text[:300]}"
+            )
 
         resp = self._request("POST", "clips", json=clips)
         if resp.status_code not in (200, 201, 204):

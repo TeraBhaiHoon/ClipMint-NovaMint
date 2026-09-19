@@ -94,8 +94,20 @@ def _brief_prompt(transcript_text: str, meta: dict | None, section_note: str = "
     )
 
 
-def _merge_prompt(briefs: list[dict], meta: dict | None) -> str:
+def _merge_prompt(briefs: list[dict], meta: dict | None, truncated: bool = False) -> str:
     payload = json.dumps(briefs, ensure_ascii=False, indent=1)
+    note = ""
+    if truncated:
+        # The transcript was cut at max_sections for cost. Say so: an honest
+        # briefing ("the first N sections are summarised") beats one that
+        # claims whole-video coverage it never saw and lets the model invent
+        # later content.
+        note = (
+            "IMPORTANT: this video is longer than the analysed window. The "
+            "section analyses below cover ONLY the first portion of the video. "
+            "State this limitation plainly in the summary and describe only "
+            "the content you actually saw — never fabricate later parts.\n\n"
+        )
     return (
         f"You are given {len(briefs)} section analyses of ONE long video. "
         "Merge them into a single whole-video briefing. Return JSON with "
@@ -104,6 +116,7 @@ def _merge_prompt(briefs: list[dict], meta: dict | None) -> str:
         "Rules: the summary must cover the WHOLE video (beginning to end), "
         "keywords union the sections, mood_prior reflects the dominant overall "
         "feel, language is the dominant spoken language.\n\n"
+        f"{note}"
         f"{_meta_block(meta)}\n\n"
         "SECTION ANALYSES:\n"
         f"{payload}"
@@ -160,8 +173,10 @@ def build_briefing(
             brief["sections_analysed"] = 1
             return brief
 
-        sections = _split_sections(text)[:max_sections]
+        sections = _split_sections(text)
         total_sections = len(sections)
+        truncated = total_sections > max_sections
+        sections = sections[:max_sections]
         briefs: list[dict] = []
         for i, section in enumerate(sections, 1):
             note = (
@@ -175,9 +190,11 @@ def build_briefing(
             return None
 
         merged = _normalise(_clean_json(ask(
-            _merge_prompt(briefs, meta), system=_SYSTEM, is_json=True, max_tokens=900,
+            _merge_prompt(briefs, meta, truncated=truncated),
+            system=_SYSTEM, is_json=True, max_tokens=900,
         )))
-        merged["sections_analysed"] = total_sections
+        merged["sections_analysed"] = len(sections)
+        merged["sections_total"] = total_sections
         return merged
     except Exception as exc:  # noqa: BLE001 — briefing must never gate the pipeline
         print(f"briefing: failed ({exc}) — continuing without video context", file=sys.stderr)
