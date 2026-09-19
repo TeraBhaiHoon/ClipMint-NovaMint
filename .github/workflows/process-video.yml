@@ -1309,7 +1309,7 @@ jobs:
           export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
           export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           python3 - <<'PY'
-          import json, os, subprocess
+          import json, os, re, subprocess
           from pathlib import Path
 
           job_id = os.environ["JOB_ID"]
@@ -1328,8 +1328,19 @@ jobs:
 
           # Drive file ids of this job's thumbnails — the dashboard's
           # re-materialisation path needs them once R2 (1-day lifecycle)
-          # has evicted the copies.
-          gdrive_remote = (sh("rclone", "listremotes").stdout or "").split(":")[0].strip()
+          # has evicted the copies. listremotes ALSO lists the env-configured
+          # R2 remote (which sorts first), so resolve the Drive remote from
+          # the conf FILE: first `type = drive` section.
+          gdrive_remote, _cur = "", None
+          for _line in open(os.path.expanduser("~/.config/rclone/rclone.conf"), encoding="utf-8"):
+              _line = _line.strip()
+              _m = re.match(r"^\[(.+)\]$", _line)
+              if _m:
+                  _cur = _m.group(1)
+                  continue
+              if _cur and _line.startswith("type") and _line.split("=", 1)[1].strip().lower() == "drive":
+                  gdrive_remote = _cur
+                  break
           thumb_drive_ids = {}
           if gdrive_remote and os.environ.get("GDRIVE_FOLDER_ID", ""):
               resp = sh("rclone", "lsjson", f"{gdrive_remote}:ClipMint/{job_id}/thumbnails",

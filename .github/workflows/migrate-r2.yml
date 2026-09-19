@@ -78,8 +78,24 @@ jobs:
 
           db = Supabase()
           dry = str(os.environ.get("DRY_RUN", "true")).lower() == "true"
-          gd = (subprocess.run(["rclone", "listremotes"], capture_output=True, text=True)
-                .stdout or "").split(":")[0].strip()
+          # The env-configured R2 remote ALSO appears in `rclone listremotes`
+          # (and sorts before lowercase-named remotes), so taking the first
+          # entry can silently select R2 and turn the Drive source into
+          # R2:ClipMint/... (bucket "ClipMint" -> InvalidBucketName). Parse the
+          # conf FILE instead and take the first `type = drive` remote.
+          gd, _cur = "", None
+          for _line in open(os.path.expanduser("~/.config/rclone/rclone.conf"), encoding="utf-8"):
+              _line = _line.strip()
+              _m = re.match(r"^\[(.+)\]$", _line)
+              if _m:
+                  _cur = _m.group(1)
+                  continue
+              if _cur and _line.startswith("type") and _line.split("=", 1)[1].strip().lower() == "drive":
+                  gd = _cur
+                  break
+          if not gd:
+              raise SystemExit("FATAL: no `type = drive` remote found in rclone.conf")
+          print(f"drive remote selected: {gd!r}")
           groot = os.environ["GDRIVE_FOLDER_ID"]
           r2 = "R2:" + bucket
 
