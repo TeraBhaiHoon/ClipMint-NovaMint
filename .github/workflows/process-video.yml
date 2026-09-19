@@ -356,6 +356,7 @@ jobs:
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOB_ID: ${{ inputs.job_id }}
         run: |
           set -euo pipefail
           echo "download" > workspace/.current_step
