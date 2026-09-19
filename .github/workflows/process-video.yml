@@ -980,6 +980,7 @@ jobs:
                   print(f"  discovery failed: {exc}")
                   continue
 
+              energy_summary = summarise(window_stats(energy_series, w['start'], w['end']))
               ranking = (
                   "Score each candidate 1-20 on all five axes, then return the best.\n"
                   "1) HOOK: does the first 3 seconds stop the scroll?\n"
