@@ -73,7 +73,8 @@ jobs:
           from db import Supabase
 
           bucket = os.environ["R2_BUCKET"]
-          print(f"bucket_debug: len={len(bucket)} valid_dns={bool(re.fullmatch(r'[a-z0-9][a-z0-9.-]{{1,61}}[a-z0-9]', bucket))} first4={bucket[:4]!r} last3={bucket[-3:]!r}")
+          suspicious = [(i, ord(c)) for i, c in enumerate(bucket) if c != "-" and not c.islower() and not c.isdigit()]
+          print(f"bucket_debug: len={len(bucket)} isascii={bucket.isascii()} suspicious_char_positions_and_codepoints={suspicious}")
 
           db = Supabase()
           dry = str(os.environ.get("DRY_RUN", "true")).lower() == "true"
