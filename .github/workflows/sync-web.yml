@@ -1,0 +1,68 @@
+# ClipMint — Website Sync
+#
+# Pushes dashboard/ from THIS repo to the website-only repo
+# (VikashMeena777/ClipMint-NovaMint) so the two stay in lockstep:
+#   * this repo    = source of truth for the pipeline AND the website code
+#   * the web repo = website-only mirror the main Vercel account deploys
+#
+# Requires one secret in THIS repo:
+#   REPO_A_TOKEN — a fine-grained PAT on VikashMeena777 with
+#                  Contents: Read and write, scoped to ClipMint-NovaMint
+name: Sync Website
+
+on:
+  push:
+    branches: [main]
+    paths: ["dashboard/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: sync-web
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout processing repo
+        uses: actions/checkout@v4
+
+      - name: Push dashboard/ to the website repo
+        env:
+          REPO_A_TOKEN: ${{ secrets.REPO_A_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REPO_A_TOKEN}" ]; then
+            echo "::error::REPO_A_TOKEN secret is not set — cannot sync"
+            exit 1
+          fi
+
+          git config --global user.name  "clipmint-sync-bot"
+          git config --global user.email "clipmint-sync-bot@users.noreply.github.com"
+
+          rm -rf /tmp/webrepo
+          git clone --depth 1 \
+            "https://x-access-token:${REPO_A_TOKEN}@github.com/VikashMeena777/ClipMint-NovaMint.git" \
+            /tmp/webrepo
+
+          # Mirror dashboard/ into the web repo root: copy new/changed files,
+          # remove files deleted on this side, keep .git and README.md.
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude 'node_modules/' \
+            --exclude '.next/' \
+            --exclude '.env.local' \
+            --exclude 'tsconfig.tsbuildinfo' \
+            --exclude 'README.md' \
+            dashboard/ /tmp/webrepo/
+
+          cd /tmp/webrepo
+          if git status --porcelain | grep -q .; then
+            git add -A
+            git commit -q -m "sync: website from processing repo (${GITHUB_SHA::7})"
+            git push origin main
+            echo "SYNC_OK pushed $(git rev-parse --short HEAD)"
+          else
+            echo "SYNC_OK nothing changed"
+          fi
