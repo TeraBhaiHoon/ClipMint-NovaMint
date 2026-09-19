@@ -66,18 +66,21 @@ jobs:
           export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
           export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           python3 - <<'PY'
-          import json, os, subprocess, sys, time
+          import json, os, re, subprocess, sys, time
           from pathlib import Path
           sys.path.insert(0, "pipeline")
           import requests
           from db import Supabase
+
+          bucket = os.environ["R2_BUCKET"]
+          print(f"bucket_debug: len={len(bucket)} valid_dns={bool(re.fullmatch(r'[a-z0-9][a-z0-9.-]{{1,61}}[a-z0-9]', bucket))} first4={bucket[:4]!r} last3={bucket[-3:]!r}")
 
           db = Supabase()
           dry = str(os.environ.get("DRY_RUN", "true")).lower() == "true"
           gd = (subprocess.run(["rclone", "listremotes"], capture_output=True, text=True)
                 .stdout or "").split(":")[0].strip()
           groot = os.environ["GDRIVE_FOLDER_ID"]
-          r2 = "R2:" + os.environ["R2_BUCKET"]
+          r2 = "R2:" + bucket
 
           def sh(*args):
               return subprocess.run(args, capture_output=True, text=True)
