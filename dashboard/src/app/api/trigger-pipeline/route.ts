@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     // Verify the job belongs to this user and read the *stored* configuration.
     const { data: job, error: jobError } = await supabase
         .from("jobs")
-        .select("id, user_id, video_url, caption_style, max_clips, status, bgm_mood, custom_bgm_url")
+        .select("id, user_id, video_url, caption_style, max_clips, status, bgm_mood, custom_bgm_url, job_mode, remove_silences, auto_punch_in, video_storage_path")
         .eq("id", job_id)
         .eq("user_id", user.id)
         .single();
@@ -86,9 +86,31 @@ export async function POST(request: NextRequest) {
     }
     const quotaClient = admin ?? supabase;
 
-    // ── Validate the stored URL (defence in depth: it is interpolated into a
+    // ── Resolve the source URL ──
+    // Uploaded sources live in the PRIVATE video-uploads bucket; the stored
+    // video_url is just a signed URL that expires, so a fresh one is minted
+    // here on every dispatch (including retries days later).
+    let sourceUrl = job.video_url;
+    if (job.video_storage_path) {
+        const adminClient = createServiceClient();
+        if (!adminClient) {
+            await failJob(quotaClient, job.id, "Storage is not configured. Please contact support.");
+            return NextResponse.json({ error: "Storage is not configured." }, { status: 500 });
+        }
+        const { data: signed, error: signError } = await adminClient.storage
+            .from("video-uploads")
+            .createSignedUrl(job.video_storage_path, 60 * 60 * 24 * 7);
+        if (signError || !signed?.signedUrl) {
+            const message = "Your uploaded video could not be read. Please upload it again.";
+            await failJob(quotaClient, job.id, message);
+            return NextResponse.json({ error: message }, { status: 400 });
+        }
+        sourceUrl = signed.signedUrl;
+    }
+
+    // ── Validate the source URL (defence in depth: it is interpolated into a
     //    shell command by the workflow) ──
-    const validation = validateVideoUrl(job.video_url);
+    const validation = validateVideoUrl(sourceUrl);
     if (!validation.ok) {
         await failJob(quotaClient, job.id, validation.reason);
         return NextResponse.json({ error: validation.reason }, { status: 400 });
@@ -173,6 +195,9 @@ export async function POST(request: NextRequest) {
                     resume_from_checkpoint: resumeRequested ? "true" : "false",
                     bgm_mood: job.bgm_mood || "auto",
                     custom_bgm_url: job.custom_bgm_url || "",
+                    job_mode: job.job_mode === "captions" ? "captions" : "clips",
+                    remove_silences: job.remove_silences ? "true" : "false",
+                    auto_punch_in: job.auto_punch_in ? "true" : "false",
                 },
             }),
         });

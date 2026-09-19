@@ -407,6 +407,101 @@ def build_clip(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+def run_captions_mode(args) -> int:
+    """Captions mode: caption the WHOLE source video — no clip cutting.
+
+    Produces exactly ONE prepared clip (clip_000.mp4) spanning the full
+    (optionally silence-cut) timeline, plus a synthetic viral_moments.json,
+    so every downstream step (render, thumbnails, upload, save-results) runs
+    unchanged: it just sees a job with a single clip.
+    """
+    source = Path(args.source)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    src = probe(source)
+    duration = src["duration"]
+    print(f"captions mode: {src['width']}x{src['height']} {duration:.1f}s "
+          f"audio={src['has_audio']}")
+    if duration < 3:
+        print("FATAL: source is shorter than 3 seconds", file=sys.stderr)
+        return 1
+    if duration > 1800:
+        print("FATAL: captions mode supports videos up to 30 minutes — "
+              "split the video and submit the parts", file=sys.stderr)
+        return 1
+
+    captions = json.loads(Path(args.captions).read_text())
+    captions = [c for c in captions if (c.get("text") or "").strip()]
+    if not captions:
+        print("FATAL: the transcription found no speech — nothing to caption",
+              file=sys.stderr)
+        return 1
+
+    from validate_captions import validate_captions, repair_overlaps
+    window, repaired = repair_overlaps(captions)
+    if repaired:
+        print(f"[0] repaired {repaired} overlapping word boundary(ies)")
+    ok, defects = validate_captions(window, duration)
+    if not ok:
+        print("FATAL: caption validation failed:", *defects, file=sys.stderr)
+        return 1
+
+    removed_note = "0.0s"
+    prepared = outdir / "clip_000.mp4"
+    if args.remove_silences:
+        from auto_edit import apply_cuts, build_segments, remap_words
+        segments, removed_ms = build_segments(window, int(duration * 1000))
+        if segments and removed_ms >= 500:
+            try:
+                apply_cuts(
+                    str(source), [(s / 1000, e / 1000) for s, e in segments],
+                    str(prepared), has_audio=src["has_audio"],
+                )
+            except (RuntimeError, ValueError) as exc:
+                print(f"WARNING: silence cut failed ({exc}) — keeping the full timeline")
+                shutil.copy2(source, prepared)
+            else:
+                window = remap_words(window, segments)
+                duration = sum(e - s for s, e in segments) / 1000
+                removed_note = f"{removed_ms / 1000:.1f}s in {len(segments)} cuts"
+        else:
+            print(f"auto-edit: nothing worth cutting (removed_ms={removed_ms})")
+            shutil.copy2(source, prepared)
+    else:
+        shutil.copy2(source, prepared)
+
+    # Vertical sources fill 9:16 natively; landscape ones use the engine's
+    # blur-fill letterbox (no face-tracked reframe across a whole video).
+    layout = "cover" if (src["height"] or 0) >= (src["width"] or 0) else "fill"
+
+    manifest = [{
+        "index": 0,
+        "file": prepared.name,
+        "duration": round(duration, 3),
+        "has_audio": src["has_audio"],
+        "layout": layout,
+        "mood": None,
+        "start": 0.0,
+        "end": round(duration, 3),
+    }]
+    (outdir / "clips_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (outdir / "clip_000.captions.json").write_text(json.dumps(window))
+    # Synthetic moments file: thumbnails and save-results read this directly.
+    (outdir / "viral_moments.json").write_text(json.dumps({"clips": [{
+        "title": "Full video — auto captioned",
+        "description": "",
+        "hook": "",
+        "hashtags": [],
+        "start_time": 0.0,
+        "end_time": round(duration, 3),
+        "viral_score": 100,
+    }]}, indent=2))
+    print(f"PREPARE_OK clips=1 mode=captions duration={duration:.1f}s "
+          f"layout={layout} silences_removed={removed_note}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", required=True)
@@ -416,10 +511,17 @@ def main() -> int:
     ap.add_argument("--outdir", required=True)
     ap.add_argument("--formats", default="9x16",
                     help="CSV of output aspect ratios (9x16,1x1,16x9)")
+    ap.add_argument("--mode", default="clips", choices=["clips", "captions"],
+                    help="clips = cut viral moments; captions = caption the whole video")
+    ap.add_argument("--remove-silences", action="store_true",
+                    help="captions mode: jump-cut silences from the word gaps")
     ap.add_argument("--no-scene-detect", action="store_true")
     ap.add_argument("--no-reframe", action="store_true")
     ap.add_argument("--no-enhance", action="store_true")
     args = ap.parse_args()
+
+    if args.mode == "captions":
+        return run_captions_mode(args)
 
     source = Path(args.source)
     outdir = Path(args.outdir)

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase";
 import {
     Upload, Link2, ArrowRight, Sparkles, Info, Loader2,
-    Check, Zap, AlertCircle,
+    Check, Zap, AlertCircle, Scissors, Captions, Wand2,
 } from "lucide-react";
 import { CAPTION_STYLES, type CaptionStyle } from "@/lib/types";
 import { validateVideoUrl } from "@/lib/validateUrl";
@@ -25,13 +25,27 @@ const CAPTION_PACES = [
 
 type CaptionPace = (typeof CAPTION_PACES)[number]["value"];
 
+/** What the pipeline should do: cut viral clips, or caption the whole video. */
+type JobMode = "clips" | "captions";
+
+/** Source videos are uploaded to the private `video-uploads` bucket. */
+const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+const VIDEO_ACCEPT =
+    "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
+
 export default function NewVideoPage() {
     const router = useRouter();
     const supabase = createClient();
     const [videoUrl, setVideoUrl] = useState("");
+    const [videoFile, setVideoFile] = useState<File | null>(null);
     const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("hormozi");
     const [captionPace, setCaptionPace] = useState<CaptionPace>("balanced");
     const [maxClips, setMaxClips] = useState(10);
+    // Job mode: "clips" cuts viral moments; "captions" captions the whole video
+    // (with optional auto-editing: silence jump-cuts + punch-in zooms).
+    const [jobMode, setJobMode] = useState<JobMode>("clips");
+    const [removeSilences, setRemoveSilences] = useState(true);
+    const [autoPunchIn, setAutoPunchIn] = useState(true);
     // BGM choice: "auto" = AI mood pick, a mood name, "none", or "custom" with
     // an uploaded track (stored in Supabase Storage, URL saved on the job).
     const [bgmChoice, setBgmChoice] = useState<"auto" | "energetic" | "calm" | "corporate" | "inspiring" | "none" | "custom">("auto");
@@ -47,25 +61,42 @@ export default function NewVideoPage() {
     ];
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [sourceType, setSourceType] = useState<"url" | "upload">("url");
+    const [sourceType, setSourceType] = useState<"url" | "file" | "drive">("url");
     const [currentStep, setCurrentStep] = useState(1);
+
+    const hasSource = sourceType === "file" ? Boolean(videoFile) : Boolean(videoUrl.trim());
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!videoUrl.trim()) return;
+        if (!hasSource) return;
 
         setIsSubmitting(true);
         setError(null);
 
-        // Client-side validation for instant feedback. The server validates the
-        // *stored* URL again before dispatching — that is the security boundary.
-        const validation = validateVideoUrl(videoUrl);
-        if (!validation.ok) {
-            setError(validation.reason);
-            setIsSubmitting(false);
-            return;
+        // ── Resolve the source to a URL the pipeline can fetch ──
+        let normalizedUrl: string | null = null;
+        let videoStoragePath: string | null = null;
+
+        if (sourceType === "file") {
+            if (!videoFile) { setIsSubmitting(false); return; }
+            if (videoFile.size > MAX_UPLOAD_BYTES) {
+                setError("That video is over the 500 MB upload limit. Trim it or paste a link instead.");
+                setIsSubmitting(false);
+                return;
+            }
+            // (upload happens after the quota checks below, so a failed upload
+            //  never burns a video slot)
+        } else {
+            // Client-side validation for instant feedback. The server validates
+            // the *stored* URL again before dispatching — that is the security boundary.
+            const validation = validateVideoUrl(videoUrl);
+            if (!validation.ok) {
+                setError(validation.reason);
+                setIsSubmitting(false);
+                return;
+            }
+            normalizedUrl = validation.url;
         }
-        const normalizedUrl = validation.url;
 
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) { setError("You must be logged in."); setIsSubmitting(false); return; }
@@ -88,7 +119,7 @@ export default function NewVideoPage() {
             setIsSubmitting(false); return;
         }
         if (profile.clips_used >= profile.clips_limit) {
-            setError(`You've reached your limit of ${profile.clips_limit} clips. Please upgrade.`);
+            setError(`You've reached your limit of ${profile.clips_limit} clip(s). Please upgrade.`);
             setIsSubmitting(false); return;
         }
         const remaining = Math.max(0, profile.clips_limit - profile.clips_used);
@@ -97,6 +128,36 @@ export default function NewVideoPage() {
         // Clamp *and use* the clamped value below — setting state alone was dead code.
         const effectiveMaxClips = Math.min(maxClips, remaining);
         if (effectiveMaxClips !== maxClips) setMaxClips(effectiveMaxClips);
+
+        // ── Upload the source video (private bucket, own folder) ──
+        if (sourceType === "file" && videoFile) {
+            const ext = (videoFile.name.split(".").pop() || "mp4").toLowerCase();
+            videoStoragePath = `${user.id}/source-${Date.now()}.${ext}`;
+            const { error: upErr } = await supabase.storage
+                .from("video-uploads")
+                .upload(videoStoragePath, videoFile, {
+                    contentType: videoFile.type || "video/mp4",
+                    upsert: false,
+                });
+            if (upErr) {
+                setError(`Video upload failed: ${upErr.message}`);
+                setIsSubmitting(false);
+                return;
+            }
+            // Initial signed URL for the job row; the dispatch route mints a
+            // fresh one from video_storage_path on every run, so expiry is fine.
+            const { data: signed } = await supabase.storage
+                .from("video-uploads")
+                .createSignedUrl(videoStoragePath, 60 * 60 * 24 * 7);
+            if (!signed?.signedUrl) {
+                setError("Upload succeeded but the video could not be prepared. Please try again.");
+                setIsSubmitting(false);
+                return;
+            }
+            normalizedUrl = signed.signedUrl;
+        }
+
+        if (!normalizedUrl) { setIsSubmitting(false); return; }
 
         // Reserve a video slot atomically before creating anything, so two tabs
         // (or a retry storm) cannot push videos_used past the limit.
@@ -136,9 +197,14 @@ export default function NewVideoPage() {
         }
         const jobRow: Record<string, unknown> = {
             user_id: user.id, video_url: normalizedUrl,
-            source_type: sourceType === "upload" ? "drive" : sourceType,
+            source_type: sourceType === "url" ? "url" : sourceType === "drive" ? "drive" : "upload",
             caption_style: captionStyle, max_clips: effectiveMaxClips, status: "queued", progress: 0,
+            job_mode: jobMode,
+            // Auto-edit toggles only apply to whole-video captions mode.
+            remove_silences: jobMode === "captions" ? removeSilences : false,
+            auto_punch_in: jobMode === "captions" ? autoPunchIn : false,
         };
+        if (videoStoragePath) jobRow.video_storage_path = videoStoragePath;
         // The mood choice travels through the job row the same way the render
         // reads it: "auto" leaves it to the AI; "none" and named moods override.
         if (bgmChoice !== "auto" && bgmChoice !== "custom") jobRow.bgm_mood = bgmChoice;
@@ -205,7 +271,7 @@ export default function NewVideoPage() {
                 Create New Video
             </h1>
             <p className="text-sm text-[#64748b] mb-8">
-                Upload a video and let AI create viral clips with animated captions
+                Upload a video and get viral clips, or caption the whole thing with pro auto-editing
             </p>
 
             <form onSubmit={handleSubmit}>
@@ -213,7 +279,8 @@ export default function NewVideoPage() {
                 <div className="tab-nav mb-6">
                     {[
                         { value: "url" as const, label: "Paste URL", icon: <Link2 size={15} /> },
-                        { value: "upload" as const, label: "Upload via Drive", icon: <Upload size={15} /> },
+                        { value: "file" as const, label: "Upload Video", icon: <Upload size={15} /> },
+                        { value: "drive" as const, label: "Via Drive", icon: <Upload size={15} /> },
                     ].map((tab) => (
                         <button
                             key={tab.value} type="button"
@@ -241,8 +308,51 @@ export default function NewVideoPage() {
                     </div>
                 )}
 
+                {/* ─── Direct file upload ─── */}
+                {sourceType === "file" && (
+                    <div className="mb-6">
+                        <label className="block text-xs font-bold text-slate-300 mb-2 uppercase tracking-wider">
+                            Upload your video
+                        </label>
+                        <label
+                            className={`glass-card p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all text-center ${
+                                videoFile ? "border-mint-500/40 bg-mint-500/5" : "hover:border-white/20"
+                            }`}
+                        >
+                            <input
+                                type="file"
+                                accept={VIDEO_ACCEPT}
+                                className="hidden"
+                                onChange={(e) => {
+                                    const f = e.target.files?.[0] ?? null;
+                                    setVideoFile(f);
+                                    if (f) setCurrentStep(2);
+                                }}
+                            />
+                            {videoFile ? (
+                                <>
+                                    <Check size={22} className="text-mint-400" />
+                                    <span className="text-sm font-bold text-slate-100">{videoFile.name}</span>
+                                    <span className={`text-xs ${videoFile.size > MAX_UPLOAD_BYTES ? "text-red-400" : "text-[#64748b]"}`}>
+                                        {(videoFile.size / 1024 / 1024).toFixed(1)} MB
+                                        {videoFile.size > MAX_UPLOAD_BYTES && " — over the 500 MB limit"}
+                                    </span>
+                                    <span className="text-[10px] text-[#64748b]">Click to choose a different file</span>
+                                </>
+                            ) : (
+                                <>
+                                    <Upload size={22} className="text-mint-400" />
+                                    <span className="text-sm font-bold text-slate-200">Click to choose a video</span>
+                                    <span className="text-xs text-[#64748b]">MP4, MOV, M4V or WebM · up to 500 MB · up to 30 minutes</span>
+                                    <span className="text-[10px] text-[#64748b]">Uploads are private — only you can access them</span>
+                                </>
+                            )}
+                        </label>
+                    </div>
+                )}
+
                 {/* ─── Upload via Drive ─── */}
-                {sourceType === "upload" && (
+                {sourceType === "drive" && (
                     <div className="mb-6">
                         <label className="block text-xs font-bold text-slate-300 mb-2 uppercase tracking-wider">
                             Upload via Google Drive
@@ -271,6 +381,83 @@ export default function NewVideoPage() {
                         />
                     </div>
                 )}
+
+                {/* ─── What to produce ─── */}
+                <div className="mb-6">
+                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
+                        What should ClipMint make?
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {([
+                            {
+                                value: "clips" as const,
+                                icon: <Scissors size={15} />,
+                                title: "Viral clips",
+                                hint: "AI finds the best moments and cuts 9:16 clips",
+                            },
+                            {
+                                value: "captions" as const,
+                                icon: <Captions size={15} />,
+                                title: "Full video captions",
+                                hint: "One captioned video of the whole upload, auto-edited",
+                            },
+                        ] as const).map((mode) => (
+                            <button
+                                key={mode.value} type="button"
+                                onClick={() => { setJobMode(mode.value); setCurrentStep(3); }}
+                                className={`glass-card p-4 text-left cursor-pointer transition-all ${
+                                    jobMode === mode.value
+                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
+                                        : "hover:border-white/10"
+                                }`}
+                            >
+                                <div className="flex items-center justify-between mb-1">
+                                    <span className={`text-xs font-bold flex items-center gap-1.5 ${jobMode === mode.value ? "text-mint-400" : "text-slate-300"}`}>
+                                        {mode.icon} {mode.title}
+                                    </span>
+                                    {jobMode === mode.value && <Check size={14} className="text-mint-400" />}
+                                </div>
+                                <span className="text-[10px] text-[#64748b] leading-tight block">{mode.hint}</span>
+                            </button>
+                        ))}
+                    </div>
+
+                    {/* Auto-editing — whole-video captions mode only */}
+                    {jobMode === "captions" && (
+                        <div className="glass-card p-4 mt-3 space-y-3">
+                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                                <Wand2 size={12} className="text-mint-400" /> Auto-editing
+                            </div>
+                            {([
+                                {
+                                    checked: removeSilences,
+                                    set: setRemoveSilences,
+                                    title: "Cut out dead air",
+                                    hint: "Removes silences and long pauses, so the pace stays tight",
+                                },
+                                {
+                                    checked: autoPunchIn,
+                                    title: "Dynamic punch-ins",
+                                    set: setAutoPunchIn,
+                                    hint: "Subtle zoom on sentence starts — the classic editor look",
+                                },
+                            ] as const).map((opt) => (
+                                <label key={opt.title} className="flex items-start gap-3 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={opt.checked}
+                                        onChange={(e) => opt.set(e.target.checked)}
+                                        className="mt-0.5 w-4 h-4 accent-[#39E508] cursor-pointer"
+                                    />
+                                    <span>
+                                        <span className="block text-xs font-bold text-slate-200">{opt.title}</span>
+                                        <span className="block text-[10px] text-[#64748b] leading-relaxed">{opt.hint}</span>
+                                    </span>
+                                </label>
+                            ))}
+                        </div>
+                    )}
+                </div>
 
                 {/* ─── Background Music Picker ─── */}
                 <div className="mb-6">
@@ -363,26 +550,28 @@ export default function NewVideoPage() {
                     </div>
                 </div>
 
-                {/* ─── Max Clips ─── */}
-                <div className="mb-8">
-                    <label className="flex justify-between items-center text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
-                        <span>Max Clips</span>
-                        <span className="text-mint-400 text-sm font-extrabold">{maxClips}</span>
-                    </label>
-                    <input
-                        type="range"
-                        min={1} max={20}
-                        value={maxClips}
-                        onChange={(e) => setMaxClips(Number(e.target.value))}
-                        style={{
-                            background: `linear-gradient(to right, #39E508 0%, #39E508 ${((maxClips - 1) / 19) * 100}%, rgba(255, 255, 255, 0.08) ${((maxClips - 1) / 19) * 100}%, rgba(255, 255, 255, 0.08) 100%)`,
-                        }}
-                        className="custom-range"
-                    />
-                    <div className="flex justify-between text-[10px] text-[#64748b] mt-1.5 font-medium">
-                        <span>1 clip</span><span>20 clips</span>
+                {/* ─── Max Clips (viral-clips mode only) ─── */}
+                {jobMode === "clips" && (
+                    <div className="mb-8">
+                        <label className="flex justify-between items-center text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
+                            <span>Max Clips</span>
+                            <span className="text-mint-400 text-sm font-extrabold">{maxClips}</span>
+                        </label>
+                        <input
+                            type="range"
+                            min={1} max={20}
+                            value={maxClips}
+                            onChange={(e) => setMaxClips(Number(e.target.value))}
+                            style={{
+                                background: `linear-gradient(to right, #39E508 0%, #39E508 ${((maxClips - 1) / 19) * 100}%, rgba(255, 255, 255, 0.08) ${((maxClips - 1) / 19) * 100}%, rgba(255, 255, 255, 0.08) 100%)`,
+                            }}
+                            className="custom-range"
+                        />
+                        <div className="flex justify-between text-[10px] text-[#64748b] mt-1.5 font-medium">
+                            <span>1 clip</span><span>20 clips</span>
+                        </div>
                     </div>
-                </div>
+                )}
 
                 {/* ─── Error ─── */}
                 {error && (
@@ -396,7 +585,7 @@ export default function NewVideoPage() {
                 <button
                     type="submit" 
                     className="btn-primary w-full justify-center py-3.5 text-sm font-semibold shadow-lg"
-                    disabled={isSubmitting || !videoUrl.trim()}
+                    disabled={isSubmitting || !hasSource}
                 >
                     {isSubmitting ? (
                         <><Loader2 size={18} className="animate-spin" /> Processing...</>
@@ -411,7 +600,8 @@ export default function NewVideoPage() {
                     <div>
                         <div className="text-xs font-bold text-slate-200 mb-1">How long does it take?</div>
                         <p className="text-xs text-[#64748b] leading-relaxed">
-                            Processing typically takes 5-15 minutes. The AI downloads the video, transcribes audio, detects viral moments, generates clips, and renders captions.
+                            Processing typically takes 5-15 minutes. ClipMint transcribes your audio, writes the captions,
+                            auto-edits the pacing, and renders the finished video.
                         </p>
                     </div>
                 </div>

@@ -121,11 +121,13 @@ def build_props(
     pace: dict,
     bgm_src: str | None,
     sfx_enabled: bool | None,
+    layout: str = "cover",
 ) -> dict:
     """Props must match remotion-captions/src/CaptionedClip.tsx exactly.
 
-    `layout: "cover"` because prepare_clips.py already produced a 1080x1920
-    file — the blur-fill letterbox path is only for un-reframed sources.
+    `layout` defaults to "cover" because prepare_clips.py normally produces a
+    1080x1920 file — the blur-fill letterbox path ("fill") is for un-reframed
+    sources, which is what the full-video captions mode hands over.
 
     `hasAudio` is the safety interlock for the audio analyser: Remotion's
     `useWindowedAudioData` calls `cancelRender()` (uncatchable) when it cannot
@@ -146,7 +148,7 @@ def build_props(
         "fontSize": 68,
         "trimStartSec": 0,
         "trimEndSec": 0,
-        "layout": "cover",
+        "layout": layout,
         "platform": platform,
         "showWatermark": True,
         "brandText": "CLIPMINT",
@@ -154,6 +156,8 @@ def build_props(
         "hasAudio": has_audio,
         "audioReactive": os.environ.get("CLIPMINT_AUDIO_REACTIVE", "1") == "1" and has_audio,
     }
+    if os.environ.get("CLIPMINT_AUTO_PUNCH_IN", "0") == "1":
+        props["autoPunchIn"] = True
     props.update(pace)
     if bgm_src:
         props["bgmSrc"] = bgm_src
@@ -242,6 +246,7 @@ def render_one(
     props = build_props(
         public_clip, captions_json, duration_frames, style, platform,
         bool(entry.get("has_audio")), pace, bgm_src, sfx_enabled,
+        layout=entry.get("layout") or "cover",
     )
     props_file = props_dir / f"props_{index:03d}{suffix}.json"
     props_file.write_text(json.dumps(props))

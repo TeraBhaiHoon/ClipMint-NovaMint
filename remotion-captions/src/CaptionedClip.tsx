@@ -187,6 +187,14 @@ export const captionedClipSchema = z.object({
      */
     motionBlur: z.boolean().default(false),
 
+    // ── Auto punch-in (auto-edit) ────────────────────────────────────────────
+    /**
+     * Subtle zoom pulse on sentence starts (derived from caption punctuation,
+     * at most one every 2.5s). The auto-editor's punch-in toggle: adds motion
+     * energy to static talking-head footage with zero upstream re-encode.
+     */
+    autoPunchIn: z.boolean().default(false),
+
     // ── SFX + BGM ──────────────────────────────────────────────────────────
     /**
      * Render the SFX bed: `sfx/pop.wav` on the first word of every caption
@@ -830,6 +838,7 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
     audioReactive,
     fadeEdge,
     motionBlur,
+    autoPunchIn,
     sfxEnabled,
     bgmSrc,
     bgmVolume,
@@ -883,6 +892,43 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
         });
     }, [tokens, maxWordsPerPage, maxCharsPerPage, pageBreakGapMs]);
 
+    // ── Auto punch-in (auto-edit) ─────────────────────────────────────────
+    // Sentence starts (a word following . ! ? … or the very first word) get a
+    // short zoom pulse, throttled to one per 2.5s so it reads as deliberate
+    // editing, not jitter. Derived purely from caption timing — no extra
+    // upstream analysis.
+    const punchTimesMs = useMemo(() => {
+        if (!autoPunchIn || tokens.length === 0) return [];
+        const out: number[] = [];
+        let last = -Infinity;
+        tokens.forEach((tok, i) => {
+            const startsSentence =
+                i === 0 || /[.!?\u2026]$/.test(tokens[i - 1].text);
+            if (startsSentence && tok.fromMs - last >= 2500) {
+                out.push(tok.fromMs);
+                last = tok.fromMs;
+            }
+        });
+        return out;
+    }, [autoPunchIn, tokens]);
+
+    const punchScale = useMemo(() => {
+        if (punchTimesMs.length === 0) return 1;
+        const nowMs = (frame / fps) * 1000;
+        for (let i = punchTimesMs.length - 1; i >= 0; i--) {
+            const dt = nowMs - punchTimesMs[i];
+            if (dt < 0) continue;
+            if (dt > 700) break;
+            // 150ms ease-in to 1.06, 550ms ease-out back to 1.
+            const p = dt <= 150 ? dt / 150 : 1 - (dt - 150) / 550;
+            return 1 + 0.06 * Math.max(0, p);
+        }
+        return 1;
+    }, [punchTimesMs, frame, fps]);
+
+    const videoScaleTransform =
+        punchScale !== 1 ? `scale(${punchScale.toFixed(4)})` : undefined;
+
     const maxCaptionWidth = width - SAFE_AREAS[platform].left - SAFE_AREAS[platform].right;
 
     // Pops are capped: beyond 60 pages the per-page pop bed is skipped entirely.
@@ -913,7 +959,7 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
 
             {videoSrc ? (
                 layout === "fill" ? (
-                    <>
+                    <AbsoluteFill style={{ transform: videoScaleTransform }}>
                         {/* Landscape source: blurred backdrop. Muted so the audio
                             track is not mixed in twice and doubled in volume. */}
                         <AbsoluteFill>
@@ -945,10 +991,10 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
                                 style={{ width: "100%", height: "100%", objectFit: "contain" }}
                             />
                         </AbsoluteFill>
-                    </>
+                    </AbsoluteFill>
                 ) : (
                     /* Clip already fills 9:16 — single decoder, no letterbox. */
-                    <AbsoluteFill>
+                    <AbsoluteFill style={{ transform: videoScaleTransform }}>
                         <Video
                             src={staticFile(videoSrc)}
                             trimBefore={trimBeforeFrames}

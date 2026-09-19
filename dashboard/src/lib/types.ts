@@ -90,6 +90,12 @@ export interface Job {
     viral_moments: unknown;
     github_run_id: string | null;
     checkpoint_url: string | null;
+    /** "clips" = cut viral moments; "captions" = caption the whole video. */
+    job_mode: "clips" | "captions" | null;
+    remove_silences: boolean | null;
+    auto_punch_in: boolean | null;
+    /** Private video-uploads bucket path (source of a fresh signed URL). */
+    video_storage_path: string | null;
     started_at: string | null;
     completed_at: string | null;
     created_at: string;
@@ -115,6 +121,9 @@ export interface Clip {
     drive_file_id: string | null;
     drive_url: string | null;
     thumbnail_url: string | null;
+    /** Private clip-outputs bucket paths — served only via signed URLs. */
+    storage_path: string | null;
+    thumbnail_path: string | null;
     status: ClipStatus;
     published_platforms: string[] | null;
     scheduled_at: string | null;
