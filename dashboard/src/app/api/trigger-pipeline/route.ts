@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/server";
 import { validateVideoUrl } from "@/lib/validateUrl";
+import { r2Configured, r2PresignGet } from "@/lib/r2";
 
 /**
  * POST /api/trigger-pipeline
@@ -92,20 +93,21 @@ export async function POST(request: NextRequest) {
     // here on every dispatch (including retries days later).
     let sourceUrl = job.video_url;
     if (job.video_storage_path) {
-        const adminClient = createServiceClient();
-        if (!adminClient) {
-            await failJob(quotaClient, job.id, "Storage is not configured. Please contact support.");
-            return NextResponse.json({ error: "Storage is not configured." }, { status: 500 });
+        // Uploaded sources live in the R2 cache under sources/ (evicted after
+        // 7 days; deleted right after a successful job). A fresh presigned URL
+        // is minted on EVERY dispatch, so a retry days later still works.
+        if (!r2Configured()) {
+            const message = "Video uploads are not configured yet. Please contact support.";
+            await failJob(quotaClient, job.id, message);
+            return NextResponse.json({ error: message }, { status: 503 });
         }
-        const { data: signed, error: signError } = await adminClient.storage
-            .from("video-uploads")
-            .createSignedUrl(job.video_storage_path, 60 * 60 * 24 * 7);
-        if (signError || !signed?.signedUrl) {
+        const signed = await r2PresignGet(job.video_storage_path, 60 * 60 * 24);
+        if (!signed) {
             const message = "Your uploaded video could not be read. Please upload it again.";
             await failJob(quotaClient, job.id, message);
             return NextResponse.json({ error: message }, { status: 400 });
         }
-        sourceUrl = signed.signedUrl;
+        sourceUrl = signed;
     }
 
     // ── Validate the source URL (defence in depth: it is interpolated into a

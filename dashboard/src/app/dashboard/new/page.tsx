@@ -63,6 +63,7 @@ export default function NewVideoPage() {
         { value: "custom", label: "My track" },
     ];
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [uploadPct, setUploadPct] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [sourceType, setSourceType] = useState<"url" | "file" | "drive">("url");
     const [currentStep, setCurrentStep] = useState(1);
@@ -132,35 +133,43 @@ export default function NewVideoPage() {
         const effectiveMaxClips = Math.min(maxClips, remaining);
         if (effectiveMaxClips !== maxClips) setMaxClips(effectiveMaxClips);
 
-        // ── Upload the source video (private bucket, own folder) ──
+        // ── Upload the source video straight to the R2 cache ──
+        // The presign route issues a server-generated key (own folder), the
+        // browser PUTs directly to R2 — Vercel functions cannot proxy large
+        // bodies. The key lands on the job row; the dispatch route mints a
+        // fresh presigned READ URL on every run.
         if (sourceType === "file" && videoFile) {
-            const ext = (videoFile.name.split(".").pop() || "mp4").toLowerCase();
-            videoStoragePath = `${user.id}/source-${Date.now()}.${ext}`;
-            const { error: upErr } = await supabase.storage
-                .from("video-uploads")
-                .upload(videoStoragePath, videoFile, {
-                    contentType: videoFile.type || "video/mp4",
-                    upsert: false,
-                });
-            if (upErr) {
-                setError(`Video upload failed: ${upErr.message}`);
+            const presignRes = await fetch("/api/uploads/presign", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ filename: videoFile.name, size: videoFile.size }),
+            });
+            const presign = await presignRes.json().catch(() => null);
+            if (!presignRes.ok || !presign?.url || !presign?.key) {
+                setError(presign?.error || "Could not start the upload. Please try again.");
                 setIsSubmitting(false);
                 return;
             }
-            // Initial signed URL for the job row; the dispatch route mints a
-            // fresh one from video_storage_path on every run, so expiry is fine.
-            const { data: signed } = await supabase.storage
-                .from("video-uploads")
-                .createSignedUrl(videoStoragePath, 60 * 60 * 24 * 7);
-            if (!signed?.signedUrl) {
-                setError("Upload succeeded but the video could not be prepared. Please try again.");
+            const uploaded = await new Promise<boolean>((resolve) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open("PUT", presign.url);
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100));
+                };
+                xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
+                xhr.onerror = () => resolve(false);
+                xhr.send(videoFile);
+            });
+            setUploadPct(null);
+            if (!uploaded) {
+                setError("Video upload failed. Check your connection and try again.");
                 setIsSubmitting(false);
                 return;
             }
-            normalizedUrl = signed.signedUrl;
+            videoStoragePath = presign.key as string;
         }
 
-        if (!normalizedUrl) { setIsSubmitting(false); return; }
+        if (!normalizedUrl && !videoStoragePath) { setIsSubmitting(false); return; }
 
         // Reserve a video slot atomically before creating anything, so two tabs
         // (or a retry storm) cannot push videos_used past the limit.
@@ -200,6 +209,7 @@ export default function NewVideoPage() {
         }
         const jobRow: Record<string, unknown> = {
             user_id: user.id, video_url: normalizedUrl,
+            video_filename: videoFile?.name ?? null,
             source_type: sourceType === "url" ? "url" : sourceType === "drive" ? "drive" : "upload",
             caption_style: captionStyle, max_clips: effectiveMaxClips, status: "queued", progress: 0,
             job_mode: jobMode,
@@ -591,7 +601,9 @@ export default function NewVideoPage() {
                     disabled={isSubmitting || !hasSource}
                 >
                     {isSubmitting ? (
-                        <><Loader2 size={18} className="animate-spin" /> Processing...</>
+                        uploadPct !== null
+                            ? <><Loader2 size={18} className="animate-spin" /> Uploading {uploadPct}%…</>
+                            : <><Loader2 size={18} className="animate-spin" /> Processing...</>
                     ) : (
                         <><Sparkles size={18} /> Start Processing <ArrowRight size={18} /></>
                     )}

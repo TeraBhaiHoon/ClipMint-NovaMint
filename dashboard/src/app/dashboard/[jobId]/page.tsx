@@ -77,9 +77,11 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     const [previewClip, setPreviewClip] = useState<Clip | null>(null);
     // Ticks on every poll so the "stuck" check re-evaluates without extra timers.
     const [now, setNow] = useState(() => Date.now());
-    // Signed URLs (1-hour TTL) for clips stored in the private bucket, keyed by
-    // clip id. Minted by an ownership-checked API route — never public links.
-    const [mediaLinks, setMediaLinks] = useState<Record<string, { url: string | null; thumbnailUrl: string | null }>>({});
+    // Signed thumbnail URLs (1-hour TTL), keyed by clip id, minted by an
+    // ownership-checked API route — never public links. Video downloads do
+    // NOT need presigned state: their button hits the download route, which
+    // re-materialises from the Drive archive when the R2 cache has expired.
+    const [mediaLinks, setMediaLinks] = useState<Record<string, { thumbnailUrl: string | null }>>({});
     const linksFetchedAtRef = useRef(0);
     const inFlightRef = useRef(false);
     const statusRef = useRef<JobStatus | null>(null);
@@ -209,54 +211,38 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
         setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 10000);
     };
 
-    /** Save a file from a direct URL (signed storage link). */
-    const saveFromUrl = async (url: string, filename: string) => {
-        try {
-            const res = await fetch(url);
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const blob = await res.blob();
-            const objectUrl = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = objectUrl;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(objectUrl), 30000);
-        } catch (err) {
-            console.warn("Download failed, opening in a new tab instead:", err);
-            window.open(url, "_blank", "noopener");
-        }
-    };
-
-    /** True when this clip is served from private storage (signed URL path). */
+    /** True when this clip is served from the R2 delivery cache. */
     const isStored = (clip: Clip) => Boolean(clip.storage_path);
 
-    const handleDownload = async (clip: Clip) => {
-        if (isStored(clip)) {
-            await loadLinks(true);
-            const url = mediaLinks[clip.id]?.url;
-            if (url) return saveFromUrl(url, clip.filename);
-        }
+    /**
+     * Download through the ownership-checked route: a 302 to a presigned R2
+     * URL — or, when the 24h cache evicted the clip, a one-file re-materialisation
+     * from the Drive archive first. The hidden iframe lets downloads run without
+     * navigating away and stays alive until the archive pull has finished.
+     */
+    const triggerRouteDownload = (clip: Clip, kind: "video" | "thumb" = "video") => {
+        const iframe = document.createElement("iframe");
+        iframe.style.display = "none";
+        iframe.src = `/api/clips/${clip.id}/download${kind === "thumb" ? "?kind=thumb" : ""}`;
+        document.body.appendChild(iframe);
+        setTimeout(() => { if (document.body.contains(iframe)) document.body.removeChild(iframe); }, 120000);
+    };
+
+    const handleDownload = (clip: Clip) => {
+        if (isStored(clip)) return triggerRouteDownload(clip);
         if (clip.drive_url) triggerDownload(clip.drive_url);
     };
 
-    const handleDownloadAll = async () => {
+    const handleDownloadAll = () => {
         if (clips.length === 0) return;
         setDownloadingAll(true);
-        await loadLinks(true);
-        for (let i = 0; i < clips.length; i++) {
-            const clip = clips[i];
-            const signedUrl = mediaLinks[clip.id]?.url;
-            if (signedUrl) {
-                await saveFromUrl(signedUrl, clip.filename);
-            } else if (clip.drive_url) {
-                // Legacy rows without private storage keep the archive path.
-                triggerDownload(clip.drive_url);
-            }
-            await new Promise((r) => setTimeout(r, 600));
-        }
-        setDownloadingAll(false);
+        clips.forEach((clip, i) => {
+            setTimeout(() => {
+                if (isStored(clip)) triggerRouteDownload(clip);
+                else if (clip.drive_url) triggerDownload(clip.drive_url);
+                if (i === clips.length - 1) setDownloadingAll(false);
+            }, i * 1200);
+        });
     };
 
     const handleCopy = (clipId: string, text: string) => {
@@ -296,13 +282,16 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     const isProcessing = !["done", "failed", "queued", "cancelled"].includes(job.status);
     const runningSince = new Date(job.started_at || job.created_at).getTime();
     const isStuck = !isTerminalStatus(job.status) && runningSince > 0 && now - runningSince > STUCK_AFTER_MS;
-    const previewDriveId = previewClip && !mediaLinks[previewClip.id]?.url
+    const previewDriveId = previewClip && !isStored(previewClip)
         ? parseDriveFileId(previewClip) : null;
-    const previewStreamUrl = previewClip ? mediaLinks[previewClip.id]?.url ?? null : null;
+    // The download endpoint re-materialises from the Drive archive when the
+    // R2 cache has expired, then 302s to a presigned inline URL — so <video>
+    // can point at it directly.
+    const previewStreamUrl = previewClip && isStored(previewClip)
+        ? `/api/clips/${previewClip.id}/download?inline=1` : null;
 
-    const openPreview = async (clip: Clip) => {
+    const openPreview = (clip: Clip) => {
         setPreviewClip(clip);
-        if (isStored(clip)) await loadLinks(true);
     };
 
     return (
@@ -551,7 +540,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                 <div className="flex gap-1.5 mt-auto">
                                     <button 
                                         className="btn-primary flex-1 justify-center py-2 px-2.5 text-xs font-semibold shadow-md" 
-                                        onClick={() => void handleDownload(clip)}
+                                        onClick={() => handleDownload(clip)}
                                         disabled={!isStored(clip) && !clip.drive_url}
                                     >
                                         <Download size={13} /> Video
@@ -560,14 +549,8 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                         <button 
                                             className="btn-secondary py-2 px-2.5 text-xs font-semibold" 
                                             onClick={() => {
-                                                const signedThumb = mediaLinks[clip.id]?.thumbnailUrl;
-                                                const thumb = signedThumb || clip.thumbnail_url;
-                                                if (!thumb) return;
-                                                if (signedThumb) {
-                                                    void saveFromUrl(thumb, clip.filename.replace(/\.mp4$/, "") + "_thumb.jpg");
-                                                } else {
-                                                    triggerDownload(thumb);
-                                                }
+                                                if (isStored(clip)) triggerRouteDownload(clip, "thumb");
+                                                else if (clip.thumbnail_url) triggerDownload(clip.thumbnail_url);
                                             }} 
                                             title="Download Thumbnail"
                                         >
@@ -651,7 +634,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                             <div className="flex gap-1.5 flex-shrink-0">
                                 <button
                                     className="btn-primary py-1.5 px-3 text-[11px] font-semibold"
-                                    onClick={() => void handleDownload(previewClip)}
+                                    onClick={() => handleDownload(previewClip)}
                                 >
                                     <Download size={12} /> Download
                                 </button>

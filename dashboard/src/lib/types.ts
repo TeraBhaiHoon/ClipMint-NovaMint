@@ -121,9 +121,11 @@ export interface Clip {
     drive_file_id: string | null;
     drive_url: string | null;
     thumbnail_url: string | null;
-    /** Private clip-outputs bucket paths — served only via signed URLs. */
+    /** R2 delivery-cache keys (Drive is the archive; R2 evicts after 24h). */
     storage_path: string | null;
     thumbnail_path: string | null;
+    /** Drive file id of the thumbnail — used to restore it after eviction. */
+    thumbnail_drive_id: string | null;
     status: ClipStatus;
     published_platforms: string[] | null;
     scheduled_at: string | null;

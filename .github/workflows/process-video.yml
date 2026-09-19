@@ -1281,35 +1281,43 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 12b. Publish to private storage (user downloads never touch Drive)
+      # 12b. Publish to the R2 delivery cache (Drive stays the archive)
       # ─────────────────────────────────────────────────────────────────────
-      # The Drive folder stays the internal archive. Users download through a
-      # PRIVATE Supabase bucket, served by ownership-checked signed URLs from
-      # the dashboard — fixing Google's "request access" wall without making
-      # anybody's clips publicly reachable.
-      - name: Publish clips to private storage
+      # R2 holds ONLY fresh output: its lifecycle rules evict delivery/ after
+      # 1 day (sources/ after 7). The dashboard re-materialises older clips
+      # from the Drive archive on demand. The rendered files are still LOCAL
+      # at this point, so they upload straight from disk — no Drive round-trip.
+      - name: Publish clips to R2 delivery cache
         continue-on-error: true
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           JOB_ID: ${{ inputs.job_id }}
         run: |
           set -euo pipefail
           echo "publish" > workspace/.current_step
+          if [ -z "${R2_ACCOUNT_ID:-}" ] || [ -z "${R2_ACCESS_KEY_ID:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
+            echo "R2 not configured -- skipping publish (dashboard falls back to the archive)"
+            exit 0
+          fi
+          export RCLONE_CONFIG_R2_TYPE=s3
+          export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+          export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
           python3 - <<'PY'
-          import json, os, shutil, subprocess, urllib.request
+          import json, os, subprocess
           from pathlib import Path
 
           job_id = os.environ["JOB_ID"]
-          sb_url = os.environ["SUPABASE_URL"].rstrip("/")
-          sb_key = os.environ["SUPABASE_SERVICE_KEY"]
-          manifest = json.load(open("workspace/output/upload_manifest.json"))
-          clips = manifest.get("clips", [])
-          remote = subprocess.run(["rclone", "listremotes"], capture_output=True,
-                                  text=True).stdout.split(":")[0].strip()
-          folder_id = manifest.get("folder_id", "")
-          base = "ClipMint/" + job_id
-          dl = Path("workspace/output/_dl"); dl.mkdir(parents=True, exist_ok=True)
+          remote = "R2:" + os.environ["R2_BUCKET"]
+          base = "delivery/" + job_id
+
+          def sh(*args):
+              return subprocess.run(args, capture_output=True, text=True)
 
           def variant_of(name):
               for variant, suffix in (("9x16", "_captioned.mp4"), ("1x1", "_1x1.mp4"),
@@ -1318,68 +1326,57 @@ jobs:
                       return variant, name[: -len(suffix)]
               return "9x16", name[: -len(".mp4")]
 
-          thumb_ids = {}
-          resp = subprocess.run(["rclone", "lsjson", "%s:%s/thumbnails" % (remote, base),
-                                 "--drive-root-folder-id=" + folder_id],
-                                capture_output=True, text=True)
-          if resp.returncode == 0:
-              for f in json.loads(resp.stdout or "[]"):
-                  thumb_ids[f["Name"].replace("_thumb.jpg", "")] = f.get("ID", "")
-
-          def upload(local, storage_path, content_type):
-              req = urllib.request.Request(
-                  "%s/storage/v1/object/clip-outputs/%s" % (sb_url, storage_path),
-                  data=local.read_bytes(), method="POST",
-                  headers={"Authorization": "Bearer " + sb_key, "apikey": sb_key,
-                           "Content-Type": content_type, "x-upsert": "true"})
-              try:
-                  with urllib.request.urlopen(req, timeout=900) as r:
-                      return r.status in (200, 201)
-              except Exception as exc:
-                  print("  ! upload failed for %s: %s" % (storage_path, exc))
-                  return False
+          # Drive file ids of this job's thumbnails — the dashboard's
+          # re-materialisation path needs them once R2 (1-day lifecycle)
+          # has evicted the copies.
+          gdrive_remote = (sh("rclone", "listremotes").stdout or "").split(":")[0].strip()
+          thumb_drive_ids = {}
+          if gdrive_remote and os.environ.get("GDRIVE_FOLDER_ID", ""):
+              resp = sh("rclone", "lsjson", f"{gdrive_remote}:ClipMint/{job_id}/thumbnails",
+                        f"--drive-root-folder-id={os.environ['GDRIVE_FOLDER_ID']}")
+              if resp.returncode == 0:
+                  try:
+                      for f in json.loads(resp.stdout or "[]"):
+                          thumb_drive_ids[f["Name"].replace("_thumb.jpg", "")] = f.get("ID", "")
+                  except json.JSONDecodeError:
+                      pass
 
           files, published = [], 0
-          for clip in clips:
-              name = clip["name"]
+          for clip_path in sorted(Path("workspace/captioned").glob("*.mp4")):
+              name = clip_path.name
               variant, stem = variant_of(name)
               try:
                   index = int(stem.split("_")[1])
               except (IndexError, ValueError):
                   continue
-              local = dl / name
-              got = subprocess.run(["rclone", "backend", "copyid", remote + ":", clip.get("id", ""),
-                                    str(local)], capture_output=True, text=True)
-              if got.returncode != 0 or not local.exists() or local.stat().st_size == 0:
-                  print("  ! Drive fetch failed for %s: %s" % (name, got.stderr[-200:]))
-                  local.unlink(missing_ok=True)
-                  continue
-              ok = upload(local, job_id + "/" + name, "video/mp4")
-              local.unlink(missing_ok=True)
+              key = f"{base}/{name}"
+              up = sh("rclone", "copyto", str(clip_path), f"{remote}:{key}", "--stats-one-line")
+              ok = up.returncode == 0
+              if ok:
+                  published += 1
+              else:
+                  print(f"  ! R2 upload failed for {name}: {up.stderr[-200:]}")
 
-              thumb_path = ""
-              tid = thumb_ids.get(stem, "")
-              if tid:
-                  tlocal = dl / (stem + "_thumb.jpg")
-                  tgot = subprocess.run(["rclone", "backend", "copyid", remote + ":", tid, str(tlocal)],
-                                        capture_output=True, text=True)
-                  if tgot.returncode == 0 and tlocal.exists() and tlocal.stat().st_size > 0:
-                      tpath = job_id + "/thumbs/" + stem + ".jpg"
-                      if upload(tlocal, tpath, "image/jpeg"):
-                          thumb_path = tpath
-                      tlocal.unlink(missing_ok=True)
+              thumb_key = ""
+              thumb_local = Path("workspace/thumbnails") / f"{stem}_thumb.jpg"
+              if thumb_local.exists():
+                  candidate = f"{base}/thumbs/{stem}.jpg"
+                  tup = sh("rclone", "copyto", str(thumb_local), f"{remote}:{candidate}", "--stats-one-line")
+                  if tup.returncode == 0:
+                      thumb_key = candidate
 
-              files.append({"index": index, "variant": variant, "name": name,
-                            "storage_path": (job_id + "/" + name) if ok else "",
-                            "thumbnail_path": thumb_path})
-              published += 1 if ok else 0
+              files.append({
+                  "index": index, "variant": variant, "name": name,
+                  "storage_path": key if ok else "",
+                  "thumbnail_path": thumb_key,
+                  "thumbnail_drive_id": thumb_drive_ids.get(stem, ""),
+              })
 
-          shutil.rmtree(dl, ignore_errors=True)
           json.dump({"job_id": job_id, "files": files},
                     open("workspace/output/delivery_manifest.json", "w"), indent=2)
-          print("PUBLISH_OK files=%d/%d" % (published, len(clips)))
-          if clips and published == 0:
-              print("WARNING: private-storage publish failed — dashboard falls back to archive links")
+          print(f"PUBLISH_OK files={published}/{len(files)}")
+          if files and published == 0:
+              print("WARNING: R2 publish failed -- dashboard falls back to archive recovery")
           PY
 
       # ─────────────────────────────────────────────────────────────────────
@@ -1465,6 +1462,7 @@ jobs:
                   "thumbnail_url": clip.get("thumbnail_url", ""),
                   "storage_path": (delivery_by.get((index, variant)) or {}).get("storage_path") or None,
                   "thumbnail_path": (delivery_by.get((index, variant)) or {}).get("thumbnail_path") or None,
+                  "thumbnail_drive_id": (delivery_by.get((index, variant)) or {}).get("thumbnail_drive_id") or None,
                   # A clip whose captions failed to render is marked failed rather
                   # than quietly delivered without captions.
                   "status": "ready" if captured else "failed",
@@ -1493,42 +1491,55 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 13b. Clean up the source upload (free-tier hygiene)
+      # 13b. Clean up the source upload (transient by design)
       # ─────────────────────────────────────────────────────────────────────
-      # A successful job deletes its source from the private video-uploads
-      # bucket: the free tier holds only 1 GB total, and nothing needs the
-      # source once the clips exist. FAILED jobs deliberately keep it, so the
-      # Retry button can re-dispatch without re-uploading.
+      # The source lives in the R2 cache only so a retry can reuse it. A
+      # SUCCESSFUL job deletes it immediately; a FAILED job keeps it (Retry
+      # works without re-uploading) and the bucket lifecycle evicts it after
+      # 7 days regardless.
       - name: Clean up source upload
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
           JOB_ID: ${{ inputs.job_id }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import os, sys
+          import os, subprocess, sys
           sys.path.insert(0, "pipeline")
-          import requests
           from db import Supabase
 
           db = Supabase()
           job = db.get_job(os.environ["JOB_ID"])
-          path = (job.get("video_storage_path") or "").strip()
-          if not path:
+          key = (job.get("video_storage_path") or "").strip()
+          if not key:
               print("cleanup: no uploaded source to delete (link-based job)")
               raise SystemExit(0)
-          resp = requests.delete(
-              f"{db.url}/storage/v1/object/video-uploads/{path}",
-              headers={"Authorization": f"Bearer {db.key}", "apikey": db.key},
-              timeout=60,
-          )
-          if resp.status_code in (200, 204):
+          account = os.environ.get("R2_ACCOUNT_ID", "").strip()
+          access = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+          secret = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+          bucket = os.environ.get("R2_BUCKET", "").strip()
+          if not (account and access and secret and bucket):
+              print("cleanup: R2 not configured -- lifecycle will evict the source instead")
+              raise SystemExit(0)
+          env = dict(os.environ,
+                     RCLONE_CONFIG_R2_TYPE="s3",
+                     RCLONE_CONFIG_R2_PROVIDER="Cloudflare",
+                     RCLONE_CONFIG_R2_ACCESS_KEY_ID=access,
+                     RCLONE_CONFIG_R2_SECRET_ACCESS_KEY=secret,
+                     RCLONE_CONFIG_R2_ENDPOINT=f"https://{account}.r2.cloudflarestorage.com")
+          res = subprocess.run(["rclone", "deletefile", f"R2:{bucket}/{key}"],
+                               capture_output=True, text=True, env=env)
+          if res.returncode == 0:
               db.update_job(os.environ["JOB_ID"], video_storage_path=None)
-              print(f"CLEANUP_OK removed source upload {path}")
+              print(f"CLEANUP_OK removed source upload {key}")
           else:
-              print(f"cleanup: delete failed HTTP {resp.status_code}: {resp.text[:200]}")
+              print(f"cleanup: rclone deletefile failed: {res.stderr[-200:]}")
           PY
 
       # ─────────────────────────────────────────────────────────────────────
