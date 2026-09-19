@@ -336,7 +336,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
                         <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-1">SOURCE</div>
-                        <div className="text-xs text-slate-300 font-semibold whitespace-nowrap overflow-hidden text-ellipsis">{job.video_url || job.video_filename || "—"}</div>
+                        <div className="text-xs text-slate-300 font-semibold whitespace-nowrap overflow-hidden text-ellipsis">{job.source_title || job.video_url || job.video_filename || "—"}</div>
                     </div>
                     <div>
                         <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-1">CAPTION STYLE</div>

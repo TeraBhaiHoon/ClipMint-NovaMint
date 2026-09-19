@@ -96,6 +96,8 @@ export interface Job {
     auto_punch_in: boolean | null;
     /** Private video-uploads bucket path (source of a fresh signed URL). */
     video_storage_path: string | null;
+    /** Real title from the source platform (yt-dlp), set by the pipeline. */
+    source_title: string | null;
     started_at: string | null;
     completed_at: string | null;
     created_at: string;

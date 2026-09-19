@@ -354,6 +354,8 @@ jobs:
         env:
           VIDEO_URL: ${{ inputs.video_url }}
           YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           set -euo pipefail
           echo "download" > workspace/.current_step
@@ -470,6 +472,7 @@ jobs:
           # is an optimisation, never a gate.
           python3 - <<'PY'
           import json, os, subprocess
+          import requests
 
           url = os.environ["VIDEO_URL"]
           path_only = url.split("?")[0].lower()
@@ -507,6 +510,16 @@ jobs:
                   }
                   json.dump(meta, open("workspace/source/metadata.json", "w"))
                   print(f"METADATA_OK chapters={len(meta['chapters'])} title={meta['title'][:60]!r}")
+                  # Show the real video title on the dashboard job page.
+                  try:
+                      requests.patch(
+                          f"{os.environ['SUPABASE_URL'].rstrip('/')}/rest/v1/jobs?id=eq.{os.environ['JOB_ID']}",
+                          headers={"apikey": os.environ["SUPABASE_SERVICE_KEY"],
+                                   "Authorization": f"Bearer {os.environ['SUPABASE_SERVICE_KEY']}",
+                                   "Content-Type": "application/json", "Prefer": "return=minimal"},
+                          data=json.dumps({"source_title": meta["title"]}), timeout=30)
+                  except Exception as exc:
+                      print(f"source_title patch failed: {exc}")
               else:
                   print("metadata: dump empty — continuing without it")
           PY
@@ -860,6 +873,7 @@ jobs:
               print("FATAL: no captions to analyse"); sys.exit(1)
 
           # ── Source metadata / chapters (backlog 2.2) ─────────────────────
+          meta = None
           chapters = []
           try:
               meta = json.load(open("workspace/source/metadata.json"))
@@ -874,6 +888,26 @@ jobs:
           except (OSError, ValueError):
               pass
           print(f"chapters: {len(chapters)}")
+
+          # ── Whole-video briefing (enterprise context) ─────────────────
+          # One compact briefing from the ENTIRE transcript + the creator's
+          # own metadata, injected into every prompt below so mood, titles,
+          # descriptions and clip selection all carry whole-video context.
+          # Long videos are sectioned and merged inside build_briefing, so
+          # quality holds for 10-minute and 4-hour uploads alike. Best-effort:
+          # a briefing failure degrades to the old per-window behaviour.
+          from video_briefing import build_briefing, context_block
+          brief = build_briefing(captions, meta)
+          CONTEXT = context_block(brief, meta)
+          if brief:
+              print(f"briefing: built (language={brief.get('language')!r} "
+                    f"mood_prior={brief.get('mood_prior')!r} sections={brief.get('sections_analysed')})")
+          else:
+              print("briefing: unavailable — prompts run without whole-video context")
+
+          # ── Audio-energy signal (already computed by astats) ──────────
+          from audio_energy import load_series, window_stats, summarise
+          energy_series = load_series("workspace/audio/energy.txt")
 
           # ── Time-indexed transcript windows ──────────────────────────────
           text, timemap = "", []
@@ -933,7 +967,7 @@ jobs:
                   f"alone as a short vertical video.{length_hint} Be generous, but only "
                   "include moments with a clear beginning and end.\n\n"
                   f"{DURATION_GUIDANCE}\n\n"
-                  f"Transcript:\n{w['text']}{chapters_for(w['start'], w['end'])}"
+                  f"Transcript:\n{w['text']}{chapters_for(w['start'], w['end'])}{CONTEXT}"
               )
               try:
                   candidates = ask(
@@ -952,7 +986,22 @@ jobs:
                   "2) STANDALONE: understandable with zero context?\n"
                   "3) EMOTION: humour, surprise, tension or insight?\n"
                   "4) SHAREABILITY: would someone send this to a friend?\n"
-                  "5) COMPLETENESS: clean start and a satisfying end?\n\n"
+                  "TITLES & DESCRIPTIONS (scored too — bad copy = bad clip):\n"
+                  "- title: max 60 characters, hook-first, in the SAME language the "
+                  "speaker is using (see Spoken language in the context), using the real "
+                  "names/terms from the transcript or the creator's own title/tags.\n"
+                  "- description: 1-2 standalone sentences that make the clip clickable "
+                  "without the rest of the video. No clickbait cliches.\n"
+                  "- hashtags: exactly 5, mixing the topic and the niche.\n\n"
+                  "MOOD (drives background music — get it right):\n"
+                  "- energetic: hype, rants, comedy bits, sports, fast banter\n"
+                  "- calm: storytelling, interviews, personal vlogs, reflective moments\n"
+                  "- corporate: tutorials, business/finance explainers, tech reviews\n"
+                  "- inspiring: motivational speeches, transformation stories, big ideas\n"
+                  "Default to the video-level mood prior from the context; override it ONLY "
+                  "when this section's own content clearly diverges, and weigh the "
+                  "measured audio energy below.\n\n"
+                  f"{energy_summary}\n\n"
                   'Return JSON: {"clips": [{"start_time": <float seconds>, '
                   '"end_time": <float seconds>, "viral_score": <sum of the five scores, 5-100>, '
                   '"title": "...", "description": "...", "hashtags": ["#a", ...5 items], '
@@ -961,7 +1010,7 @@ jobs:
                   '"mood": "energetic"|"calm"|"corporate"|"inspiring"}]}\n'
                   f"start_time must fall between {w['start']:.1f} and {w['end']:.1f}. "
                   "Aim for 20-60 second clips unless the idea genuinely needs longer.\n\n"
-                  f"Candidates:\n{candidates}"
+                  f"Candidates:\n{candidates}{CONTEXT}"
               )
               try:
                   parsed = json.loads(ask(
