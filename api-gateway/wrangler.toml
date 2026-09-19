@@ -13,7 +13,7 @@ compatibility_date = "2024-12-01"
 # vikashbuilds.in is the temporary split-account domain; novamintnetworks.in
 # is the final agency domain once the project is reimported on the main
 # Vercel account. Both stay valid so no redeploy is needed at the switch.
-CORS_ORIGIN = "https://clipmint.vikashbuilds.in,https://clipmint.novamintnetworks.in"
+CORS_ORIGIN = "https://clipmint.novamintnetworks.in"
 RATE_LIMIT_PER_MINUTE = 30
 
 # KV namespace for rate limiting and caching
