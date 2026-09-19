@@ -77,6 +77,16 @@ on:
         required: false
         default: "false"
         type: string
+      bgm_mood:
+        description: "BGM mood override (auto = AI-chosen per clip)"
+        required: false
+        default: "auto"
+        type: string
+      custom_bgm_url:
+        description: "Direct URL to a user-supplied BGM track (mp3/wav); overrides the mood library"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: clipmint-${{ github.event.inputs.job_id }}
@@ -1045,13 +1055,40 @@ jobs:
       - name: "Mark: captioning"
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status captioning --progress 70
 
+      - name: Fetch custom BGM
+        if: ${{ inputs.custom_bgm_url != '' }}
+        env:
+          CUSTOM_BGM_URL: ${{ inputs.custom_bgm_url }}
+        run: |
+          set -euo pipefail
+          echo "custom_bgm" > workspace/.current_step
+          curl -fsSL --max-time 120 -o "remotion-captions/public/bgm/_custom.mp3" "$CUSTOM_BGM_URL"
+          SIZE=$(stat --printf='%s' "remotion-captions/public/bgm/_custom.mp3")
+          DUR=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 \
+            "remotion-captions/public/bgm/_custom.mp3" || echo 0)
+          echo "custom BGM: ${SIZE} bytes, ${DUR}s"
+          SIZE_OK=0; DUR_OK=0
+          [ "$SIZE" -le 26214400 ] && SIZE_OK=1
+          python3 -c "import sys; d=float('${DUR}' or 0); sys.exit(0 if 5<=d<=900 else 1)" && DUR_OK=1 || true
+          if [ "$SIZE_OK" = 1 ] && [ "$DUR_OK" = 1 ]; then
+            echo "CLIPMINT_CUSTOM_BGM=bgm/_custom.mp3" > workspace/custom_bgm.env
+          else
+            echo "custom BGM invalid — falling back to the mood library"
+            rm -f "remotion-captions/public/bgm/_custom.mp3"
+          fi
+
       - name: Render captions
         env:
           OUTPUT_FORMATS: ${{ inputs.output_formats }}
           CAPTION_PACE: ${{ inputs.caption_pace }}
+          CLIPMINT_BGM_MOOD: ${{ inputs.bgm_mood }}
         run: |
           set -euo pipefail
           echo "render_captions" > workspace/.current_step
+          if [ -f workspace/custom_bgm.env ]; then
+            source workspace/custom_bgm.env
+            export CLIPMINT_CUSTOM_BGM
+          fi
           python3 pipeline/render_clips.py \
             --clipsdir workspace/clips \
             --outdir workspace/captioned \

@@ -198,7 +198,7 @@ export const captionedClipSchema = z.object({
     /** File name inside public/ of the background music track. Empty = none. */
     bgmSrc: z.string().default(""),
     /** BGM mixing level. The voice/SFX bed sits on top of this. */
-    bgmVolume: z.number().min(0).max(1).default(0.12),
+    bgmVolume: z.number().min(0).max(1).default(0.16),
 });
 
 export type CaptionedClipProps = z.infer<typeof captionedClipSchema>;

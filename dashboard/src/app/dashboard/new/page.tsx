@@ -32,6 +32,19 @@ export default function NewVideoPage() {
     const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("hormozi");
     const [captionPace, setCaptionPace] = useState<CaptionPace>("balanced");
     const [maxClips, setMaxClips] = useState(10);
+    // BGM choice: "auto" = AI mood pick, a mood name, "none", or "custom" with
+    // an uploaded track (stored in Supabase Storage, URL saved on the job).
+    const [bgmChoice, setBgmChoice] = useState<"auto" | "energetic" | "calm" | "corporate" | "inspiring" | "none" | "custom">("auto");
+    const [bgmFile, setBgmFile] = useState<File | null>(null);
+    const BGM_CHOICES: { value: typeof bgmChoice; label: string }[] = [
+        { value: "auto", label: "Auto (AI mood)" },
+        { value: "energetic", label: "Energetic" },
+        { value: "calm", label: "Calm" },
+        { value: "corporate", label: "Corporate" },
+        { value: "inspiring", label: "Inspiring" },
+        { value: "none", label: "No BGM" },
+        { value: "custom", label: "My track" },
+    ];
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [sourceType, setSourceType] = useState<"url" | "upload">("url");
@@ -102,11 +115,37 @@ export default function NewVideoPage() {
             reservedSlot = true;
         }
 
-        const { data, error: insertError } = await supabase.from("jobs").insert({
+        // Upload a user-supplied BGM track (if any) BEFORE the job row exists,
+        // keyed by the user id so RLS keeps folders private-per-owner.
+        let customBgmUrl: string | null = null;
+        if (bgmChoice === "custom" && bgmFile) {
+            if (bgmFile.size > 25 * 1024 * 1024) {
+                setError("Your BGM track is over 25 MB. Please upload a smaller file.");
+                setIsSubmitting(false); return;
+            }
+            const ext = (bgmFile.name.split(".").pop() || "mp3").toLowerCase();
+            const path = `${user.id}/bgm-${Date.now()}.${ext}`;
+            const { error: upErr } = await supabase.storage
+                .from("bgm-uploads")
+                .upload(path, bgmFile, { contentType: bgmFile.type || "audio/mpeg" });
+            if (upErr) {
+                setError(`BGM upload failed: ${upErr.message}`);
+                setIsSubmitting(false); return;
+            }
+            customBgmUrl = supabase.storage.from("bgm-uploads").getPublicUrl(path).data.publicUrl;
+        }
+        const jobRow: Record<string, unknown> = {
             user_id: user.id, video_url: normalizedUrl,
             source_type: sourceType === "upload" ? "drive" : sourceType,
             caption_style: captionStyle, max_clips: effectiveMaxClips, status: "queued", progress: 0,
-        }).select("id").single();
+        };
+        // The mood choice travels through the job row the same way the render
+        // reads it: "auto" leaves it to the AI; "none" and named moods override.
+        if (bgmChoice !== "auto" && bgmChoice !== "custom") jobRow.bgm_mood = bgmChoice;
+        if (bgmChoice === "none") jobRow.bgm_mood = "none";
+        if (customBgmUrl) jobRow.custom_bgm_url = customBgmUrl;
+
+        const { data, error: insertError } = await supabase.from("jobs").insert(jobRow).select("id").single();
 
         if (insertError) {
             // Give the reserved slot back if the job could not be created.
@@ -232,6 +271,48 @@ export default function NewVideoPage() {
                         />
                     </div>
                 )}
+
+                {/* ─── Background Music Picker ─── */}
+                <div className="mb-6">
+                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
+                        Background Music <span className="text-slate-500 normal-case font-medium">(SFX always on)</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                        {BGM_CHOICES.map((c) => (
+                            <button
+                                key={c.value} type="button"
+                                onClick={() => { setBgmChoice(c.value); if (c.value !== "custom") setBgmFile(null); }}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                                    bgmChoice === c.value
+                                        ? "border-mint-500 bg-mint-500/10 text-mint-400"
+                                        : "border-white/10 text-slate-400 hover:border-white/20"
+                                }`}
+                            >
+                                {c.label}
+                            </button>
+                        ))}
+                    </div>
+                    {bgmChoice === "custom" && (
+                        <div className="mt-3">
+                            <input
+                                type="file"
+                                accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,.mp3,.wav,.ogg"
+                                onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
+                                className="input-field file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0
+                                           file:bg-mint-500/10 file:text-mint-400 file:text-xs file:font-bold
+                                           text-slate-400 text-xs"
+                            />
+                            {bgmFile && (
+                                <p className="text-xs text-slate-500 mt-1.5">
+                                    {bgmFile.name} · {(bgmFile.size / 1024 / 1024).toFixed(1)} MB
+                                    {bgmFile.size > 25 * 1024 * 1024 && (
+                                        <span className="text-red-400"> — over the 25 MB limit</span>
+                                    )}
+                                </p>
+                            )}
+                        </div>
+                    )}
+                </div>
 
                 {/* ─── Caption Style Picker ─── */}
                 <div className="mb-6">

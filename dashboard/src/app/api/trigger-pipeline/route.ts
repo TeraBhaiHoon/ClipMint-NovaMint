@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     // Verify the job belongs to this user and read the *stored* configuration.
     const { data: job, error: jobError } = await supabase
         .from("jobs")
-        .select("id, user_id, video_url, caption_style, max_clips, status")
+        .select("id, user_id, video_url, caption_style, max_clips, status, bgm_mood, custom_bgm_url")
         .eq("id", job_id)
         .eq("user_id", user.id)
         .single();
@@ -171,6 +171,8 @@ export async function POST(request: NextRequest) {
                     max_clips: String(effectiveMaxClips),
                     caption_pace: captionPace,
                     resume_from_checkpoint: resumeRequested ? "true" : "false",
+                    bgm_mood: job.bgm_mood || "auto",
+                    custom_bgm_url: job.custom_bgm_url || "",
                 },
             }),
         });

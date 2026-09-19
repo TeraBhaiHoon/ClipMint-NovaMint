@@ -60,7 +60,17 @@ GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]
 
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
-DEEPGRAM_PARAMS = {"model": "nova-3", "language": "multi", "smart_format": "true"}
+# keyterm must be REPEATED query params (Deepgram API shape), hence tuples.
+DEEPGRAM_PARAMS: list[tuple[str, str]] = [
+    ("model", "nova-3"),
+    ("language", "multi"),
+    ("smart_format", "true"),
+    ("keyterm", "podcast"),
+    ("keyterm", "vlog"),
+    ("keyterm", "reels"),
+    ("keyterm", "shorts"),
+    ("keyterm", "youtube"),
+]
 
 NIM_URI = "grpc.nvcf.nvidia.com:443"
 NIM_FUNCTION_ID = "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
@@ -154,6 +164,15 @@ def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[
             # wants an ISO-639-1 code and would 400 on anything else.
             if language and language != "multi":
                 form["language"] = language
+            # Bias the model toward the content type and proper-noun handling:
+            # noticeably fewer misspelled names/brand terms than a bare call,
+            # and temperature=0 keeps chunk-to-chunk vocabulary consistent.
+            form["temperature"] = "0"
+            form["initial_prompt"] = (
+                "Podcast, vlog or lecture speech. Keep person names, brand names "
+                "and technical terms exactly as spoken. Romanised Hindi words are "
+                "written the way they are typed on social media."
+            )
             try:
                 with open(path, "rb") as fh:
                     resp = requests.post(

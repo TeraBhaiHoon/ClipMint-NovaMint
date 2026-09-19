@@ -222,11 +222,22 @@ def render_one(
     public_clip = f"_render_{index:03d}{suffix}.mp4"
     shutil.copy2(clip_path, public_dir / public_clip)
 
-    mood = entry.get("mood") or ""
-    bgm_src = bgm_map.get(mood) if mood else None
-    sfx_enabled: bool | None = None
-    if bgm_src:
-        sfx_enabled = os.environ.get("CLIPMINT_SFX", "1") == "1"
+    # ── BGM selection: custom upload > mood library > none ──────────────
+    # SFX is INDEPENDENT of the BGM decision — it used to be coupled, so a
+    # missing mood silently killed the pops/whoosh too.
+    custom_bgm = os.environ.get("CLIPMINT_CUSTOM_BGM", "").strip()
+    env_mood = os.environ.get("CLIPMINT_BGM_MOOD", "").strip()
+    # Priority: explicit user choice > the AI's per-clip mood > energetic.
+    mood = env_mood if env_mood and env_mood != "auto" else (entry.get("mood") or "energetic")
+    bgm_src = bgm_map.get(mood) if (mood and mood != "none") else None
+    if custom_bgm:
+        bgm_src = custom_bgm
+        print(f"  [{index}:{variant}] BGM: custom track ({os.path.basename(custom_bgm)})")
+    elif bgm_src:
+        print(f"  [{index}:{variant}] BGM: {mood} → {bgm_src}")
+    else:
+        print(f"  [{index}:{variant}] BGM: none (mood={mood!r})")
+    sfx_enabled = os.environ.get("CLIPMINT_SFX", "1") == "1"
 
     props = build_props(
         public_clip, captions_json, duration_frames, style, platform,
