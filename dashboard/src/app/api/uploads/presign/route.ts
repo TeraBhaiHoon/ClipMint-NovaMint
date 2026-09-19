@@ -15,7 +15,7 @@ import { r2Configured, r2PresignPut } from "@/lib/r2";
  * soon as the job succeeds.
  */
 
-const MAX_UPLOAD_BYTES = 45 * 1024 * 1024; // mirrors the client-side cap
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024; // mirrors the client-side cap
 const ALLOWED_EXTENSIONS = ["mp4", "mov", "m4v", "webm"];
 const PUT_TTL_SECONDS = 60 * 60; // uploads start immediately after this call
 
@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
     }
     if (size > MAX_UPLOAD_BYTES) {
         return NextResponse.json(
-            { error: "That video is over the 45 MB upload limit. Paste a YouTube/Drive link instead." },
+            { error: "That video is over the 2 GB upload limit. For very large files, paste a YouTube or Drive link instead." },
             { status: 413 }
         );
     }
