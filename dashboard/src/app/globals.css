@@ -956,3 +956,98 @@ input[type="range"]::-webkit-slider-thumb:hover {
     animation: opacity-pulse 1.6s ease-in-out infinite !important;
 }
 @keyframes opacity-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* ══════════════════════════════════════════════════════════════════
+   Landing rebuild (audit 15) — ADDITIVE section styles only.
+   Token layer above is untouched. These classes are used by the
+   marketing surfaces (/, /features, /pricing) so no purple remnants
+   or glass blur survive there.
+   ══════════════════════════════════════════════════════════════════ */
+
+/* Hairline border utility bound to the token */
+.cm-hairline { border-color: var(--border-subtle); }
+
+/* Eyebrow / label — Figtree 600, 11px, +0.14em uppercase (identity §5) */
+.cm-eyebrow {
+    font-family: var(--font-body), "Figtree", sans-serif;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+/* Solid card on --surface-card; hover = lift −2px + mint border + --shadow-lift
+   (identity §6 hover model — no cursor effects, no moving highlights) */
+.cm-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 16px;
+    transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.cm-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(57, 229, 8, 0.30);
+    box-shadow: var(--shadow-lift);
+}
+
+/* Primary CTA: solid mint-500 bg + ink-950 text (contrast rule, §4).
+   Hover brightens via filter + background only. */
+.cm-btn-primary {
+    background: var(--mint-500);
+    color: var(--ink-950);
+    border: none;
+    padding: 12px 28px;
+    border-radius: 12px;
+    font-weight: 600;
+    font-size: 15px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-decoration: none;
+    box-shadow: var(--shadow-rest);
+    transition: background 0.2s ease, filter 0.2s ease, box-shadow 0.2s ease;
+    font-family: inherit;
+}
+.cm-btn-primary:hover {
+    background: var(--mint-400);
+    filter: brightness(1.06);
+    box-shadow: var(--shadow-accent);
+}
+.cm-btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Ghost / secondary CTA: transparent + strong border, mint on hover */
+.cm-btn-ghost {
+    background: transparent;
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    padding: 12px 28px;
+    border-radius: 12px;
+    font-weight: 500;
+    font-size: 15px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-decoration: none;
+    transition: border-color 0.2s ease, background 0.2s ease;
+    font-family: inherit;
+}
+.cm-btn-ghost:hover {
+    border-color: rgba(57, 229, 8, 0.35);
+    background: rgba(57, 229, 8, 0.05);
+}
+
+/* FAQ item recolor (used by /pricing Billing FAQ): mint hover/open borders */
+.faq-item:hover {
+    border-color: rgba(57, 229, 8, 0.25);
+    background: rgba(255, 255, 255, 0.02);
+}
+.faq-item.open {
+    border-color: rgba(57, 229, 8, 0.30);
+}

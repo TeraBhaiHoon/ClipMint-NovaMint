@@ -236,7 +236,7 @@ export default function PricingPage() {
     }
 
     return (
-        <main className="overflow-hidden min-h-screen bg-[#030305] text-[#f8fafc]">
+        <main className="min-h-screen bg-ink-950 text-ink-50">
             <Navbar />
 
             {/* ─── Toast ─── */}
@@ -249,14 +249,12 @@ export default function PricingPage() {
             )}
 
             <div className="max-w-6xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
-                {/* Ambient glow */}
-                <div className="absolute w-[300px] h-[300px] rounded-full bg-mint-500/5 blur-[100px] pointer-events-none top-20 left-1/4" />
-
                 <div className="text-center mb-16">
-                    <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
-                        Simple, <span className="gradient-text bg-text-mint-400">Transparent</span> Pricing
+                    <p className="cm-eyebrow text-mint-300 mb-4">Pricing</p>
+                    <h1 className="text-[clamp(32px,4.5vw,52px)] font-bold leading-[1.08] tracking-[-0.02em] mb-4">
+                        Simple, <span className="text-mint-400">Transparent</span> Pricing
                     </h1>
-                    <p className="text-base sm:text-lg text-slate-400 max-w-lg mx-auto leading-relaxed mb-8">
+                    <p className="text-base sm:text-lg text-ink-300 max-w-lg mx-auto leading-[1.6] mb-8">
                         Start free. Scale as you grow. No hidden fees.
                     </p>
 
@@ -267,7 +265,7 @@ export default function PricingPage() {
                             className={`px-5 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all duration-300 ${
                                 paymentType === "subscription"
                                     ? "border-mint-500 bg-mint-500/10 text-mint-300"
-                                    : "border-white/5 bg-transparent text-slate-400 hover:text-slate-200"
+                                    : "border-white/5 bg-transparent text-ink-300 hover:text-ink-50"
                             }`}
                         >
                             <RefreshCw size={13} />
@@ -278,7 +276,7 @@ export default function PricingPage() {
                             className={`px-5 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all duration-300 ${
                                 paymentType === "one_time"
                                     ? "border-mint-500 bg-mint-500/10 text-mint-300"
-                                    : "border-white/5 bg-transparent text-slate-400 hover:text-slate-200"
+                                    : "border-white/5 bg-transparent text-ink-300 hover:text-ink-50"
                             }`}
                         >
                             <CreditCard size={13} />
@@ -292,7 +290,7 @@ export default function PricingPage() {
                             <button
                                 onClick={() => setAnnual(false)}
                                 className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 ${
-                                    !annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-slate-400 hover:text-slate-200"
+                                    !annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
                                 }`}
                             >
                                 Monthly
@@ -300,12 +298,12 @@ export default function PricingPage() {
                             <button
                                 onClick={() => setAnnual(true)}
                                 className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 flex items-center gap-1.5 ${
-                                    annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-slate-400 hover:text-slate-200"
+                                    annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
                                 }`}
                             >
                                 <span>Annual</span>
                                 <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                                    annual ? "bg-white/20 text-white" : "bg-[#10b981]/15 text-[#10b981]"
+                                    annual ? "bg-ink-950/15 text-ink-950" : "bg-marigold-400/15 text-marigold-400"
                                 }`}>
                                     Save 20%
                                 </span>
@@ -324,8 +322,8 @@ export default function PricingPage() {
                         return (
                             <div
                                 key={plan.name}
-                                className={`glass-card p-8 flex flex-col justify-between ${
-                                    plan.highlighted ? "border-mint-500 border-2 shadow-lg shadow-mint-500/10" : ""
+                                className={`cm-card p-8 flex flex-col justify-between ${
+                                    plan.highlighted ? "border-mint-500/60 shadow-[var(--shadow-accent)]" : ""
                                 }`}
                             >
                                 <div className="relative">
@@ -334,18 +332,18 @@ export default function PricingPage() {
                                             Popular
                                         </div>
                                     )}
-                                    <h3 className="text-lg font-bold text-slate-200 mb-3">
+                                    <h3 className="text-lg font-semibold text-ink-50 mb-3">
                                         {plan.name}
                                     </h3>
                                     <div className="flex items-baseline gap-1 mb-2">
-                                        <span className="gradient-text font-black text-3xl bg-text-mint-400">
+                                        <span className="font-[family-name:var(--font-display)] font-bold text-[34px] leading-none tracking-[-0.02em] text-ink-50">
                                             {paymentType === "one_time"
                                                 ? plan.monthlyPrice
                                                 : annual
                                                     ? plan.annualPrice
                                                     : plan.monthlyPrice}
                                         </span>
-                                        <span className="text-xs text-slate-500 font-medium">
+                                        <span className="text-xs text-ink-500 font-medium">
                                             {isFree
                                                 ? "forever"
                                                 : paymentType === "one_time"
@@ -359,7 +357,7 @@ export default function PricingPage() {
                                         <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold mb-6 ${
                                             paymentType === "subscription"
                                                 ? "bg-mint-500/10 text-mint-300"
-                                                : "bg-[#10b981]/10 text-[#10b981]"
+                                                : "bg-mint-500/10 text-mint-400"
                                         }`}>
                                             {paymentType === "subscription" ? (
                                                 <><RefreshCw size={9} /> <span>Auto-renews</span></>
@@ -373,11 +371,11 @@ export default function PricingPage() {
                                         {plan.features.map((f) => (
                                             <li
                                                 key={f}
-                                                className="flex items-center gap-2.5 text-xs sm:text-sm text-slate-400"
+                                                className="flex items-center gap-2.5 text-xs sm:text-sm text-ink-300"
                                             >
                                                 <CheckCircle2
                                                     size={14}
-                                                    className="text-[#10b981] flex-shrink-0"
+                                                    className="text-mint-400 flex-shrink-0"
                                                 />
                                                 <span>{f}</span>
                                             </li>
@@ -388,7 +386,7 @@ export default function PricingPage() {
                                 {isContactSales ? (
                                     <Link
                                         href="/contact"
-                                        className="btn-secondary w-full py-2.5 text-sm"
+                                        className="cm-btn-ghost w-full py-2.5 text-sm"
                                     >
                                         <span>Contact Sales</span>
                                         <ArrowRight size={14} />
@@ -397,7 +395,7 @@ export default function PricingPage() {
                                     <button
                                         onClick={() => handleCheckout(plan.key)}
                                         disabled={isLoading}
-                                        className={`${plan.highlighted ? "btn-primary" : "btn-secondary"} w-full py-2.5 text-sm`}
+                                        className={`${plan.highlighted ? "cm-btn-primary" : "cm-btn-ghost"} w-full py-2.5 text-sm`}
                                     >
                                         {isLoading ? (
                                             <Loader2 size={14} className="animate-spin" />
@@ -416,21 +414,21 @@ export default function PricingPage() {
 
                 {/* ─── Feature Comparison Table ─── */}
                 <div className="mb-24">
-                    <h2 className="text-2xl sm:text-3xl font-extrabold text-center mb-8">
-                        Compare <span className="gradient-text bg-text-mint-400">Plans</span>
+                    <h2 className="text-[clamp(26px,3.5vw,38px)] font-bold text-center mb-10 tracking-[-0.02em]">
+                        Compare <span className="text-mint-400">Plans</span>
                     </h2>
-                    <div className="glass-card overflow-x-auto p-0">
+                    <div className="cm-card overflow-x-auto p-0">
                         <table className="w-full border-collapse text-sm min-w-[640px]">
                             <thead>
                                 <tr className="border-b border-white/5">
-                                    <th className="text-left py-4 px-6 text-slate-500 font-semibold text-xs uppercase tracking-wider">
+                                    <th className="cm-eyebrow text-left py-4 px-6 text-ink-500">
                                         Feature
                                     </th>
                                     {PLANS.map((p) => (
                                         <th
                                             key={p.name}
                                             className={`text-center py-4 px-3 font-bold text-xs uppercase tracking-wider ${
-                                                p.highlighted ? "text-mint-300 bg-mint-500/5" : "text-slate-300"
+                                                p.highlighted ? "text-mint-300 bg-mint-500/5" : "text-ink-300"
                                             }`}
                                         >
                                             {p.name}
@@ -452,9 +450,9 @@ export default function PricingPage() {
                                 ].map((row, i) => (
                                     <tr
                                         key={row[0]}
-                                        className="border-b border-white/5 last:border-0 hover:bg-white/1"
+                                        className="border-b border-white/5 last:border-0 hover:bg-white/5"
                                     >
-                                        <td className="py-4 px-6 text-slate-400 font-medium">
+                                        <td className="py-4 px-6 text-ink-300 font-medium">
                                             {row[0]}
                                         </td>
                                         {row.slice(1).map((val, j) => {
@@ -463,13 +461,13 @@ export default function PricingPage() {
                                                 <td
                                                     key={j}
                                                     className={`text-center py-4 px-3 ${
-                                                        isHighlight ? "bg-mint-500/2" : ""
+                                                        isHighlight ? "bg-mint-500/5" : ""
                                                     } ${
                                                         val === "✓"
-                                                            ? "text-[#10b981] font-bold"
+                                                            ? "text-mint-400 font-bold"
                                                             : val === "—"
-                                                                ? "text-slate-600"
-                                                                : "text-slate-300 font-medium"
+                                                                ? "text-ink-600"
+                                                                : "text-ink-50 font-medium"
                                                     }`}
                                                 >
                                                     {val}
@@ -485,20 +483,20 @@ export default function PricingPage() {
 
                 {/* ─── Cashfree Trust Badge ─── */}
                 <div className="text-center mb-24">
-                    <div className="glass-card inline-flex items-center gap-3 py-3.5 px-6 border-white/5 hover:border-white/5 transform-none">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#10b981" strokeWidth="2.5" className="flex-shrink-0">
+                    <div className="cm-card inline-flex items-center gap-3 py-3.5 px-6">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#39E508" strokeWidth="2.5" className="flex-shrink-0">
                             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                         </svg>
-                        <span className="text-xs text-slate-400 font-medium leading-none">
-                            Secure payments powered by <strong className="text-slate-200">Cashfree</strong> • 256-bit SSL encryption
+                        <span className="text-xs text-ink-300 font-medium leading-none">
+                            Secure payments powered by <strong className="text-ink-50">Cashfree</strong> • 256-bit SSL encryption
                         </span>
                     </div>
                 </div>
 
                 {/* ─── Billing FAQ ─── */}
                 <div className="max-w-2xl mx-auto w-full">
-                    <h2 className="text-2xl sm:text-3xl font-extrabold text-center mb-8">
-                        Billing <span className="gradient-text bg-text-mint-400">FAQ</span>
+                    <h2 className="text-[clamp(26px,3.5vw,38px)] font-bold text-center mb-10 tracking-[-0.02em]">
+                        Billing <span className="text-mint-400">FAQ</span>
                     </h2>
                     <div className="flex flex-col gap-3.5">
                         {BILLING_FAQ.map((faq, i) => (
@@ -507,7 +505,7 @@ export default function PricingPage() {
                                     <span>{faq.q}</span>
                                     <ChevronDown size={18} className="faq-chevron" />
                                 </button>
-                                <div className="faq-answer px-6 pb-5 text-sm text-slate-400 leading-relaxed">{faq.a}</div>
+                                <div className="faq-answer px-6 pb-5 text-sm text-ink-300 leading-relaxed">{faq.a}</div>
                             </div>
                         ))}
                     </div>

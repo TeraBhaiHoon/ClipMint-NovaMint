@@ -23,55 +23,55 @@ export const metadata: Metadata = {
 
 const FEATURES = [
     {
-        icon: <Bot size={28} />,
+        icon: <Bot size={22} />,
         title: "AI Viral Moment Detection",
         desc: "Our AI engine uses audio energy analysis, transcript context, silence detection, and engagement scoring to find the most shareable moments in your videos. No manual trimming needed.",
         detail: "Powered by OpenAI transcription + GPT-4 viral scoring",
     },
     {
-        icon: <Sparkles size={28} />,
+        icon: <Sparkles size={22} />,
         title: "9 Animated Caption Styles",
         desc: "Choose from 9 studio-quality animated caption styles rendered — from Hormozi-style word highlighting to Neon glow effects. These are real animations, not flat text.",
         detail: "Hormozi · Bounce · Fade · Glow · Typewriter · Glitch · Neon · Colorful · Minimal",
     },
     {
-        icon: <Layers size={28} />,
+        icon: <Layers size={22} />,
         title: "Batch Processing",
         desc: "Queue up multiple videos at once. ClipMint processes them sequentially so you can focus on creating while AI handles the editing. Perfect for agencies and prolific creators.",
         detail: "Unlimited batch queue on Agency plan",
     },
     {
-        icon: <MonitorSmartphone size={28} />,
+        icon: <MonitorSmartphone size={22} />,
         title: "Multi-Platform Output",
         desc: "Every clip is automatically formatted for YouTube Shorts (9:16), Instagram Reels, TikTok, and LinkedIn. Complete with titles, descriptions, hashtags, and thumbnails.",
         detail: "Auto-generated metadata for each platform",
     },
     {
-        icon: <Code2 size={28} />,
+        icon: <Code2 size={22} />,
         title: "Full API Access",
         desc: "Integrate ClipMint into your own tools, CMS, or team workflows via a RESTful API. Submit videos, check processing status, and retrieve clips programmatically.",
         detail: "Available on Pro and Agency plans",
     },
     {
-        icon: <BarChart3 size={28} />,
+        icon: <BarChart3 size={22} />,
         title: "Analytics Dashboard",
         desc: "Track clips generated, viral scores, processing activity, and usage trends — all in a real-time dashboard. Understand which content performs best.",
         detail: "Activity heatmaps, trend charts, and leaderboards",
     },
     {
-        icon: <Clock size={28} />,
+        icon: <Clock size={22} />,
         title: "Fast Processing",
         desc: "Most videos are processed in under 20 minutes — from upload to download-ready clips with animated captions. Priority processing available on paid plans.",
         detail: "Average: 10 clips in ~15 minutes",
     },
     {
-        icon: <Shield size={28} />,
+        icon: <Shield size={22} />,
         title: "Secure & Private",
         desc: "Your videos are processed and then deleted. Clips are stored in your linked Google Drive. We never share your content or data with third parties.",
         detail: "GDPR-compliant data handling",
     },
     {
-        icon: <Wand2 size={28} />,
+        icon: <Wand2 size={22} />,
         title: "Smart Audio Analysis",
         desc: "ClipMint analyzes audio energy levels, detects laughter and emphasis, and snaps clip boundaries to natural pauses — so your clips start and end cleanly.",
         detail: "Silence detection + energy peak scoring",
@@ -80,179 +80,81 @@ const FEATURES = [
 
 export default function FeaturesPage() {
     return (
-        <main>
+        <main className="min-h-screen bg-ink-950 text-ink-50">
             <Navbar />
 
-            <div
-                style={{
-                    maxWidth: 1100,
-                    margin: "0 auto",
-                    padding: "140px 24px 80px",
-                }}
-            >
-                <div style={{ textAlign: "center", marginBottom: 64 }}>
-                    <h1
-                        style={{
-                            fontSize: "clamp(32px, 5vw, 48px)",
-                            fontWeight: 800,
-                            marginBottom: 16,
-                        }}
-                    >
-                        Powerful <span className="gradient-text">Features</span>
+            <div className="max-w-6xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-32">
+                {/* Header */}
+                <div className="text-center mb-20">
+                    <p className="cm-eyebrow text-mint-300 mb-4">Features</p>
+                    <h1 className="text-[clamp(32px,4.5vw,52px)] font-bold leading-[1.08] tracking-[-0.02em] mb-4">
+                        Everything the pipeline{" "}
+                        <span className="text-mint-400">does.</span>
                     </h1>
-                    <p
-                        style={{
-                            fontSize: 18,
-                            color: "var(--text-secondary)",
-                            maxWidth: 600,
-                            margin: "0 auto",
-                            lineHeight: 1.6,
-                        }}
-                    >
-                        Everything you need to turn hours of long-form content into viral
-                        short-form clips — automatically.
+                    <p className="text-base sm:text-[17px] text-ink-300 leading-[1.6] max-w-xl mx-auto">
+                        One long video in, caption-ready clips out — here is
+                        exactly what happens in between.
                     </p>
                 </div>
 
-                {/* Comparison stats */}
-                <div
-                    className="glass-card"
-                    style={{
-                        padding: 32,
-                        marginBottom: 48,
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                        gap: 24,
-                        textAlign: "center",
-                    }}
-                >
-                    {[
-                        { label: "Manual Editing", value: "4-6 hrs", muted: true },
-                        { label: "With ClipMint", value: "< 20 min", muted: false },
-                        { label: "Time Saved", value: "95%", muted: false },
-                    ].map((s) => (
-                        <div key={s.label}>
-                            <div
-                                className={s.muted ? "" : "gradient-text"}
-                                style={{
-                                    fontSize: 28,
-                                    fontWeight: 800,
-                                    color: s.muted ? "var(--text-muted)" : undefined,
-                                    textDecoration: s.muted ? "line-through" : undefined,
-                                }}
-                            >
-                                {s.value}
+                {/* Comparison stats — real figures, no traction claims */}
+                <div className="cm-card p-8 sm:p-10 mb-14">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 text-center">
+                        {[
+                            { label: "Manual editing", value: "4-6 hrs", muted: true },
+                            { label: "With ClipMint", value: "< 20 min", muted: false },
+                            { label: "Per batch of 10 clips", value: "~15 min", muted: false },
+                        ].map((s) => (
+                            <div key={s.label}>
+                                <div
+                                    className={`font-[family-name:var(--font-display)] font-bold text-3xl tracking-[-0.02em] ${
+                                        s.muted
+                                            ? "text-ink-500 line-through"
+                                            : "text-mint-400"
+                                    }`}
+                                >
+                                    {s.value}
+                                </div>
+                                <div className="cm-eyebrow text-ink-400 mt-2">
+                                    {s.label}
+                                </div>
                             </div>
-                            <div
-                                style={{
-                                    fontSize: 13,
-                                    color: "var(--text-secondary)",
-                                    marginTop: 4,
-                                }}
-                            >
-                                {s.label}
-                            </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
 
                 {/* Feature cards */}
-                <div
-                    style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                        gap: 24,
-                        marginBottom: 80,
-                    }}
-                >
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-24">
                     {FEATURES.map((feat) => (
-                        <div
-                            key={feat.title}
-                            className="glass-card"
-                            style={{ padding: 32 }}
-                        >
-                            <div
-                                style={{
-                                    width: 56,
-                                    height: 56,
-                                    borderRadius: 16,
-                                    background: "rgba(108, 92, 231, 0.12)",
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    color: "var(--accent-primary)",
-                                    marginBottom: 20,
-                                }}
-                            >
+                        <div key={feat.title} className="cm-card p-7 flex flex-col gap-4">
+                            <div className="w-11 h-11 rounded-xl bg-mint-500/10 border border-mint-500/20 flex items-center justify-center text-mint-400">
                                 {feat.icon}
                             </div>
-                            <h3
-                                style={{
-                                    fontSize: 20,
-                                    fontWeight: 700,
-                                    marginBottom: 12,
-                                }}
-                            >
-                                {feat.title}
-                            </h3>
-                            <p
-                                style={{
-                                    color: "var(--text-secondary)",
-                                    fontSize: 15,
-                                    lineHeight: 1.7,
-                                    marginBottom: 16,
-                                }}
-                            >
-                                {feat.desc}
-                            </p>
-                            <div
-                                style={{
-                                    fontSize: 12,
-                                    color: "var(--accent-secondary)",
-                                    fontWeight: 600,
-                                    padding: "6px 12px",
-                                    background: "rgba(108, 92, 231, 0.08)",
-                                    borderRadius: 8,
-                                    display: "inline-block",
-                                }}
-                            >
-                                {feat.detail}
+                            <div>
+                                <h3 className="text-xl font-semibold tracking-[-0.01em] text-ink-50 mb-2">
+                                    {feat.title}
+                                </h3>
+                                <p className="text-[15px] leading-[1.6] text-ink-300 mb-4">
+                                    {feat.desc}
+                                </p>
+                                <span className="inline-block text-xs font-semibold text-mint-300 bg-mint-500/10 border border-mint-500/20 rounded-lg px-2.5 py-1.5">
+                                    {feat.detail}
+                                </span>
                             </div>
                         </div>
                     ))}
                 </div>
 
-                {/* CTA */}
-                <div
-                    style={{
-                        textAlign: "center",
-                        padding: "48px 24px",
-                    }}
-                >
-                    <h2
-                        style={{
-                            fontSize: 28,
-                            fontWeight: 800,
-                            marginBottom: 16,
-                        }}
-                    >
+                {/* CTA — same treatment as the landing final panel */}
+                <div className="rounded-3xl bg-ink-850 border border-mint-500/30 shadow-[var(--shadow-accent)] p-10 md:p-14 text-center">
+                    <h2 className="text-[clamp(26px,3.5vw,38px)] font-bold tracking-[-0.02em] leading-[1.08] mb-3">
                         Ready to try it?
                     </h2>
-                    <p
-                        style={{
-                            color: "var(--text-secondary)",
-                            marginBottom: 28,
-                            fontSize: 16,
-                        }}
-                    >
-                        Start with the free plan — no credit card required.
+                    <p className="text-ink-300 text-base leading-[1.6] mb-8">
+                        Start with the free plan — 5 clips a month, no credit card.
                     </p>
-                    <Link
-                        href="/login"
-                        className="btn-primary"
-                        style={{ padding: "16px 36px", fontSize: 17 }}
-                    >
-                        Get Started Free <ArrowRight size={18} />
+                    <Link href="/login" className="cm-btn-primary py-4 px-9 text-base">
+                        Get started free <ArrowRight size={17} />
                     </Link>
                 </div>
             </div>

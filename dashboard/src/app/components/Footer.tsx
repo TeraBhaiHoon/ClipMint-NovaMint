@@ -1,5 +1,10 @@
 import Link from "next/link";
 
+/**
+ * Identity §9.11 — four columns (Product / Resources / Legal / Contact),
+ * monochrome text wordmark (the purple JPG is retired per §2), and a
+ * "Made in India" microbadge.
+ */
 const FOOTER_COLUMNS = [
     {
         title: "Product",
@@ -10,7 +15,7 @@ const FOOTER_COLUMNS = [
         ],
     },
     {
-        title: "Company",
+        title: "Resources",
         links: [
             { label: "About", href: "/about" },
             { label: "Contact", href: "/contact" },
@@ -25,7 +30,7 @@ const FOOTER_COLUMNS = [
         ],
     },
     {
-        title: "Connect",
+        title: "Contact",
         links: [
             {
                 label: "ClipMint.Support@gmail.com",
@@ -41,19 +46,17 @@ const FOOTER_COLUMNS = [
 
 export default function Footer() {
     return (
-        <footer className="border-t border-white/5 px-6 md:px-12 py-16 bg-gradient-to-b from-transparent to-[#08080c]/50">
-            <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-10 md:gap-16 mb-12">
+        <footer className="border-t border-white/5 bg-ink-950 px-6 md:px-10 py-16">
+            <div className="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-10 md:gap-16 mb-14">
                 {FOOTER_COLUMNS.map((col) => (
                     <div key={col.title} className="flex flex-col gap-4">
-                        <h4 className="text-xs font-bold text-slate-300 uppercase tracking-widest">
-                            {col.title}
-                        </h4>
+                        <h4 className="cm-eyebrow text-ink-400">{col.title}</h4>
                         <ul className="list-none flex flex-col gap-3">
                             {col.links.map((link) => (
                                 <li key={link.label}>
                                     <Link
                                         href={link.href}
-                                        className="text-sm text-slate-400 no-underline hover:text-slate-200 transition-colors duration-200"
+                                        className="text-sm text-ink-300 no-underline hover:text-ink-50 transition-colors duration-200"
                                     >
                                         {link.label}
                                     </Link>
@@ -65,20 +68,17 @@ export default function Footer() {
             </div>
 
             {/* Bottom bar */}
-            <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row justify-between items-center gap-4 max-w-6xl mx-auto">
-                <div className="flex items-center gap-2">
-                    <div className="w-5 h-5 rounded-md overflow-hidden border border-white/10">
-                        <img
-                            src="/clipmint-logo.jpg"
-                            alt="ClipMint"
-                            className="w-full h-full object-cover"
-                        />
-                    </div>
-                    <span className="gradient-text font-bold text-md bg-text-mint-400">
-                        ClipMint
+            <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row justify-between items-center gap-5 max-w-6xl mx-auto">
+                <div className="flex flex-col items-center md:items-start gap-3">
+                    <span className="font-[family-name:var(--font-display)] font-bold text-lg leading-none tracking-[-0.02em] text-ink-50">
+                        ClipMint<span className="text-ink-400">.</span>
+                    </span>
+                    <span className="inline-flex items-center gap-2 rounded-full border border-white/10 px-3 py-1 text-[11px] font-medium text-ink-300">
+                        <span className="w-1.5 h-1.5 rounded-full bg-mint-500" aria-hidden="true" />
+                        Made in India
                     </span>
                 </div>
-                <span className="text-xs text-slate-500">
+                <span className="text-[13px] text-ink-500">
                     © 2026 NovaMint Networks. All rights reserved.
                 </span>
             </div>
