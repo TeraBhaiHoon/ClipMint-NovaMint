@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { animate, useInView, useReducedMotion } from "framer-motion";
-import { springSmooth } from "./SectionReveal";
+import { useReducedMotion } from "./SectionReveal";
 
 /**
- * Count-up for real figures only (identity §6 — no invented totals).
- * Pure integer strings ("9") animate 0 → N with spring.smooth on first view;
- * compound strings ("1080×1920", "-14 LUFS") pass through untouched.
- * Reduced motion: renders the final value immediately.
+ * Count-up for real figures only — no invented totals.
+ * Pure integers ("9") animate 0 → N on first view via requestAnimationFrame
+ * with an ease-out-expo curve (respects reduced motion by rendering the
+ * final value immediately). Compound values ("1080×1920", "-14 LUFS") pass
+ * through untouched.
  */
 export default function CountUp({
   value,
@@ -18,11 +18,11 @@ export default function CountUp({
   className?: string;
 }) {
   const ref = useRef<HTMLSpanElement>(null);
-  const inView = useInView(ref, { once: true, margin: "-40px" });
   const reduced = useReducedMotion();
   const isNumeric = /^-?\d+$/.test(value.trim());
+  const [seen, setSeen] = useState(false);
   const [display, setDisplay] = useState<string>(() =>
-    isNumeric && !reduced ? "0" : value
+    isNumeric && !reduced ? "0" : value.trim()
   );
 
   useEffect(() => {
@@ -31,14 +31,36 @@ export default function CountUp({
       setDisplay(value.trim());
       return;
     }
-    if (!inView) return;
+    const node = ref.current;
+    if (!node) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setSeen(true);
+          io.disconnect();
+        }
+      },
+      { threshold: 0.4 }
+    );
+    io.observe(node);
+    return () => io.disconnect();
+  }, [isNumeric, reduced, value]);
+
+  useEffect(() => {
+    if (!isNumeric || !seen) return;
     const target = parseInt(value.trim(), 10);
-    const controls = animate(0, target, {
-      ...springSmooth,
-      onUpdate: (v) => setDisplay(String(Math.round(v))),
-    });
-    return () => controls.stop();
-  }, [inView, isNumeric, reduced, value]);
+    const duration = 1100;
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 4);
+      setDisplay(String(Math.round(eased * target)));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isNumeric, seen, value]);
 
   return (
     <span ref={ref} className={className}>

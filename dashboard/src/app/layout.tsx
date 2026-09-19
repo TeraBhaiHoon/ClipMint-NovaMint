@@ -1,54 +1,57 @@
 import type { Metadata } from "next";
-import { Bricolage_Grotesque, Figtree, Fira_Code } from "next/font/google";
+import { Syne, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const display = Bricolage_Grotesque({
+const display = Syne({
   subsets: ["latin"],
   weight: ["500", "600", "700", "800"],
   variable: "--font-display",
   display: "swap",
 });
-const body = Figtree({
+
+const body = Inter({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: ["400", "500", "600"],
   variable: "--font-body",
   display: "swap",
 });
-const mono = Fira_Code({
+
+const mono = JetBrains_Mono({
   subsets: ["latin"],
-  weight: ["400", "500"],
+  weight: ["400", "500", "700"],
   variable: "--font-mono",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "ClipMint — AI Video Clips with Professional Animated Captions",
+  title: "ClipMint — Turn long videos into vertical clips with animated captions",
   description:
-    "Upload one long video and get 10+ platform-ready clips with professional animated captions. AI detects viral moments, clips them, and adds studio-quality captions. Try free.",
+    "Upload one long video and get platform-ready 9:16 clips with professional animated captions. AI finds the moments worth posting, cuts them, and renders studio-made captions. Free to start, no card needed.",
   keywords: [
     "AI video clipper",
     "content repurposer",
     "short-form video",
     "animated captions",
-    "viral clips",
+    "vertical clips",
     "YouTube shorts",
     "Instagram reels",
     "TikTok clips",
+    "auto captions",
     "ClipMint",
   ],
   openGraph: {
-    title: "ClipMint — AI Video Clips with Animated Captions",
+    title: "ClipMint — Turn long videos into vertical clips with animated captions",
     description:
-      "Turn one video into 10+ viral clips with professional animated captions. Free to start.",
+      "Upload one video, get platform-ready 9:16 clips with animated captions. AI finds the moments. Free to start.",
     type: "website",
     url: "https://clipmint.vikashbuilds.in",
     siteName: "ClipMint",
   },
   twitter: {
     card: "summary_large_image",
-    title: "ClipMint — AI Video Clips with Animated Captions",
+    title: "ClipMint — Turn long videos into vertical clips with animated captions",
     description:
-      "Turn one video into 10+ viral clips with professional animated captions.",
+      "Upload one video, get platform-ready 9:16 clips with animated captions. AI finds the moments. Free to start.",
   },
   robots: { index: true, follow: true },
 };
@@ -58,9 +61,11 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  // Production build marker: identity deploy 2026-09-19
   return (
-    <html lang="en" className={`${display.variable} ${body.variable} ${mono.variable}`}>
+    <html
+      lang="en"
+      className={`${display.variable} ${body.variable} ${mono.variable}`}
+    >
       <head>
         <link rel="icon" href="/favicon.ico" sizes="any" />
       </head>

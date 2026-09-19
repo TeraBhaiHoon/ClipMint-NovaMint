@@ -1,10 +1,66 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { Mail, Lock, ArrowRight, Loader2, ArrowLeft, Sparkles } from "lucide-react";
 import Link from "next/link";
+
+/**
+ * Only allow same-site absolute paths — mirrors the middleware / callback guard
+ * so an attacker-supplied `?next=` can never bounce the user to a foreign site.
+ */
+function safeNextPath(next: string): string {
+    if (next.startsWith("/") && !next.startsWith("//")) return next;
+    return "/dashboard";
+}
+
+/**
+ * Turn raw Supabase auth errors into human-friendly copy. Never show the
+ * internal message verbatim (it leaks implementation details and reads harshly).
+ */
+function friendlyAuthError(code: string | undefined, message: string | undefined): string {
+    const lower = (message ?? "").toLowerCase();
+    const c = (code ?? "").toLowerCase();
+
+    if (c === "email_not_confirmed" || lower.includes("email not confirmed")) {
+        return "Please confirm your email first — check your inbox (and spam) for the confirmation link.";
+    }
+    if (lower.includes("invalid login credentials") || lower.includes("invalid email or password")) {
+        return "Incorrect email or password. Please try again.";
+    }
+    if (c === "user_already_exists" || lower.includes("user already registered")) {
+        return "An account with this email already exists. Please sign in instead.";
+    }
+    if (lower.includes("unable to validate email address") || lower.includes("invalid email")) {
+        return "That email address doesn't look right. Please check it and try again.";
+    }
+    if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("too many attempts")) {
+        return "Too many attempts. Please wait a few minutes and try again.";
+    }
+    if (lower.includes("weak password") || lower.includes("password should be at least")) {
+        return "Password must be at least 6 characters long.";
+    }
+    if (lower.includes("provider is not enabled") || lower.includes("no provider")) {
+        return "Continue with Google is not available right now. Please use email instead.";
+    }
+    return "Something went wrong. Please try again.";
+}
+
+/** Map the `?error=` codes the auth callback and middleware forward. */
+function friendlyUrlError(code: string | null): string | null {
+    if (!code) return null;
+    if (code === "oauth_cancelled") {
+        return "Google sign-in was cancelled. Please try again.";
+    }
+    if (code === "auth") {
+        return "Sign-in didn't complete. Please try again.";
+    }
+    if (code === "session_expired") {
+        return "Your session expired. Please sign in again.";
+    }
+    return null;
+}
 
 export default function LoginPage() {
     const [email, setEmail] = useState("");
@@ -17,6 +73,28 @@ export default function LoginPage() {
     const router = useRouter();
     const supabase = createClient();
 
+    // Read ?error= from the callback/OAuth redirect once, into the same state
+    // the form uses, so any later action clears it. (Reading the browser URL
+    // client-side keeps this page free of a Suspense boundary.)
+    useEffect(() => {
+        if (typeof window === "undefined") return;
+        const params = new URLSearchParams(window.location.search);
+        const mapped = friendlyUrlError(params.get("error"));
+        if (mapped) setError(mapped);
+    }, []);
+
+    // Preserve the destination the middleware saved when it bounced the user
+    // here, so a successful login returns them where they were headed.
+    const [nextPath] = useState<string>(() => {
+        if (typeof window === "undefined") return "/dashboard";
+        return safeNextPath(new URLSearchParams(window.location.search).get("next") || "/dashboard");
+    });
+
+    function goDashboard() {
+        router.push(nextPath);
+        router.refresh();
+    }
+
     async function handleEmailAuth(e: React.FormEvent) {
         e.preventDefault();
         setLoading(true);
@@ -28,7 +106,9 @@ export default function LoginPage() {
                 redirectTo: `${window.location.origin}/auth/callback`,
             });
             if (error) {
-                setError(error.message);
+                // Not enumerable by design — Supabase returns success for unknown
+                // emails, so only a real validation failure shows up here.
+                setError(friendlyAuthError(error.code, error.message));
             } else {
                 setMessage("Password reset link sent! Check your email.");
             }
@@ -45,23 +125,27 @@ export default function LoginPage() {
                 },
             });
             if (error) {
-                setError(error.message);
+                setError(friendlyAuthError(error.code, error.message));
             } else if (data.session) {
-                router.push("/dashboard");
-                router.refresh();
+                goDashboard();
+            } else if (data.user && data.user.identities && data.user.identities.length === 0) {
+                // SignUp returns a user row with zero identities when the email
+                // already belongs to a confirmed account — not a fresh signup.
+                setError("An account with this email already exists. Please sign in instead.");
             } else {
                 setMessage("Check your email for a confirmation link!");
             }
         } else {
-            const { error } = await supabase.auth.signInWithPassword({
+            const { data, error } = await supabase.auth.signInWithPassword({
                 email,
                 password,
             });
             if (error) {
-                setError(error.message);
+                setError(friendlyAuthError(error.code, error.message));
             } else {
-                router.push("/dashboard");
-                router.refresh();
+                // A just-confirmed user may have a session from the email link;
+                // otherwise this is a fresh login. Either way, go where asked.
+                if (data.user) goDashboard();
             }
         }
         setLoading(false);
@@ -69,6 +153,10 @@ export default function LoginPage() {
 
     async function handleGoogleAuth() {
         setLoading(true);
+        setError(null);
+        setMessage(null);
+        // Full-page redirect (not a popup), so a successful sign-in navigates
+        // the tab to /auth/callback and this loading state is never stuck.
         const { error } = await supabase.auth.signInWithOAuth({
             provider: "google",
             options: {
@@ -76,7 +164,7 @@ export default function LoginPage() {
             },
         });
         if (error) {
-            setError(error.message);
+            setError(friendlyAuthError(error.code, error.message));
             setLoading(false);
         }
     }
@@ -150,7 +238,7 @@ export default function LoginPage() {
                                     fill="#EA4335"
                                 />
                             </svg>
-                            <span>Continue with Google</span>
+                            <span>{loading ? "Redirecting to Google…" : "Continue with Google"}</span>
                         </button>
 
                         {/* Divider */}
@@ -219,7 +307,7 @@ export default function LoginPage() {
                         </div>
                     )}
 
-                    {error && (
+                    {(error) && (
                         <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium leading-relaxed mt-2 animate-scale-in">
                             {error}
                         </div>

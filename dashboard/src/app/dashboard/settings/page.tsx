@@ -119,7 +119,8 @@ export default function SettingsPage() {
             .eq("id", profile.id);
 
         if (updateError) {
-            showToast("error", updateError.message);
+            console.error("Profile update error:", updateError.message);
+            showToast("error", "Could not save your settings. Please try again.");
         } else {
             showToast("success", "Settings saved successfully");
         }
@@ -554,9 +555,19 @@ export default function SettingsPage() {
                         </p>
                         <button
                             className="btn-secondary text-sm py-2.5 px-4 font-semibold"
-                            onClick={() => {
-                                supabase.auth.resetPasswordForEmail(email);
-                                showToast("success", "Password reset email sent");
+                            onClick={async () => {
+                                // Redirect to /auth/callback so the recovery code
+                                // is exchanged there and the user lands on the
+                                // update-password page (not the site root).
+                                const { error } = await supabase.auth.resetPasswordForEmail(
+                                    email,
+                                    { redirectTo: `${window.location.origin}/auth/callback` }
+                                );
+                                if (error) {
+                                    showToast("error", "Could not send the reset email. Please try again.");
+                                } else {
+                                    showToast("success", "Password reset email sent");
+                                }
                             }}
                         >
                             Send Password Reset Email

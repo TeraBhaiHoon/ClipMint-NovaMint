@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/server";
+import { getCashfree } from "@/lib/cashfree";
 
 /**
  * POST /api/cashfree/cancel
  *
- * Cancels the user's active subscription.
- * The user retains access until the current billing period ends.
+ * Cancels the user's active subscription at Cashfree (via the SDK's
+ * `SubsManageSubscription` — subscriptions are cancelled in place at the end of
+ * the current billing period), then updates the local profile.
  *
- * For Cashfree subscriptions, we update the local status directly.
- * If using Cashfree Subscriptions API, the actual cancellation
- * would be done via their API.
+ * - Real Cashfree subscription → the SDK CANCEL call must succeed; otherwise the
+ *   user would be marked cancelled locally but keep getting charged at renewal.
+ * - Order-based purchase (no Cashfree subscription) → nothing to cancel remotely;
+ *   only the local status is updated and access is retained to period end.
  */
 export async function POST() {
     const supabase = await createClient();
@@ -23,13 +26,13 @@ export async function POST() {
     }
 
     // Get current profile
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("cashfree_subscription_id, cashfree_order_id, subscription_status, plan")
         .eq("id", user.id)
         .single();
 
-    if (!profile) {
+    if (profileError || !profile) {
         return NextResponse.json({ error: "Profile not found" }, { status: 404 });
     }
 
@@ -43,51 +46,45 @@ export async function POST() {
         );
     }
 
-    try {
-        // If we have a Cashfree subscription ID, cancel via their API
-        if (profile.cashfree_subscription_id) {
-            try {
-                const res = await fetch(
-                    `https://${process.env.CASHFREE_ENV === "PRODUCTION" ? "api" : "sandbox"}.cashfree.com/pg/subscriptions/${profile.cashfree_subscription_id}/cancel`,
-                    {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            "x-client-id": process.env.CASHFREE_APP_ID!,
-                            "x-client-secret": process.env.CASHFREE_SECRET_KEY!,
-                            "x-api-version": "2023-08-01",
-                        },
-                    }
-                );
-
-                if (!res.ok) {
-                    const errData = await res.json().catch(() => ({}));
-                    console.error("Cashfree cancel API error:", errData);
-                    // Still proceed with local cancellation
+    // If the user has a real Cashfree subscription, cancel it upstream FIRST.
+    // A failed remote cancel means the user keeps being billed — do not claim cancelled.
+    if (profile.cashfree_subscription_id) {
+        try {
+            await getCashfree().SubsManageSubscription(
+                profile.cashfree_subscription_id,
+                {
+                    subscription_id: profile.cashfree_subscription_id,
+                    action: "CANCEL",
                 }
-            } catch (apiErr) {
-                console.error("Cashfree cancel API call failed:", apiErr);
-                // Still proceed with local cancellation
-            }
+            );
+        } catch (err) {
+            console.error("Cashfree subscription cancel failed:", err);
+            return NextResponse.json(
+                { error: "Could not cancel the subscription at the payment provider. Please try again." },
+                { status: 502 }
+            );
         }
-
-        // Update profile status to cancelled
-        await supabase
-            .from("profiles")
-            .update({
-                subscription_status: "cancelled",
-            })
-            .eq("id", user.id);
-
-        return NextResponse.json({
-            success: true,
-            message:
-                "Subscription cancelled. You'll retain access until the end of your current billing period.",
-        });
-    } catch (err) {
-        console.error("Cancel subscription error:", err);
-        const message =
-            err instanceof Error ? err.message : "Failed to cancel subscription";
-        return NextResponse.json({ error: message }, { status: 500 });
     }
+
+    // Update profile status to cancelled (remote cancel succeeded, or nothing to cancel).
+    const { error: updateError } = await supabase
+        .from("profiles")
+        .update({
+            subscription_status: "cancelled",
+        })
+        .eq("id", user.id);
+
+    if (updateError) {
+        console.error("Failed to persist cancelled status:", updateError);
+        return NextResponse.json(
+            { error: "Subscription cancelled at the provider but could not be saved. Please contact support." },
+            { status: 500 }
+        );
+    }
+
+    return NextResponse.json({
+        success: true,
+        message:
+            "Subscription cancelled. You'll retain access until the end of your current billing period.",
+    });
 }

@@ -25,6 +25,11 @@ export async function createClient() {
                     }
                 },
             },
+            cookieOptions: {
+                // The auth-token cookie must stay httpOnly:false so the browser
+                // client can read it, but it should only travel over HTTPS.
+                secure: process.env.NODE_ENV === "production",
+            },
         }
     );
 }

@@ -1,19 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/server";
-import { Cashfree, CFEnvironment } from "cashfree-pg";
 import { PLAN_LIMITS, type Plan, type PlanPeriod } from "@/lib/types";
-
-// Initialize Cashfree SDK v5
-const cashfree = new Cashfree(
-    process.env.CASHFREE_ENV === "PRODUCTION" ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX,
-    process.env.CASHFREE_APP_ID!,
-    process.env.CASHFREE_SECRET_KEY!
-);
+import {
+    getCashfree,
+    isBilledPlan,
+    isPlanPeriod,
+    isProductionEnvironment,
+    orderNoteFor,
+    ORDER_EXPIRY_MINUTES,
+    planPeriodAmountRupees,
+} from "@/lib/cashfree";
 
 /**
  * POST /api/cashfree/create-order
  *
- * Creates a Cashfree order for one-time or subscription payments.
+ * Creates (or reuses) a Cashfree order for one-time or subscription payments.
  * Body: { plan: "creator" | "pro" | "agency", period: "monthly" | "annual" | "one_time" }
  *
  * Returns a payment_session_id for the Cashfree JS SDK checkout.
@@ -29,36 +30,82 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const body = await request.json();
-    const plan = body.plan as Plan;
-    const period = body.period as PlanPeriod;
+    const body = await request.json().catch(() => null);
 
-    if (!plan || !period || plan === "free") {
+    const rawPlan = body?.plan;
+    const rawPeriod = body?.period;
+
+    if (typeof rawPlan !== "string" || !isBilledPlan(rawPlan)) {
         return NextResponse.json(
-            { error: "Valid plan and period required" },
+            { error: "Valid plan required" },
+            { status: 400 }
+        );
+    }
+    if (typeof rawPeriod !== "string" || !isPlanPeriod(rawPeriod)) {
+        return NextResponse.json(
+            { error: "Valid period required (monthly, annual or one_time)" },
             { status: 400 }
         );
     }
 
-    const planInfo = PLAN_LIMITS[plan];
-    if (!planInfo) {
-        return NextResponse.json({ error: "Invalid plan" }, { status: 400 });
-    }
+    // Narrowed by the type guards above.
+    const plan: Plan = rawPlan;
+    const period: PlanPeriod = rawPeriod;
 
-    // Get user profile
-    const { data: profile } = await supabase
+    // Get user profile — the order is linked to it and later verified against it.
+    const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("*")
         .eq("id", user.id)
         .single();
 
-    try {
-        // Calculate amount in INR (convert from paise to rupees)
-        const amountInPaise = period === "annual" ? planInfo.annualPrice : planInfo.monthlyPrice;
-        const amountInRupees = amountInPaise / 100;
+    if (profileError || !profile) {
+        return NextResponse.json(
+            { error: "Profile not found" },
+            { status: 404 }
+        );
+    }
 
-        // For annual period, charge full year upfront
-        const finalAmount = period === "annual" ? amountInRupees * 12 : amountInRupees;
+    try {
+        const planInfo = PLAN_LIMITS[plan];
+        const finalAmount = planPeriodAmountRupees(plan, period);
+
+        // Idempotency: if the user already has an in-flight Cashfree order for this
+        // exact plan + period that has not expired and not been paid, reuse it instead
+        // of minting a second order (prevents double charges from double-clicks/retries).
+        if (profile.cashfree_order_id) {
+            try {
+                const existing = await getCashfree().PGFetchOrder(
+                    profile.cashfree_order_id
+                );
+                const existingData = existing.data;
+                const existingTags = (existingData?.order_tags || {}) as Record<string, string>;
+                const stillPending =
+                    existingData &&
+                    (existingData.order_status === "ACTIVE" ||
+                        existingData.order_status === "PENDING");
+                if (
+                    stillPending &&
+                    existingTags.plan === plan &&
+                    existingTags.period === period &&
+                    existingData.payment_session_id
+                ) {
+                    return NextResponse.json({
+                        order_id: profile.cashfree_order_id,
+                        payment_session_id: existingData.payment_session_id,
+                        cf_order_id: existingData.cf_order_id ?? null,
+                        app_id: process.env.NEXT_PUBLIC_CASHFREE_APP_ID,
+                        plan,
+                        period,
+                        amount: finalAmount,
+                        environment: isProductionEnvironment() ? "production" : "sandbox",
+                        reused: true,
+                    });
+                }
+            } catch {
+                // Order fetch failed (e.g. expired/unknown in this environment) — mint a new one.
+            }
+        }
 
         const orderId = `clipmint_${plan}_${user.id.slice(0, 8)}_${Date.now()}`;
 
@@ -68,15 +115,21 @@ export async function POST(request: NextRequest) {
             order_currency: "INR",
             customer_details: {
                 customer_id: user.id.replace(/-/g, "").slice(0, 20),
-                customer_email: user.email || "",
-                customer_phone: "9999999999", // Cashfree requires phone; user can update in checkout
-                customer_name: profile?.full_name || user.email || "Customer",
+                customer_email: user.email || "customer@clipmint.app",
+                // Cashfree requires a phone at order creation; the checkout flow lets the
+                // customer correct it. A real phone capture is tracked as an owner action.
+                customer_phone: "9999999999",
+                customer_name: profile.full_name || user.email || "Customer",
             },
             order_meta: {
                 return_url: `${request.nextUrl.origin}/api/cashfree/verify-payment?order_id={order_id}`,
                 notify_url: `${request.nextUrl.origin}/api/cashfree/webhook`,
             },
-            order_note: `ClipMint ${planInfo.label} Plan — ${period === "one_time" ? "One-time" : period === "annual" ? "Annual" : "Monthly"}`,
+            // Explicit short expiry so abandoned checkouts are recycled and never charged late.
+            order_expiry_time: new Date(
+                Date.now() + ORDER_EXPIRY_MINUTES * 60 * 1000
+            ).toISOString(),
+            order_note: orderNoteFor(planInfo.label, period),
             order_tags: {
                 user_id: user.id,
                 plan,
@@ -84,7 +137,7 @@ export async function POST(request: NextRequest) {
             },
         };
 
-        const response = await cashfree.PGCreateOrder(orderRequest);
+        const response = await getCashfree().PGCreateOrder(orderRequest);
         const orderData = response.data;
 
         if (!orderData?.payment_session_id) {
@@ -95,13 +148,15 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Save order ID to profile
-        await supabase
+        // Remember the in-flight order on the profile so it can be reused/verified.
+        const { error: updateError } = await supabase
             .from("profiles")
-            .update({
-                cashfree_order_id: orderId,
-            })
+            .update({ cashfree_order_id: orderId })
             .eq("id", user.id);
+
+        if (updateError) {
+            console.error("Failed to persist order id:", updateError);
+        }
 
         return NextResponse.json({
             order_id: orderId,
@@ -111,12 +166,13 @@ export async function POST(request: NextRequest) {
             plan,
             period,
             amount: finalAmount,
-            environment: process.env.CASHFREE_ENV === "PRODUCTION" ? "production" : "sandbox",
+            environment: isProductionEnvironment() ? "production" : "sandbox",
         });
     } catch (err) {
         console.error("Cashfree create order error:", err);
-        const message =
-            err instanceof Error ? err.message : "Payment initialization failed";
-        return NextResponse.json({ error: message }, { status: 500 });
+        return NextResponse.json(
+            { error: "Payment initialization failed. Please try again." },
+            { status: 500 }
+        );
     }
 }

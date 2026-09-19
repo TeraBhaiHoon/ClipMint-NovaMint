@@ -1,22 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/server";
-import { Cashfree, CFEnvironment } from "cashfree-pg";
+import { createClient, createServiceClient } from "@/lib/server";
 import { PLAN_LIMITS, type Plan, type PlanPeriod } from "@/lib/types";
-
-// Initialize Cashfree SDK v5
-const cashfree = new Cashfree(
-    process.env.CASHFREE_ENV === "PRODUCTION" ? CFEnvironment.PRODUCTION : CFEnvironment.SANDBOX,
-    process.env.CASHFREE_APP_ID!,
-    process.env.CASHFREE_SECRET_KEY!
-);
+import {
+    computePeriodEnd,
+    getCashfree,
+    isBilledPlan,
+    isPlanPeriod,
+    planPeriodAmountPaise,
+    planPeriodAmountRupees,
+} from "@/lib/cashfree";
 
 /**
- * GET /api/cashfree/verify-payment?order_id=xxx
+ * GET/POST /api/cashfree/verify-payment?order_id=xxx
  *
- * Called after Cashfree checkout completes (return URL redirect).
- * Fetches order status from Cashfree and upgrades the user's plan if payment succeeded.
- *
- * Also handles POST for manual verification from frontend.
+ * Called after Cashfree checkout completes (return URL redirect) and from the
+ * pricing page after an in-modal payment. Always re-fetches the REAL order status
+ * from Cashfree server-side — the client is never trusted.
  */
 async function handleVerification(request: NextRequest) {
     const supabase = await createClient();
@@ -36,118 +35,166 @@ async function handleVerification(request: NextRequest) {
     if (request.method === "GET") {
         orderId = request.nextUrl.searchParams.get("order_id");
     } else {
-        const body = await request.json();
-        orderId = body.order_id;
+        const body = await request.json().catch(() => null);
+        orderId = typeof body?.order_id === "string" ? body.order_id : null;
     }
 
     if (!orderId) {
         if (request.method === "GET") {
-            return NextResponse.redirect(new URL("/pricing?error=missing_order", request.nextUrl.origin));
+            return NextResponse.redirect(
+                new URL("/pricing?error=missing_order", request.nextUrl.origin)
+            );
         }
         return NextResponse.json({ error: "Missing order_id" }, { status: 400 });
     }
 
     try {
-        // Fetch order status from Cashfree
-        const response = await cashfree.PGOrderFetchPayments(orderId);
-        const payments = response.data;
-
-        if (!payments || !Array.isArray(payments) || payments.length === 0) {
-            if (request.method === "GET") {
-                return NextResponse.redirect(new URL("/pricing?error=no_payment", request.nextUrl.origin));
-            }
-            return NextResponse.json({ error: "No payment found for this order" }, { status: 400 });
-        }
-
-        // Find the successful payment
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const successPayment = payments.find((p: any) => p.payment_status === "SUCCESS");
-
-        if (!successPayment) {
-            if (request.method === "GET") {
-                return NextResponse.redirect(new URL("/pricing?error=payment_failed", request.nextUrl.origin));
-            }
-            return NextResponse.json({ error: "Payment was not successful" }, { status: 400 });
-        }
-
-        // Extract plan info from order tags
-        const orderResponse = await cashfree.PGFetchOrder(orderId);
+        // Fetch the order server-side and bind it to the caller.
+        const orderResponse = await getCashfree().PGFetchOrder(orderId);
         const orderData = orderResponse.data;
 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const tags = (orderData as any)?.order_tags || {};
+        if (!orderData) {
+            return NextResponse.json(
+                { error: "Order not found at Cashfree" },
+                { status: 400 }
+            );
+        }
+
+        // Security: an order may only verify for the user it was created for.
+        const tags = (orderData.order_tags || {}) as Record<string, string>;
+        if (tags.user_id && tags.user_id !== user.id) {
+            return NextResponse.json(
+                { error: "This order does not belong to your account" },
+                { status: 403 }
+            );
+        }
+
         const plan = (tags.plan || "creator") as Plan;
         const period = (tags.period || "monthly") as PlanPeriod;
 
-        const planInfo = PLAN_LIMITS[plan];
-        if (!planInfo) {
-            return NextResponse.json({ error: "Invalid plan in order" }, { status: 400 });
+        if (!isBilledPlan(plan) || !isPlanPeriod(period)) {
+            return NextResponse.json(
+                { error: "Invalid plan in order" },
+                { status: 400 }
+            );
         }
 
-        // Calculate period end
-        const now = new Date();
-        const periodEnd = new Date(now);
-        if (period === "one_time") {
-            periodEnd.setDate(periodEnd.getDate() + 30);
-        } else if (period === "monthly") {
-            periodEnd.setMonth(periodEnd.getMonth() + 1);
-        } else {
-            periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+        // Confirm the paid amount is exactly what this plan/period costs (defence in
+        // depth — orders are created server-side, but never trust a mismatched order).
+        const expectedRupees = planPeriodAmountRupees(plan, period);
+        const paidRupees = Number(orderData.order_amount);
+        if (!Number.isFinite(paidRupees) || Math.abs(paidRupees - expectedRupees) > 0.01) {
+            return NextResponse.json(
+                { error: "Order amount does not match the selected plan" },
+                { status: 400 }
+            );
         }
 
-        // Upgrade user plan
-        const { error: updateError } = await supabase
-            .from("profiles")
-            .update({
-                plan,
-                clips_limit: planInfo.clips,
-                videos_limit: planInfo.videos,
-                clips_used: 0,
-                videos_used: 0,
-                cashfree_order_id: orderId,
-                cashfree_customer_id: orderData?.customer_details?.customer_id || null,
-                subscription_status: period === "one_time" ? "none" : "active",
-                plan_period: period,
-                current_period_end: periodEnd.toISOString(),
-            })
-            .eq("id", user.id);
+        // A payment only counts when Cashfree says so (order PAID, or a SUCCESS payment).
+        let paymentSucceeded = orderData.order_status === "PAID";
+        let successPaymentId: string | null = null;
 
-        if (updateError) {
-            console.error("Failed to update profile:", updateError);
-            if (request.method === "GET") {
-                return NextResponse.redirect(new URL("/pricing?error=upgrade_failed", request.nextUrl.origin));
+        if (!paymentSucceeded) {
+            const paymentsResponse = await getCashfree().PGOrderFetchPayments(orderId);
+            const payments = paymentsResponse.data;
+            const successPayment = (payments || []).find(
+                (p) => (p as { payment_status?: string }).payment_status === "SUCCESS"
+            );
+            if (successPayment) {
+                paymentSucceeded = true;
+                successPaymentId = String(
+                    (successPayment as { cf_payment_id?: number | string }).cf_payment_id ?? ""
+                ) || null;
             }
-            return NextResponse.json({ error: "Failed to upgrade plan" }, { status: 500 });
         }
 
-        // Log payment (requires service role / bypass RLS)
-        const { createClient: createServiceClient } = await import("@supabase/supabase-js");
-        const supabaseAdmin = createServiceClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-        );
+        if (!paymentSucceeded) {
+            if (request.method === "GET") {
+                return NextResponse.redirect(
+                    new URL("/pricing?error=payment_failed", request.nextUrl.origin)
+                );
+            }
+            return NextResponse.json(
+                { error: "Payment was not successful" },
+                { status: 400 }
+            );
+        }
 
-        const amount = period === "annual" ? planInfo.annualPrice * 12 : planInfo.monthlyPrice;
+        const supabaseAdmin = createServiceClient();
+        if (!supabaseAdmin) {
+            console.error("SUPABASE_SERVICE_ROLE_KEY missing for verify-payment");
+            return NextResponse.json(
+                { error: "Payment verified but could not be recorded" },
+                { status: 500 }
+            );
+        }
 
-        const { error: insertError } = await supabaseAdmin.from("payments").insert({
-            user_id: user.id,
-            cashfree_order_id: orderId,
-            cashfree_payment_id: successPayment.cf_payment_id?.toString() || null,
-            cf_payment_id: successPayment.cf_payment_id?.toString() || null,
-            amount,
-            currency: "INR",
-            plan,
-            plan_period: period,
-            status: "captured",
-        });
+        // Idempotency: this order was already processed (webhook + return URL can both fire).
+        const { data: existing } = await supabaseAdmin
+            .from("payments")
+            .select("id")
+            .eq("cashfree_order_id", orderId)
+            .eq("status", "captured")
+            .maybeSingle();
 
-        if (insertError) {
-            console.error("Failed to insert payment log:", insertError);
-            // We still proceed since the profile was upgraded successfully
+        const planInfo = PLAN_LIMITS[plan];
+        const now = new Date();
+        const periodEnd = computePeriodEnd(period, now);
+        const amountPaise = planPeriodAmountPaise(plan, period);
+
+        if (!existing) {
+            // Log payment with the service role so RLS never blocks the insert.
+            const { error: insertError } = await supabaseAdmin.from("payments").insert({
+                user_id: user.id,
+                cashfree_order_id: orderId,
+                cashfree_payment_id: successPaymentId,
+                cf_payment_id: successPaymentId,
+                amount: amountPaise,
+                currency: "INR",
+                plan,
+                plan_period: period,
+                status: "captured",
+            });
+
+            if (insertError) {
+                console.error("Failed to insert payment log:", insertError);
+                return NextResponse.json(
+                    { error: "Payment verified but could not be recorded" },
+                    { status: 500 }
+                );
+            }
+
+            // Upgrade the user's plan (only once — guarded by the payment-log idempotency above).
+            const { error: updateError } = await supabaseAdmin
+                .from("profiles")
+                .update({
+                    plan,
+                    clips_limit: planInfo.clips,
+                    videos_limit: planInfo.videos,
+                    clips_used: 0,
+                    videos_used: 0,
+                    cashfree_order_id: orderId,
+                    cashfree_customer_id:
+                        orderData.customer_details?.customer_id || null,
+                    subscription_status: period === "one_time" ? "none" : "active",
+                    plan_period: period,
+                    current_period_end: periodEnd.toISOString(),
+                })
+                .eq("id", user.id);
+
+            if (updateError) {
+                console.error("Failed to update profile:", updateError);
+                return NextResponse.json(
+                    { error: "Failed to upgrade plan" },
+                    { status: 500 }
+                );
+            }
         }
 
         if (request.method === "GET") {
-            return NextResponse.redirect(new URL("/dashboard?payment=success", request.nextUrl.origin));
+            return NextResponse.redirect(
+                new URL("/dashboard?payment=success", request.nextUrl.origin)
+            );
         }
 
         return NextResponse.json({
@@ -159,10 +206,14 @@ async function handleVerification(request: NextRequest) {
     } catch (err) {
         console.error("Cashfree verify payment error:", err);
         if (request.method === "GET") {
-            return NextResponse.redirect(new URL("/pricing?error=verification_failed", request.nextUrl.origin));
+            return NextResponse.redirect(
+                new URL("/pricing?error=verification_failed", request.nextUrl.origin)
+            );
         }
-        const message = err instanceof Error ? err.message : "Payment verification failed";
-        return NextResponse.json({ error: message }, { status: 500 });
+        return NextResponse.json(
+            { error: "Payment verification failed. Please contact support." },
+            { status: 500 }
+        );
     }
 }
 
