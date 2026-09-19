@@ -48,3 +48,4 @@ task.md.resolved
 # Python bytecode
 __pycache__/
 *.pyc
+.testrun2/
