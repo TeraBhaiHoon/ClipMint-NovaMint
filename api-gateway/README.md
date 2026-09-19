@@ -34,7 +34,7 @@ Non-secret values live in `wrangler.toml` (`[vars]`):
 
 | Var | Value |
 |-----|-------|
-| `CORS_ORIGIN` | `https://clipmint.novamintnetworks.in` (production dashboard) |
+| `CORS_ORIGIN` | `https://clipmint.vikashbuilds.in` (production dashboard) |
 | `RATE_LIMIT_PER_MINUTE` | `30` |
 
 Secrets are set with `npx wrangler secret put <NAME>`:

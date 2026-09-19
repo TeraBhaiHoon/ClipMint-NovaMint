@@ -41,7 +41,7 @@ export const metadata: Metadata = {
     description:
       "Turn one video into 10+ viral clips with professional animated captions. Free to start.",
     type: "website",
-    url: "https://novamintnetworks.in",
+    url: "https://clipmint.vikashbuilds.in",
     siteName: "ClipMint",
   },
   twitter: {

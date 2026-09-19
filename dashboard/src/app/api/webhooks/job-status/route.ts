@@ -193,7 +193,7 @@ export async function POST(request: NextRequest) {
       console.warn("Could not fetch notification prefs, using defaults:", err);
     }
 
-    const dashboardUrl = process.env.NEXT_PUBLIC_APP_URL || "https://novamintnetworks.in";
+    const dashboardUrl = process.env.NEXT_PUBLIC_APP_URL || "https://clipmint.vikashbuilds.in";
     const jobUrl = `${dashboardUrl}/dashboard/${job_id}`;
 
     // ── Check if this notification type is enabled ──
@@ -408,7 +408,7 @@ async function sendDiscordNotification(opts: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       username: "ClipMint",
-      avatar_url: "https://novamintnetworks.in/favicon.ico",
+      avatar_url: "https://clipmint.vikashbuilds.in/favicon.ico",
       embeds: [embed],
     }),
   });

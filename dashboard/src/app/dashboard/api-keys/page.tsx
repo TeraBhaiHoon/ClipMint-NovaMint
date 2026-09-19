@@ -33,14 +33,14 @@ function timeAgo(date: string): string {
 const CODE_SNIPPETS = [
     {
         lang: "cURL",
-        code: `curl -X POST https://novamintnetworks.in/api/v1/jobs \\
+        code: `curl -X POST https://clipmint.vikashbuilds.in/api/v1/jobs \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"video_url": "https://youtube.com/watch?v=...", "caption_style": "hormozi", "max_clips": 5}'`,
     },
     {
         lang: "JavaScript",
-        code: `const response = await fetch("https://novamintnetworks.in/api/v1/jobs", {
+        code: `const response = await fetch("https://clipmint.vikashbuilds.in/api/v1/jobs", {
   method: "POST",
   headers: {
     "Authorization": "Bearer YOUR_API_KEY",
@@ -59,7 +59,7 @@ const data = await response.json();`,
         code: `import requests
 
 response = requests.post(
-    "https://novamintnetworks.in/api/v1/jobs",
+    "https://clipmint.vikashbuilds.in/api/v1/jobs",
     headers={"Authorization": "Bearer YOUR_API_KEY"},
     json={
         "video_url": "https://youtube.com/watch?v=...",
