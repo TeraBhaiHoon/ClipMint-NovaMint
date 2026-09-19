@@ -32,10 +32,29 @@ jobs:
           export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
           export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
           export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          echo "── 1. LIST bucket root (read permission) ──"
+          if rclone lsd "R2:${R2_BUCKET}/" --max-depth 1 2>rclone_err.txt; then
+            echo "read: OK"
+          else
+            echo "read: FAILED — $(tail -2 rclone_err.txt | head -1)"
+            echo "R2_PROBE_FAIL: token cannot even LIST. Wrong keys, wrong account, or bucket name mismatch."
+            exit 1
+          fi
+          echo "── 2. WRITE test ──"
           echo "probe $(date -u +%s)" > probe.txt
-          rclone copyto probe.txt "R2:${R2_BUCKET}/_probe/probe.txt" --stats-one-line
+          if ! rclone copyto probe.txt "R2:${R2_BUCKET}/_probe/probe.txt" --stats-one-line 2>rclone_err.txt; then
+            echo "write: FAILED — $(tail -2 rclone_err.txt | head -1)"
+            echo "R2_PROBE_FAIL: list works but WRITE denied -> the token is READ-ONLY or not scoped to this bucket."
+            echo "  Fix: R2 → Manage R2 API Tokens → create token with 'Object Read & Write',"
+            echo "       scope includes ${R2_BUCKET} → update R2_ACCESS_KEY_ID + R2_SECRET_ACCESS_KEY secrets."
+            exit 1
+          fi
+          echo "write: OK"
+          echo "── 3. READ-BACK test ──"
           GOT=$(rclone cat "R2:${R2_BUCKET}/_probe/probe.txt")
           [ "$GOT" = "$(cat probe.txt)" ] || { echo "R2_PROBE_FAIL: read-back mismatch"; exit 1; }
-          rclone lsjson "R2:${R2_BUCKET}/_probe/" >/dev/null
+          echo "read-back: OK"
+          echo "── 4. DELETE test ──"
           rclone deletefile "R2:${R2_BUCKET}/_probe/probe.txt"
-          echo "R2_PROBE_PASS upload/read/list/delete all OK (bucket: ${R2_BUCKET})"
+          echo "delete: OK"
+          echo "R2_PROBE_PASS list/write/read-back/delete all OK (bucket: ${R2_BUCKET})"
