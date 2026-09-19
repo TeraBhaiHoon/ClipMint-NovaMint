@@ -31,13 +31,17 @@ ALTER TABLE public.clips
 -- read NEVER by clients directly — the dashboard API mints 1-hour signed URLs
 -- after an RLS ownership check, so cross-user access is impossible.
 INSERT INTO storage.buckets (id, name, public, file_size_limit)
-VALUES ('clip-outputs', 'clip-outputs', false, 1073741824)
+VALUES ('clip-outputs', 'clip-outputs', false, 52428800)  -- 50 MB: the Free maximum
+--   per file. Clips above 50 MB fail the publish step (non-fatal: the job still
+--   completes and the dashboard falls back to the archive link for that clip).
 ON CONFLICT (id) DO NOTHING;
 
 -- video-uploads: users upload their source videos into their own folder;
 -- the pipeline downloads them via a server-generated signed URL.
 INSERT INTO storage.buckets (id, name, public, file_size_limit)
-VALUES ('video-uploads', 'video-uploads', false, 524288000)
+VALUES ('video-uploads', 'video-uploads', false, 47185920)  -- 45 MB: the FREE plan's
+--   50 MB global per-file ceiling is the hard cap (bucket limits cannot exceed it);
+--   45 MB leaves headroom. Raise both after upgrading to Pro (global up to 500 GB).
 ON CONFLICT (id) DO NOTHING;
 
 -- Per-user isolation on video-uploads: insert/read only under auth.uid()/

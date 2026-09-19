@@ -28,8 +28,11 @@ type CaptionPace = (typeof CAPTION_PACES)[number]["value"];
 /** What the pipeline should do: cut viral clips, or caption the whole video. */
 type JobMode = "clips" | "captions";
 
-/** Source videos are uploaded to the private `video-uploads` bucket. */
-const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
+/** Source videos are uploaded to the private `video-uploads` bucket.
+ *  Capped at 45 MB because Supabase's FREE plan enforces a 50 MB global
+ *  per-file limit (bucket limits cannot exceed it). Longer videos should
+ *  use a link — YouTube, Drive, or any direct MP4 URL. */
+const MAX_UPLOAD_BYTES = 45 * 1024 * 1024;
 const VIDEO_ACCEPT =
     "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
 
@@ -80,7 +83,7 @@ export default function NewVideoPage() {
         if (sourceType === "file") {
             if (!videoFile) { setIsSubmitting(false); return; }
             if (videoFile.size > MAX_UPLOAD_BYTES) {
-                setError("That video is over the 500 MB upload limit. Trim it or paste a link instead.");
+                setError("That video is over the 45 MB upload limit. Paste a YouTube/Drive link instead — links have no size limit.");
                 setIsSubmitting(false);
                 return;
             }
@@ -335,7 +338,7 @@ export default function NewVideoPage() {
                                     <span className="text-sm font-bold text-slate-100">{videoFile.name}</span>
                                     <span className={`text-xs ${videoFile.size > MAX_UPLOAD_BYTES ? "text-red-400" : "text-[#64748b]"}`}>
                                         {(videoFile.size / 1024 / 1024).toFixed(1)} MB
-                                        {videoFile.size > MAX_UPLOAD_BYTES && " — over the 500 MB limit"}
+                                        {videoFile.size > MAX_UPLOAD_BYTES && " — over the 45 MB limit"}
                                     </span>
                                     <span className="text-[10px] text-[#64748b]">Click to choose a different file</span>
                                 </>
@@ -343,8 +346,8 @@ export default function NewVideoPage() {
                                 <>
                                     <Upload size={22} className="text-mint-400" />
                                     <span className="text-sm font-bold text-slate-200">Click to choose a video</span>
-                                    <span className="text-xs text-[#64748b]">MP4, MOV, M4V or WebM · up to 500 MB · up to 30 minutes</span>
-                                    <span className="text-[10px] text-[#64748b]">Uploads are private — only you can access them</span>
+                                    <span className="text-xs text-[#64748b]">MP4, MOV, M4V or WebM · up to 45 MB</span>
+                                    <span className="text-[10px] text-[#64748b]">For longer videos, paste a YouTube or Drive link — no size limit there</span>
                                 </>
                             )}
                         </label>

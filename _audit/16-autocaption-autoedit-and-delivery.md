@@ -81,3 +81,27 @@ RLS policies (insert/select own folder). Verified: 2 buckets, 4 job columns,
 - Thumbnails are shared per clip index across aspect variants (signed once).
 - Publishing is `continue-on-error` — a publish failure never fails a job, and
   the dashboard transparently falls back to the archive links.
+
+## FREE-TIER PLATFORM DECISION (2026-09-19, user's choice: "stay free for now")
+
+Verified against Supabase's live docs:
+- **Free plan global file-size limit = 50 MB per file** and it CANNOT be
+  raised on Free (bucket limits cannot exceed it) — the 500 MB bucket value
+  we first set was inert.
+- **Free storage quota = 1 GB total**; bandwidth/egress = 10 GB/month
+  (shared with database + functions). Pro = 100 GB storage / 250 GB egress,
+  $25/mo; R2 = 10 GB free + zero egress (recommended upgrade path).
+
+Changes made for Free:
+- Upload cap 45 MB (client) + bucket `video-uploads` = 47,185,920 B live.
+- `clip-outputs` bucket = 52,428,800 B (the Free maximum per file). A clip
+  larger than 50 MB fails the publish step (non-fatal — job still completes,
+  that clip falls back to its archive link).
+- NEW workflow step **"Clean up source upload"** (after Save results): a
+  SUCCESSFUL job deletes its source from `video-uploads` and nulls
+  `jobs.video_storage_path`; FAILED jobs keep it so Retry works. Uploads are
+  therefore transient, not accumulating against the 1 GB quota.
+- Ceilings to remember while on Free: ~3-5 jobs' worth of clips fit in
+  1 GB, and ~10 GB/month of total egress. Upgrading (R2 or Supabase Pro)
+  removes both; nothing in the code needs changing for Pro, and R2 needs a
+  swap of the delivery backend only.

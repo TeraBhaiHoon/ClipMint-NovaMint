@@ -1493,6 +1493,45 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
+      # 13b. Clean up the source upload (free-tier hygiene)
+      # ─────────────────────────────────────────────────────────────────────
+      # A successful job deletes its source from the private video-uploads
+      # bucket: the free tier holds only 1 GB total, and nothing needs the
+      # source once the clips exist. FAILED jobs deliberately keep it, so the
+      # Retry button can re-dispatch without re-uploading.
+      - name: Clean up source upload
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, sys
+          sys.path.insert(0, "pipeline")
+          import requests
+          from db import Supabase
+
+          db = Supabase()
+          job = db.get_job(os.environ["JOB_ID"])
+          path = (job.get("video_storage_path") or "").strip()
+          if not path:
+              print("cleanup: no uploaded source to delete (link-based job)")
+              raise SystemExit(0)
+          resp = requests.delete(
+              f"{db.url}/storage/v1/object/video-uploads/{path}",
+              headers={"Authorization": f"Bearer {db.key}", "apikey": db.key},
+              timeout=60,
+          )
+          if resp.status_code in (200, 204):
+              db.update_job(os.environ["JOB_ID"], video_storage_path=None)
+              print(f"CLEANUP_OK removed source upload {path}")
+          else:
+              print(f"cleanup: delete failed HTTP {resp.status_code}: {resp.text[:200]}")
+          PY
+
+      # ─────────────────────────────────────────────────────────────────────
       # 14. Notifications
       # ─────────────────────────────────────────────────────────────────────
       - name: Notify completion
