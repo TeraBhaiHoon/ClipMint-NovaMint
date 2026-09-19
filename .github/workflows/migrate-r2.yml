@@ -146,7 +146,7 @@ jobs:
                       break
               src = f"{gd}:ClipMint/{jid}/clips/{name}"
               dst = f"{r2}/delivery/{jid}/{name}"
-              up = sh("rclone", "copyto", src, dst, "--stats-one-line")
+              up = sh("rclone", "copyto", src, dst, "--drive-root-folder-id", groot, "--stats-one-line")
               if up.returncode != 0:
                   failed += 1
                   failures.append(f"{jid[:8]}/{name}: {up.stderr[-150:]}")
@@ -154,7 +154,7 @@ jobs:
               thumb_key = ""
               tsrc = f"{gd}:ClipMint/{jid}/thumbnails/{stem}_thumb.jpg"
               tdst = f"{r2}/delivery/{jid}/thumbs/{stem}.jpg"
-              tup = sh("rclone", "copyto", tsrc, tdst, "--stats-one-line")
+              tup = sh("rclone", "copyto", tsrc, tdst, "--drive-root-folder-id", groot, "--stats-one-line")
               if tup.returncode == 0:
                   thumb_key = f"delivery/{jid}/thumbs/{stem}.jpg"
               patch = {
