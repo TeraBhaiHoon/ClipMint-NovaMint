@@ -454,7 +454,7 @@ def main() -> int:
     print(f"moments={len(moments)} caption_words={len(captions)} silence_gaps={len(gaps)} "
           f"scene_cuts={len(scenes)} formats={','.join(requested_formats)}")
 
-    from validate_captions import validate_captions
+    from validate_captions import validate_captions, repair_overlaps
 
     results: list[ClipResult] = []
     dropped: list[dict] = []
@@ -478,6 +478,12 @@ def main() -> int:
         # Validating the exact window that would be written lets a broken clip
         # die BEFORE the encode instead of after a wasted render.
         window = captions_for_window(captions, start, end)
+        # Whisper overlaps adjacent word timestamps on fast/Hindi speech — clamp
+        # them here rather than dropping the clip (validator keeps the gate for
+        # anything structural that survives the repair).
+        window, repaired = repair_overlaps(window)
+        if repaired:
+            print(f"[{i}] repaired {repaired} overlapping word boundary(ies)")
         ok, defects = validate_captions(window, end - start)
         if not ok:
             print(f"[{i}] DROPPED by caption validator: {'; '.join(defects)}")

@@ -30,6 +30,44 @@ import sys
 
 MAX_OVERLAP_MS = 50
 MIN_COVERAGE = 0.30
+# After clamping, a word may keep this small tail past the next word's start,
+# so adjacent words stay visually contiguous instead of getting gaps.
+REPAIR_TAIL_MS = 50
+
+
+def repair_overlaps(captions: list[dict]) -> tuple[list[dict], int]:
+    """Clamp adjacent-word end→start overlaps instead of rejecting the clip.
+
+    Whisper (and every ASR) routinely emits overlapping timestamps on fast
+    speech — especially Hindi/Hinglish. That is timing jitter, not broken
+    data: captions render as stacked pages, so a 180–900ms overlap between
+    consecutive words is invisible on screen. Rejecting whole clips for it
+    threw away perfectly good moments (prod incident: a score-100 clip died
+    over three overlapping word boundaries).
+
+    Clamps each word's end to the next word's start + a small tail, keeping
+    every word's duration positive. Returns (captions, repaired_count).
+    """
+    ordered = sorted(
+        (c for c in captions
+         if isinstance(c.get("startMs"), (int, float)) and isinstance(c.get("endMs"), (int, float))),
+        key=lambda c: c["startMs"],
+    )
+    repaired = 0
+    for prev, cur in zip(ordered, ordered[1:]):
+        prev_end, cur_start = prev["endMs"], cur["startMs"]
+        overlap = prev_end - cur_start
+        if overlap <= MAX_OVERLAP_MS:
+            continue
+        prev_start = prev.get("startMs", 0)
+        new_end = int(cur_start + REPAIR_TAIL_MS)
+        if new_end > prev_start:
+            prev["endMs"] = new_end
+        else:
+            # Degenerate: word starts after the next one — keep it a short word.
+            prev["endMs"] = int(prev_start + 80)
+        repaired += 1
+    return captions, repaired
 
 
 def validate_captions(captions: list[dict], duration_sec: float) -> tuple[bool, list[str]]:
