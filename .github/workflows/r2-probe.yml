@@ -1,0 +1,38 @@
+name: R2 Delivery Cache Probe
+on:
+  workflow_dispatch: {}
+
+# One-shot connectivity test for the R2 delivery cache: upload → read → list
+# → delete through the same env-configured rclone remote the publish step uses.
+# Green = the bucket, token and lifecycle bucket name are all correct.
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: R2 round-trip
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_DELIVERY_BUCKET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${R2_ACCOUNT_ID:-}" ] || [ -z "${R2_ACCESS_KEY_ID:-}" ] || \
+             [ -z "${R2_SECRET_ACCESS_KEY:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
+            echo "R2_PROBE_FAIL: one or more secrets missing (need R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_DELIVERY_BUCKET)"
+            exit 1
+          fi
+          export RCLONE_CONFIG_R2_TYPE=s3
+          export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+          export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          echo "probe $(date -u +%s)" > probe.txt
+          rclone copyto probe.txt "R2:${R2_BUCKET}/_probe/probe.txt" --stats-one-line
+          GOT=$(rclone cat "R2:${R2_BUCKET}/_probe/probe.txt")
+          [ "$GOT" = "$(cat probe.txt)" ] || { echo "R2_PROBE_FAIL: read-back mismatch"; exit 1; }
+          rclone lsjson "R2:${R2_BUCKET}/_probe/" >/dev/null
+          rclone deletefile "R2:${R2_BUCKET}/_probe/probe.txt"
+          echo "R2_PROBE_PASS upload/read/list/delete all OK (bucket: ${R2_BUCKET})"

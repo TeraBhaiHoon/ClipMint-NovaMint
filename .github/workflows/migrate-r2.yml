@@ -1,0 +1,155 @@
+name: One-time migrate existing clips to R2
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true = list what would be migrated without changing anything"
+        required: false
+        default: "true"
+        type: string
+
+# One-time backfill: pre-caches clips that only exist in the Drive archive
+# into the R2 delivery cache and fills clips.storage_path / thumbnail_path /
+# thumbnail_drive_id, so old jobs download through the new system instantly.
+#
+# Idempotent: clips that already have storage_path are skipped, so re-running
+# after a partial failure continues where it stopped. Migrated objects use the
+# same delivery/ keys as fresh jobs — the bucket lifecycle expires them after
+# 1 day, after which the dashboard re-materialises on demand (by design).
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -q requests
+
+      - name: Configure rclone (Drive archive)
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
+          rclone listremotes
+
+      - name: Migrate clips Drive → R2
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_DELIVERY_BUCKET }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ -z "${R2_ACCOUNT_ID:-}" ] || [ -z "${R2_ACCESS_KEY_ID:-}" ] || \
+             [ -z "${R2_SECRET_ACCESS_KEY:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
+            echo "R2 secrets missing (R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_DELIVERY_BUCKET)"
+            exit 1
+          fi
+          export RCLONE_CONFIG_R2_TYPE=s3
+          export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+          export RCLONE_CONFIG_R2_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          export RCLONE_CONFIG_R2_ENDPOINT="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          python3 - <<'PY'
+          import json, os, subprocess, sys, time
+          from pathlib import Path
+          sys.path.insert(0, "pipeline")
+          import requests
+          from db import Supabase
+
+          db = Supabase()
+          dry = str(os.environ.get("DRY_RUN", "true")).lower() == "true"
+          gd = (subprocess.run(["rclone", "listremotes"], capture_output=True, text=True)
+                .stdout or "").split(":")[0].strip()
+          groot = os.environ["GDRIVE_FOLDER_ID"]
+          r2 = "R2:" + os.environ["R2_BUCKET"]
+
+          def sh(*args):
+              return subprocess.run(args, capture_output=True, text=True)
+
+          # ── inventory ────────────────────────────────────────────────
+          resp = db._request("GET", "clips?drive_file_id=not.is.null&select=id,job_id,filename,storage_path,thumbnail_path,thumbnail_drive_id,created_at&order=created_at.desc")
+          if resp.status_code != 200:
+              raise SystemExit(f"FATAL: clip query failed HTTP {resp.status_code}: {resp.text[:300]}")
+          clips = resp.json()
+          pending = [c for c in clips if not (c.get("storage_path") or "").strip()]
+          print(f"clips total={len(clips)} already_migrated={len(clips) - len(pending)} pending={len(pending)}")
+          if dry:
+              for c in pending[:200]:
+                  print(f"  would migrate: job={c['job_id'][:8]} {c['filename']}")
+              print(f"DRY_RUN complete — rerun with dry_run=false to migrate {len(pending)} clip(s)")
+              raise SystemExit(0)
+          if not pending:
+              print("NOTHING_TO_MIGRATE")
+              raise SystemExit(0)
+
+          # ── per-job thumbnail drive ids (for later re-materialisation) ──
+          job_ids = sorted({c["job_id"] for c in pending})
+          thumb_ids_by_job = {}
+          for jid in job_ids:
+              r = sh("rclone", "lsjson", f"{gd}:ClipMint/{jid}/thumbnails",
+                     f"--drive-root-folder-id={groot}")
+              if r.returncode == 0:
+                  try:
+                      thumb_ids_by_job[jid] = {
+                          f["Name"].replace("_thumb.jpg", ""): f.get("ID", "")
+                          for f in json.loads(r.stdout or "[]")
+                      }
+                  except json.JSONDecodeError:
+                      thumb_ids_by_job[jid] = {}
+              time.sleep(0.2)
+
+          # ── migrate ─────────────────────────────────────────────────
+          ok = failed = 0
+          failures = []
+          for c in pending:
+              jid, name = c["job_id"], c["filename"]
+              stem = name[:-len(".mp4")] if name.endswith(".mp4") else name
+              for suffix in ("_captioned", "_1x1", "_16x9"):
+                  if stem.endswith(suffix):
+                      stem = stem[: -len(suffix)]
+                      break
+              src = f"{gd}:ClipMint/{jid}/clips/{name}"
+              dst = f"{r2}:delivery/{jid}/{name}"
+              up = sh("rclone", "copyto", src, dst, "--stats-one-line")
+              if up.returncode != 0:
+                  failed += 1
+                  failures.append(f"{jid[:8]}/{name}: {up.stderr[-150:]}")
+                  continue
+              thumb_key = ""
+              tsrc = f"{gd}:ClipMint/{jid}/thumbnails/{stem}_thumb.jpg"
+              tdst = f"{r2}:delivery/{jid}/thumbs/{stem}.jpg"
+              tup = sh("rclone", "copyto", tsrc, tdst, "--stats-one-line")
+              if tup.returncode == 0:
+                  thumb_key = f"delivery/{jid}/thumbs/{stem}.jpg"
+              patch = {
+                  "storage_path": f"delivery/{jid}/{name}",
+                  "thumbnail_path": thumb_key or None,
+                  "thumbnail_drive_id": thumb_ids_by_job.get(jid, {}).get(stem) or None,
+              }
+              pr = db._request("PATCH", f"clips?id=eq.{c['id']}", json=patch)
+              if pr.status_code not in (200, 204):
+                  failed += 1
+                  failures.append(f"{jid[:8]}/{name}: patch HTTP {pr.status_code}")
+                  continue
+              ok += 1
+              print(f"  migrated: job={jid[:8]} {name} ({ok}/{len(pending)})")
+
+          print(f"MIGRATION_DONE ok={ok} failed={failed} skipped_already={len(clips) - len(pending)}")
+          for f in failures[:30]:
+              print("  FAIL:", f)
+          if failed:
+              raise SystemExit(1)
+          PY
