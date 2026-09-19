@@ -192,6 +192,19 @@ function corsHeaders(origin: string): HeadersInit {
     };
 }
 
+// CORS_ORIGIN accepts a single origin or a comma-separated allowlist. The
+// request's own Origin is echoed back only when it is allowlisted; otherwise
+// the first configured origin is returned (browsers reject the mismatch).
+function resolveCorsOrigin(requestOrigin: string | null, env: Env): string {
+    const allowed = (env.CORS_ORIGIN || "*")
+        .split(",")
+        .map((o) => o.trim())
+        .filter(Boolean);
+    if (allowed.length === 0 || allowed.includes("*")) return "*";
+    if (requestOrigin && allowed.includes(requestOrigin)) return requestOrigin;
+    return allowed[0];
+}
+
 function jsonResponse(data: unknown, status = 200, env?: Env): Response {
     return new Response(JSON.stringify(data), {
         status,
@@ -613,8 +626,7 @@ async function handleGetClips(
 
 // ─── Main Router ─────────────────────────────────────────────────────────────
 
-export default {
-    async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+async function route(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
         // Handle CORS preflight
         if (request.method === "OPTIONS") {
             return new Response(null, {
@@ -689,5 +701,23 @@ export default {
         }
 
         return errorResponse("Not found", 404, env);
+}
+
+export default {
+    async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
+        const response = await route(request, env, ctx);
+        // Re-apply CORS at the boundary so the allowlist is resolved against
+        // the request's Origin — the inner helpers only see env, not request.
+        const headers = new Headers(response.headers);
+        for (const [key, value] of Object.entries(
+            corsHeaders(resolveCorsOrigin(request.headers.get("Origin"), env))
+        )) {
+            headers.set(key, value);
+        }
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+        });
     },
 };
