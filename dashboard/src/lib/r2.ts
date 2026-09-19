@@ -16,7 +16,7 @@ import { AwsClient } from "aws4fetch";
 const R2_ACCOUNT_ID = (process.env.R2_ACCOUNT_ID || "").trim();
 const R2_ACCESS_KEY_ID = (process.env.R2_ACCESS_KEY_ID || "").trim();
 const R2_SECRET_ACCESS_KEY = (process.env.R2_SECRET_ACCESS_KEY || "").trim();
-const R2_BUCKET = (process.env.R2_DELIVERY_BUCKET || "").trim();
+const R2_BUCKET = (process.env.R2_DELIVERY_BUCKET || process.env.R2_BUCKET || "").trim();
 
 const TTL_MIN = 60;
 /** S3 presigned URLs cannot exceed 7 days. */
