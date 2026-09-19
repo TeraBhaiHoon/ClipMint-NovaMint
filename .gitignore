@@ -49,3 +49,4 @@ task.md.resolved
 __pycache__/
 *.pyc
 .testrun2/
+ENV_SETUP.md
