@@ -1350,7 +1350,7 @@ jobs:
               except (IndexError, ValueError):
                   continue
               key = f"{base}/{name}"
-              up = sh("rclone", "copyto", str(clip_path), f"{remote}:{key}", "--stats-one-line")
+              up = sh("rclone", "copyto", str(clip_path), f"{remote}/{key}", "--stats-one-line")
               ok = up.returncode == 0
               if ok:
                   published += 1

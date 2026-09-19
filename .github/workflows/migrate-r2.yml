@@ -125,7 +125,7 @@ jobs:
                       stem = stem[: -len(suffix)]
                       break
               src = f"{gd}:ClipMint/{jid}/clips/{name}"
-              dst = f"{r2}:delivery/{jid}/{name}"
+              dst = f"{r2}/delivery/{jid}/{name}"
               up = sh("rclone", "copyto", src, dst, "--stats-one-line")
               if up.returncode != 0:
                   failed += 1
@@ -133,7 +133,7 @@ jobs:
                   continue
               thumb_key = ""
               tsrc = f"{gd}:ClipMint/{jid}/thumbnails/{stem}_thumb.jpg"
-              tdst = f"{r2}:delivery/{jid}/thumbs/{stem}.jpg"
+              tdst = f"{r2}/delivery/{jid}/thumbs/{stem}.jpg"
               tup = sh("rclone", "copyto", tsrc, tdst, "--stats-one-line")
               if tup.returncode == 0:
                   thumb_key = f"delivery/{jid}/thumbs/{stem}.jpg"
