@@ -1229,6 +1229,11 @@ jobs:
           OUTPUT_FORMATS: ${{ inputs.output_formats }}
           CAPTION_PACE: ${{ inputs.caption_pace }}
           CLIPMINT_BGM_MOOD: ${{ inputs.bgm_mood }}
+          # Live progress pings from render_clips — a 20-clip render of a long
+          # video takes hours, and the dashboard needs movement to not flag it.
+          CLIPMINT_JOB_ID: ${{ inputs.job_id }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           CLIPMINT_AUTO_PUNCH_IN: ${{ inputs.auto_punch_in == 'true' && '1' || '0' }}
         run: |
           set -euo pipefail
@@ -1592,7 +1597,7 @@ jobs:
           # and the loop above would silently drop them. Re-surface every
           # non-ok render result as an explicit failed row so the dashboard
           # still shows what happened instead of just fewer clips.
-          delivered = {(r["index"], r.get("variant", "9x16")) for r in rows}
+          delivered = {(r["clip_index"], r.get("variant", "9x16")) for r in rows}
           for r in render["results"]:
               key = (r["index"], r.get("variant", "9x16"))
               if r.get("ok") or key in delivered:

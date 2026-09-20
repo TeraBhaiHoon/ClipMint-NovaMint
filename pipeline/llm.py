@@ -69,14 +69,19 @@ def _dedup(models: list[str]) -> list[str]:
 
 def _providers() -> list[tuple[str, str, str, list[str]]]:
     """(provider_name, url, api_key, models) in fallback order."""
+    # NVIDIA NIM FIRST: the user's Groq free tier is 8,000 tokens/minute — a
+    # long-video briefing alone exceeds that, so Groq-first spent minutes in
+    # 429 retries and silently degraded to the weaker gpt-oss-20b mid-video.
+    # NIM (40 RPM, generous TPM) handles long transcripts; Groq stays as the
+    # fallback when NIM is unavailable.
     chain: list[tuple[str, str, str, list[str]]] = []
+    nim_key = os.environ.get("NVIDIA_NIM_API_KEY", "").strip()
+    if nim_key:
+        chain.append(("nim", NIM_URL, nim_key, list(NIM_MODELS)))
     groq_key = os.environ.get("GROQ_API_KEY", "").strip()
     if groq_key:
         override = os.environ.get("CLIPMINT_LLM_MODEL", "").strip()
         chain.append(("groq", GROQ_URL, groq_key, _dedup(([override] if override else []) + GROQ_MODELS)))
-    nim_key = os.environ.get("NVIDIA_NIM_API_KEY", "").strip()
-    if nim_key:
-        chain.append(("nim", NIM_URL, nim_key, list(NIM_MODELS)))
     return chain
 
 

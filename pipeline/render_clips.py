@@ -44,6 +44,7 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.request
 import sys
 from pathlib import Path
 
@@ -66,6 +67,37 @@ FORMAT_DIMENSIONS = {
 DURATION_TOLERANCE_SEC = 0.5
 
 PIPELINE_DIR = Path(__file__).resolve().parent
+
+
+def _ping_progress(done: int, total: int) -> None:
+    """Best-effort job progress ping after each finished render unit.
+
+    A 20-clip render from a 1-2 hour source takes 2+ hours; without pings the
+    dashboard's 45-minute stuck detector fires mid-render. Enabled only when
+    CLIPMINT_JOB_ID + Supabase env vars are present (the workflow sets them);
+    never raises — a ping failure must not fail a successful render.
+    """
+    job_id = os.environ.get("CLIPMINT_JOB_ID", "").strip()
+    url = os.environ.get("SUPABASE_URL", "").strip()
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
+    if not job_id or not url or not key or total <= 0:
+        return
+    try:
+        progress = 70 + round(15 * min(done, total) / total)
+        req = urllib.request.Request(
+            f"{url.rstrip('/')}/rest/v1/jobs?id=eq.{job_id}",
+            data=json.dumps({"status": "captioning", "progress": min(88, progress)}).encode(),
+            method="PATCH",
+            headers={
+                "apikey": key, "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json", "Prefer": "return=minimal",
+            },
+            timeout=30,
+        )
+        urllib.request.urlopen(req, timeout=30).read()
+        print(f"  progress ping: {done}/{total} -> {progress}%")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  progress ping failed (non-fatal): {exc}")
 
 
 def load_bgm_map() -> dict:
@@ -382,6 +414,7 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 batch = [{"index": entry["index"], "variant": "9x16", "ok": False,
                           "error": f"worker crashed: {exc}"}]
+            done_count = 0
             for res in batch:
                 results.append(res)
                 label = res.get("variant", "9x16")
@@ -389,6 +422,8 @@ def main() -> int:
                     print(f"  [{res['index']}:{label}] OK {res.get('bytes', 0):,} bytes")
                 else:
                     print(f"  [{res['index']}:{label}] FAILED: {res['error']}")
+            done_count += 1
+            _ping_progress(done_count, len(manifest))
 
     results.sort(key=lambda r: (r["index"], r.get("variant", "9x16")))
     ok = [r for r in results if r["ok"]]
