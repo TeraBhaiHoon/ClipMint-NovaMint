@@ -14,8 +14,12 @@ import { PLAN_LIMITS, type Plan, type PlanPeriod } from "@/lib/types";
  */
 export const CASHFREE_API_VERSION = "2026-01-01";
 
-/** Orders expire 15 minutes after creation; enough for checkout, short enough to recycle. */
-export const ORDER_EXPIRY_MINUTES = 15;
+/** Orders expire 45 minutes after creation. Cashfree requires expiry to be
+ *  STRICTLY more than 15 minutes away (a 15-minute value 400s as
+ *  order_expiry_time_invalid, and server clock skew eats into the margin),
+ *  and less than 30 days. The reuse path re-serves the same session, so a
+ *  longer window never double-charges. */
+export const ORDER_EXPIRY_MINUTES = 45;
 
 /** A webhook signature older than this is treated as a replay. */
 export const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
