@@ -9,6 +9,7 @@ import {
     orderNoteFor,
     ORDER_EXPIRY_MINUTES,
     planPeriodAmountRupees,
+    logCashfreeError,
 } from "@/lib/cashfree";
 
 /**
@@ -169,7 +170,7 @@ export async function POST(request: NextRequest) {
             environment: isProductionEnvironment() ? "production" : "sandbox",
         });
     } catch (err) {
-        console.error("Cashfree create order error:", err);
+        logCashfreeError("create-order", err);
         return NextResponse.json(
             { error: "Payment initialization failed. Please try again." },
             { status: 500 }

@@ -8,6 +8,7 @@ import {
     isPlanPeriod,
     planPeriodAmountPaise,
     planPeriodAmountRupees,
+    logCashfreeError,
 } from "@/lib/cashfree";
 
 /**
@@ -204,7 +205,7 @@ async function handleVerification(request: NextRequest) {
             message: `Successfully upgraded to ${planInfo.label} plan!`,
         });
     } catch (err) {
-        console.error("Cashfree verify payment error:", err);
+        logCashfreeError("verify-payment", err);
         if (request.method === "GET") {
             return NextResponse.redirect(
                 new URL("/pricing?error=verification_failed", request.nextUrl.origin)

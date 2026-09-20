@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/server";
-import { getCashfree } from "@/lib/cashfree";
+import { getCashfree, logCashfreeError } from "@/lib/cashfree";
 
 /**
  * POST /api/cashfree/cancel
@@ -58,7 +58,7 @@ export async function POST() {
                 }
             );
         } catch (err) {
-            console.error("Cashfree subscription cancel failed:", err);
+            logCashfreeError("cancel", err);
             return NextResponse.json(
                 { error: "Could not cancel the subscription at the payment provider. Please try again." },
                 { status: 502 }

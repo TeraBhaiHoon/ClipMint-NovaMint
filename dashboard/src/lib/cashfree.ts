@@ -20,6 +20,26 @@ export const ORDER_EXPIRY_MINUTES = 15;
 /** A webhook signature older than this is treated as a replay. */
 export const WEBHOOK_MAX_AGE_MS = 5 * 60 * 1000;
 
+/**
+ * Log a failed Cashfree SDK call WITH the gateway's own response body — the
+ * axios error alone (e.g. "401") hides whether the credentials were rejected,
+ * the environment mismatched, or the request was malformed.
+ */
+export function logCashfreeError(scope: string, err: unknown): void {
+    const axios = err as { response?: { status?: number; data?: unknown }; message?: string };
+    const status = axios?.response?.status;
+    const body = axios?.response?.data;
+    const hint =
+        status === 401
+            ? " — credentials rejected: CASHFREE_APP_ID/CASHFREE_SECRET_KEY must be a matching pair for the host CASHFREE_ENV selects (PRODUCTION=api.cashfree.com, else sandbox.cashfree.com)"
+            : "";
+    console.error(
+        `Cashfree ${scope} failed: HTTP ${status ?? "?"} ${hint}`,
+        typeof body === "string" ? body.slice(0, 400) : JSON.stringify(body)?.slice(0, 400),
+        err instanceof Error ? err.message : err,
+    );
+}
+
 /** Generic plan / period guard reused by every route. */
 export function isBilledPlan(plan: string | undefined | null): plan is Plan {
     return !!plan && plan !== "free" && plan in PLAN_LIMITS;
