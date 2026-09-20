@@ -187,6 +187,21 @@ export async function POST(request: NextRequest) {
                     // Failed-payment logging is non-critical; log and continue.
                     console.error("Failed to record failed payment event:", err);
                 }
+
+                // Release the dead order so the user's next "Buy" mints a FRESH
+                // checkout session instead of reusing one whose payment already
+                // failed (the reused session kept failing with the same error).
+                try {
+                    if (order.order_id) {
+                        await supabase
+                            .from("profiles")
+                            .update({ cashfree_order_id: null })
+                            .eq("id", userId)
+                            .eq("cashfree_order_id", order.order_id);
+                    }
+                } catch (err) {
+                    console.error("Failed to release order after payment failure:", err);
+                }
                 break;
             }
 

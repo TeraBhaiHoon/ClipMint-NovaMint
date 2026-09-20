@@ -171,9 +171,11 @@ export async function POST(request: NextRequest) {
         });
     } catch (err) {
         logCashfreeError("create-order", err);
-        return NextResponse.json(
-            { error: "Payment initialization failed. Please try again." },
-            { status: 500 }
-        );
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        const message =
+            status === 401
+                ? "Payment gateway rejected our credentials. Please contact support."
+                : "Payment initialization failed. Please try again.";
+        return NextResponse.json({ error: message }, { status: 502 });
     }
 }
