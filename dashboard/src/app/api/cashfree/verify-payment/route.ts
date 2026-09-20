@@ -177,7 +177,8 @@ async function handleVerification(request: NextRequest) {
                     cashfree_order_id: orderId,
                     cashfree_customer_id:
                         orderData.customer_details?.customer_id || null,
-                    subscription_status: period === "one_time" ? "none" : "active",
+                    // One-time payments only — there is never a Cashfree subscription.
+                    subscription_status: "none",
                     plan_period: period,
                     current_period_end: periodEnd.toISOString(),
                 })

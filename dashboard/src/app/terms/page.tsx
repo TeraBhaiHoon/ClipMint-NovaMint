@@ -108,7 +108,7 @@ export default function TermsPage() {
                             4. Subscriptions, Payments &amp; Credits
                         </h2>
                         <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
-                            Usage limits on free accounts are updated monthly. Subscriptions automatically renew at current
+                            Usage limits on free accounts are updated monthly. Paid plans are one-time purchases (30 days for monthly, 365 days for annual) and do not auto-renew; access ends on the expiry date unless you buy again. Prices at
                             base rates unless cancelled prior to renewal checkout. All charges are securely processed using Cashfree API gateways.
                         </p>
                     </section>

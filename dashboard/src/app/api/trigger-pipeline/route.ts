@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/server";
 import { validateVideoUrl } from "@/lib/validateUrl";
 import { r2Configured, r2PresignGet } from "@/lib/r2";
+import { isPlanExpired } from "@/lib/cashfree";
 
 /**
  * POST /api/trigger-pipeline
@@ -121,7 +122,7 @@ export async function POST(request: NextRequest) {
     // ── Quota checks (server-side; the browser check is UX only) ──
     const { data: profile, error: profileError } = await quotaClient
         .from("profiles")
-        .select("clips_used, clips_limit, videos_used, videos_limit")
+        .select("clips_used, clips_limit, videos_used, videos_limit, plan, plan_expires_at")
         .eq("id", job.user_id)
         .single();
 
@@ -142,7 +143,11 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: message }, { status: 402 });
     }
 
-    const remainingClips = Math.max(0, (profile.clips_limit ?? 0) - (profile.clips_used ?? 0));
+    // One-time plans expire: an expired paid plan is gated at Free limits server-side.
+    const expired = isPlanExpired(profile);
+    const effectiveClipsLimit = expired ? 5 : (profile.clips_limit ?? 0);
+
+    const remainingClips = Math.max(0, effectiveClipsLimit - (profile.clips_used ?? 0));
     if (remainingClips < 1) {
         const message = "You've run out of clips. Please upgrade your plan to keep creating.";
         await failJob(quotaClient, job.id, message);

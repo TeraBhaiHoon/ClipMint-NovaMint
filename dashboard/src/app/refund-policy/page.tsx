@@ -44,7 +44,7 @@ export default function RefundPolicyPage() {
                         <p className="text-slate-300 leading-relaxed">
                             At NovaMint Networks, customer satisfaction is our top priority. We want you to be
                             completely confident using ClipMint. This Refund Policy outlines the terms under which
-                            refunds may be requested and issued for our subscription or one-time plans.
+                            refunds may be requested and issued for our one-time plans.
                         </p>
                     </section>
 
@@ -86,7 +86,7 @@ export default function RefundPolicyPage() {
                             </a>
                         </div>
                         <p className="text-slate-400 text-xs mt-1">
-                            Please specify your registered account email, date of purchase, subscription plan type, and order ID if available.
+                            Please specify your registered account email, date of purchase, plan type, and order ID if available.
                         </p>
                     </section>
 
@@ -129,7 +129,7 @@ export default function RefundPolicyPage() {
                             </li>
                             <li className="text-sm text-slate-500 flex items-center gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500/40 flex-shrink-0" />
-                                <span>Automatic plan renewals (refunds apply strictly to your first subscription cycle).</span>
+                                <span>Payments made after your first purchase (refunds apply strictly to the first charge).</span>
                             </li>
                             <li className="text-sm text-slate-500 flex items-center gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500/40 flex-shrink-0" />
@@ -140,7 +140,7 @@ export default function RefundPolicyPage() {
 
                     <section className="flex flex-col gap-4 border-t border-white/5 pt-8">
                         <h2 className="text-xl sm:text-2xl font-bold text-slate-200">
-                            5. Subscription Cancellation
+                            5. Plan Expiry
                         </h2>
                         <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
                             Please note that cancelling your recurring billing and requesting a refund are separate actions.

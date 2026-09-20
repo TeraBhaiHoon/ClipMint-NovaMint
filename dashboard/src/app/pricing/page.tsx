@@ -39,6 +39,7 @@ const PLANS = [
         name: "Creator",
         monthlyPrice: "₹499",
         annualPrice: "₹399",
+        billedToday: "₹4,788",
         period: "/month",
         features: [
             "150 clips/month",
@@ -58,6 +59,7 @@ const PLANS = [
         name: "Pro",
         monthlyPrice: "₹899",
         annualPrice: "₹719",
+        billedToday: "₹8,628",
         period: "/month",
         features: [
             "200 clips/month",
@@ -77,6 +79,7 @@ const PLANS = [
         name: "Agency",
         monthlyPrice: "₹1,499",
         annualPrice: "₹1,199",
+        billedToday: "₹14,388",
         period: "/month",
         features: [
             "Unlimited clips",
@@ -99,8 +102,8 @@ const BILLING_FAQ = [
         a: "We accept all major credit/debit cards, UPI, net banking, and wallets via Cashfree. All payments are securely processed with 256-bit encryption.",
     },
     {
-        q: "Can I cancel anytime?",
-        a: "Yes. Cancel from your Settings page at any time. You'll retain access until the end of your current billing cycle.",
+        q: "Do plans auto-renew?",
+        a: "No. Every paid plan is a one-time payment — monthly lasts 30 days, annual lasts 365 days. Nothing renews and nothing charges you again unless you buy again.",
     },
     {
         q: "What's the refund policy?",
@@ -112,11 +115,11 @@ const BILLING_FAQ = [
     },
     {
         q: "Can I switch plans?",
-        a: "Yes. Upgrade or downgrade anytime from your dashboard Settings. Changes take effect at the start of your next billing cycle.",
+        a: "Yes. Buy a different plan anytime from the pricing page — the new plan starts immediately.",
     },
     {
-        q: "What's the difference between one-time and subscription?",
-        a: "One-time payment gives you 30 days of access at the monthly rate. Subscription auto-renews each month or year at the selected rate until you cancel.",
+        q: "What happens when my plan expires?",
+        a: "Your account reverts to the Free plan limits. Your clips stay in your dashboard — upgrade again anytime to restore full limits.",
     },
 ];
 
@@ -124,7 +127,6 @@ export default function PricingPage() {
     const [annual, setAnnual] = useState(false);
     const [openFaq, setOpenFaq] = useState<number | null>(null);
     const [loadingPlan, setLoadingPlan] = useState<string | null>(null);
-    const [paymentType, setPaymentType] = useState<"subscription" | "one_time">("subscription");
     const [isLoggedIn, setIsLoggedIn] = useState(false);
     const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
     const [cashfreeLoaded, setCashfreeLoaded] = useState(false);
@@ -165,7 +167,8 @@ export default function PricingPage() {
         setLoadingPlan(planKey);
 
         try {
-            const period = paymentType === "one_time" ? "one_time" : annual ? "annual" : "monthly";
+            // One-time payments only: monthly and annual are both charged once.
+            const period = annual ? "annual" : "monthly";
 
             const res = await fetch("/api/cashfree/create-order", {
                 method: "POST",
@@ -258,58 +261,30 @@ export default function PricingPage() {
                         Start free. Scale as you grow. No hidden fees.
                     </p>
 
-                    {/* ─── Payment Type Toggle ─── */}
-                    <div className="flex justify-center gap-3 mb-6 flex-wrap">
+                    {/* ─── Billing Period Toggle (one-time payments) ─── */}
+                    <div className="inline-flex items-center gap-1.5 p-1.5 rounded-xl bg-white/2.5 border border-white/5 shadow-inner mb-6">
                         <button
-                            onClick={() => setPaymentType("subscription")}
-                            className={`px-5 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all duration-300 ${
-                                paymentType === "subscription"
-                                    ? "border-mint-500 bg-mint-500/10 text-mint-300"
-                                    : "border-white/5 bg-transparent text-ink-300 hover:text-ink-50"
+                            onClick={() => setAnnual(false)}
+                            className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 ${
+                                !annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
                             }`}
                         >
-                            <RefreshCw size={13} />
-                            <span>Subscription</span>
+                            Monthly
                         </button>
                         <button
-                            onClick={() => setPaymentType("one_time")}
-                            className={`px-5 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 cursor-pointer transition-all duration-300 ${
-                                paymentType === "one_time"
-                                    ? "border-mint-500 bg-mint-500/10 text-mint-300"
-                                    : "border-white/5 bg-transparent text-ink-300 hover:text-ink-50"
+                            onClick={() => setAnnual(true)}
+                            className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 flex items-center gap-1.5 ${
+                                annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
                             }`}
                         >
-                            <CreditCard size={13} />
-                            <span>One-Time (30 Days)</span>
+                            <span>Annual</span>
+                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                annual ? "bg-ink-950/15 text-ink-950" : "bg-marigold-400/15 text-marigold-400"
+                            }`}>
+                                Save 20%
+                            </span>
                         </button>
                     </div>
-
-                    {/* ─── Billing Period Toggle (only for subscriptions) ─── */}
-                    {paymentType === "subscription" && (
-                        <div className="inline-flex items-center gap-1.5 p-1.5 rounded-xl bg-white/2.5 border border-white/5 shadow-inner">
-                            <button
-                                onClick={() => setAnnual(false)}
-                                className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 ${
-                                    !annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
-                                }`}
-                            >
-                                Monthly
-                            </button>
-                            <button
-                                onClick={() => setAnnual(true)}
-                                className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 flex items-center gap-1.5 ${
-                                    annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
-                                }`}
-                            >
-                                <span>Annual</span>
-                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                                    annual ? "bg-ink-950/15 text-ink-950" : "bg-marigold-400/15 text-marigold-400"
-                                }`}>
-                                    Save 20%
-                                </span>
-                            </button>
-                        </div>
-                    )}
                 </div>
 
                 {/* ─── Plans Grid ─── */}
@@ -337,32 +312,34 @@ export default function PricingPage() {
                                     </h3>
                                     <div className="flex items-baseline gap-1 mb-2">
                                         <span className="font-[family-name:var(--font-display)] font-bold text-[34px] leading-none tracking-[-0.02em] text-ink-50">
-                                            {paymentType === "one_time"
-                                                ? plan.monthlyPrice
-                                                : annual
-                                                    ? plan.annualPrice
-                                                    : plan.monthlyPrice}
+                                            {annual && !isFree
+                                                ? plan.annualPrice
+                                                : plan.monthlyPrice}
                                         </span>
                                         <span className="text-xs text-ink-500 font-medium">
                                             {isFree
                                                 ? "forever"
-                                                : paymentType === "one_time"
-                                                    ? "/30 days"
-                                                    : plan.period}
+                                                : annual
+                                                    ? "/month · billed yearly"
+                                                    : "/30 days"}
                                         </span>
                                     </div>
 
                                     {/* Payment badge */}
                                     {!isFree && !isContactSales && (
-                                        <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold mb-6 ${
-                                            paymentType === "subscription"
-                                                ? "bg-mint-500/10 text-mint-300"
-                                                : "bg-mint-500/10 text-mint-400"
-                                        }`}>
-                                            {paymentType === "subscription" ? (
-                                                <><RefreshCw size={9} /> <span>Auto-renews</span></>
-                                            ) : (
-                                                <><Zap size={9} /> <span>One-time</span></>
+                                        <div className="inline-flex flex-col items-start gap-1 mb-6">
+                                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold bg-mint-500/10 text-mint-400">
+                                                <Zap size={9} /> <span>One-time · no auto-renewal</span>
+                                            </div>
+                                            {annual && !isFree && (
+                                                <span className="text-[10px] text-ink-500 font-medium">
+                                                    {plan.billedToday} billed today · 12 months access
+                                                </span>
+                                            )}
+                                            {!annual && !isFree && (
+                                                <span className="text-[10px] text-ink-500 font-medium">
+                                                    {plan.monthlyPrice} billed today · 30 days access
+                                                </span>
                                             )}
                                         </div>
                                     )}

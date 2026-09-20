@@ -119,7 +119,7 @@ const PLANS: PlanCard[] = [
       "API access",
     ],
     highlighted: false,
-    cta: "Subscribe now",
+    cta: "Get started",
   },
   {
     key: "agency",

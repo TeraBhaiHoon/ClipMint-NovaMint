@@ -65,6 +65,20 @@ export function planPeriodAmountRupees(plan: Plan, period: PlanPeriod): number {
     return planPeriodAmountPaise(plan, period) / 100;
 }
 
+/**
+ * One-time plans expire: a paid plan whose `plan_expires_at` has passed is
+ * treated as Free everywhere (quota reads gate on this). Legacy paid rows
+ * without an expiry stay active rather than locking existing payers out.
+ */
+export function isPlanExpired(profile: {
+    plan?: string | null;
+    plan_expires_at?: string | null;
+}): boolean {
+    if (!profile?.plan || profile.plan === "free") return false;
+    if (!profile.plan_expires_at) return false;
+    return new Date(profile.plan_expires_at).getTime() < Date.now();
+}
+
 /** Period end for a fresh purchase/renewal, computed identically everywhere. */
 export function computePeriodEnd(period: PlanPeriod, from: Date = new Date()): Date {
     const end = new Date(from);
