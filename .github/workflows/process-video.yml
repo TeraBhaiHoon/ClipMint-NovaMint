@@ -111,6 +111,9 @@ env:
   NODE_VERSION: "22"
   PYTHON_VERSION: "3.11"
   CLIPMINT_AUDIO_REACTIVE: "1"
+  # Unbuffered stdout: per-clip progress lines stream to the Actions log LIVE
+  # instead of sitting in Python's pipe buffer for the whole render.
+  PYTHONUNBUFFERED: "1"
 
 jobs:
   process:
@@ -124,6 +127,11 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+    outputs:
+      shards: ${{ steps.split.outputs.shards }}
+      shard_count: ${{ steps.split.outputs.shard_count }}
+      has_custom_bgm: ${{ steps.bgm.outputs.found == 'true' }}
 
     steps:
       # ─────────────────────────────────────────────────────────────────────
@@ -165,18 +173,6 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
           rclone listremotes
-
-      - name: Install Remotion dependencies
-        working-directory: remotion-captions
-        run: |
-          set -euo pipefail
-          # Every @remotion/* package is pinned to one version and the lockfile is
-          # committed. A mismatched tree makes Remotion abort EVERY render, which
-          # is what previously made the pipeline ship uncaptioned clips.
-          npm ci --no-audit --no-fund || npm install --no-audit --no-fund
-          node -e "console.log('remotion', require('remotion/package.json').version)"
-          node -e "console.log('@remotion/media', require('@remotion/media/package.json').version)"
-          node -e "console.log('@remotion/google-fonts', require('@remotion/google-fonts/package.json').version)"
 
       - name: Install pipeline Python dependencies
         run: |
@@ -1203,6 +1199,7 @@ jobs:
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status captioning --progress 70
 
       - name: Fetch custom BGM
+        id: bgm
         if: ${{ inputs.custom_bgm_url != '' }}
         env:
           CUSTOM_BGM_URL: ${{ inputs.custom_bgm_url }}
@@ -1219,22 +1216,132 @@ jobs:
           python3 -c "import sys; d=float('${DUR}' or 0); sys.exit(0 if 5<=d<=900 else 1)" && DUR_OK=1 || true
           if [ "$SIZE_OK" = 1 ] && [ "$DUR_OK" = 1 ]; then
             echo "CLIPMINT_CUSTOM_BGM=bgm/_custom.mp3" > workspace/custom_bgm.env
+            echo "found=true" >> "$GITHUB_OUTPUT"
           else
+            echo "found=false" >> "$GITHUB_OUTPUT"
             echo "custom BGM invalid — falling back to the mood library"
             rm -f "remotion-captions/public/bgm/_custom.mp3"
           fi
 
-      - name: Render captions
+      # ─────────────────────────────────────────────────────────────────────
+      # 10b. Split prepared clips across the render matrix
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Split render shards
+        id: split
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, shutil
+          from pathlib import Path
+
+          root = Path("workspace")
+          manifest = json.load(open("workspace/clips/clips_manifest.json"))
+          n = len(manifest)
+          shard_count = max(1, min(15, n))
+          shards = [[] for _ in range(shard_count)]
+          for pos, entry in enumerate(manifest):
+              shards[pos % shard_count].append(entry)  # round-robin balances long clips
+
+          for k, entries in enumerate(shards):
+              d = root / f"shard-{k}" / "clips"
+              (d / "_props").mkdir(parents=True, exist_ok=True)
+              for e in entries:
+                  for key in ("file", "cut_file"):
+                      f = e.get(key)
+                      if f and (root / "clips" / f).exists():
+                          shutil.copy2(root / "clips" / f, d / f)
+                  src = root / "clips" / f"clip_{e['index']:03d}.captions.json"
+                  if src.exists():
+                      shutil.copy2(src, d / src.name)
+              (d / "clips_manifest.json").write_text(json.dumps(entries, indent=2))
+
+          meta = root / "meta"
+          meta.mkdir(parents=True, exist_ok=True)
+          (meta / "custom").mkdir(parents=True, exist_ok=True)
+          for f in ("clips_manifest.json", "viral_moments.json"):
+              src = root / "clips" / f
+              if src.exists():
+                  shutil.copy2(src, meta / f)
+          step = root / ".current_step"
+          if step.exists():
+              shutil.copy2(step, meta / ".current_step")
+
+          print(f"SHARDS_OK count={shard_count} sizes={[len(x) for x in shards]}")
+          PY
+          SHARD_COUNT=$(python3 -c "import json; print(max(1, min(15, len(json.load(open('workspace/clips/clips_manifest.json'))))))")
+          echo "shard_count=$SHARD_COUNT" >> "$GITHUB_OUTPUT"
+          echo "shards=$(python3 -c "import json; print(json.dumps(list(range(max(1, min(15, len(json.load(open('workspace/clips/clips_manifest.json')))))))))")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload render inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-inputs
+          path: |
+            workspace/shard-*/
+            workspace/meta/
+          retention-days: 1
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Render matrix: every shard renders on its OWN runner simultaneously.
+  # 15 shards turn a 2-hour serial render into ~10-20 minutes of wall time.
+  # ─────────────────────────────────────────────────────────────────────────
+  render:
+    needs: process
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.process.outputs.shards) }}
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+
+      - name: Install Remotion dependencies
+        working-directory: remotion-captions
+        run: npm ci --no-audit --no-fund
+
+      - name: Download render inputs
+        uses: actions/download-artifact@v4
+        with:
+          name: render-inputs
+          path: .
+
+      - name: Restore shard workspace
+        run: |
+          set -euo pipefail
+          mkdir -p workspace/clips workspace/output
+          cp -a "workspace/shard-${{ matrix.shard }}/clips/." workspace/clips/
+          cp workspace/meta/clips_manifest.json workspace/clips/
+          [ -f workspace/meta/viral_moments.json ] && cp workspace/meta/viral_moments.json workspace/clips/ || true
+          [ -f workspace/meta/.current_step ] && cp workspace/meta/.current_step workspace/ || true
+          if [ "${{ needs.process.outputs.has_custom_bgm }}" = "true" ]; then
+            cp workspace/meta/custom/_custom.mp3 remotion-captions/public/bgm/_custom.mp3
+            cp workspace/meta/custom/custom_bgm.env workspace/custom_bgm.env
+          fi
+          echo "shard ${{ matrix.shard }}: $(python3 -c "import json; print(len(json.load(open('workspace/clips/clips_manifest.json'))))") clip(s)"
+
+      - name: Render captions (shard)
         env:
           OUTPUT_FORMATS: ${{ inputs.output_formats }}
           CAPTION_PACE: ${{ inputs.caption_pace }}
           CLIPMINT_BGM_MOOD: ${{ inputs.bgm_mood }}
-          # Live progress pings from render_clips — a 20-clip render of a long
-          # video takes hours, and the dashboard needs movement to not flag it.
-          CLIPMINT_JOB_ID: ${{ inputs.job_id }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           CLIPMINT_AUTO_PUNCH_IN: ${{ inputs.auto_punch_in == 'true' && '1' || '0' }}
+          CLIPMINT_JOB_ID: ${{ inputs.job_id }}
+          CLIPMINT_SHARD_INDEX: ${{ matrix.shard }}
+          CLIPMINT_SHARD_TOTAL: ${{ needs.process.outputs.shard_count }}
         run: |
           set -euo pipefail
           echo "render_captions" > workspace/.current_step
@@ -1242,16 +1349,132 @@ jobs:
             source workspace/custom_bgm.env
             export CLIPMINT_CUSTOM_BGM
           fi
-          python3 pipeline/render_clips.py \
-            --clipsdir workspace/clips \
-            --outdir workspace/captioned \
-            --remotion-dir remotion-captions \
-            --style "${{ inputs.caption_style }}" \
-            --platform tiktok \
-            --caption-pace "$CAPTION_PACE" \
-            --formats "$OUTPUT_FORMATS" \
-            --concurrency 2 \
-            --report workspace/render_report.json
+          if [ "${{ inputs.job_mode }}" = "captions" ]; then OUTPUT_FORMATS="9x16"; fi
+          python3 pipeline/render_clips.py             --clipsdir workspace/clips             --outdir workspace/captioned             --remotion-dir remotion-captions             --style "${{ inputs.caption_style }}"             --platform tiktok             --caption-pace "$CAPTION_PACE"             --formats "$OUTPUT_FORMATS"             --concurrency 2             --allow-empty             --shard-index "${{ matrix.shard }}"             --shard-count "${{ needs.process.outputs.shard_count }}"             --report "workspace/shard-report-${{ matrix.shard }}.json"
+
+      - name: Upload rendered shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-out-${{ matrix.shard }}
+          path: workspace/captioned/
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Upload shard report
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-report-${{ matrix.shard }}
+          path: workspace/shard-report-*.json
+          retention-days: 1
+          if-no-files-found: error
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Finalize: merge shard outputs, publish, record, notify.
+  # ─────────────────────────────────────────────────────────────────────────
+  finalize:
+    needs: [process, render]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg imagemagick rclone fonts-dejavu-core
+          pip install -q -U requests
+
+      - name: Configure rclone
+        env:
+          RCLONE_CONF_B64: ${{ secrets.RCLONE_CONF_B64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.config/rclone
+          echo "$RCLONE_CONF_B64" | base64 -d > ~/.config/rclone/rclone.conf
+          rclone listremotes
+
+      - name: Download render inputs
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          name: render-inputs
+          path: workspace-downloaded
+
+      - name: Determine outcome
+        if: always()
+        env:
+          PROCESS_RESULT: ${{ needs.process.result }}
+          RENDER_RESULT: ${{ needs.render.result }}
+        run: |
+          set -euo pipefail
+          mkdir -p workspace/clips workspace/output workspace/thumbnails
+          if [ -f workspace-downloaded/meta/clips_manifest.json ]; then
+            cp workspace-downloaded/meta/clips_manifest.json workspace/clips/
+          fi
+          [ -f workspace-downloaded/meta/viral_moments.json ] && cp workspace-downloaded/meta/viral_moments.json workspace/clips/ || true
+          if [ "$PROCESS_RESULT" = "success" ] && [ "$RENDER_RESULT" = "success" ]; then
+            echo "OVERALL_STATUS=success" >> "$GITHUB_ENV"
+            echo "CURRENT_STEP=finalize" >> "$GITHUB_ENV"
+          elif [ "$RENDER_RESULT" != "success" ]; then
+            echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
+            echo "CURRENT_STEP=render_captions" >> "$GITHUB_ENV"
+          else
+            echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
+            if [ -f workspace-downloaded/meta/.current_step ]; then
+              echo "CURRENT_STEP=$(cat workspace-downloaded/meta/.current_step)" >> "$GITHUB_ENV"
+            else
+              echo "CURRENT_STEP=process" >> "$GITHUB_ENV"
+            fi
+          fi
+
+      - name: Merge shard outputs
+        if: needs.process.result == 'success' && needs.render.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: render-out-*
+          path: workspace/captioned
+          merge-multiple: true
+
+      - name: Merge shard reports
+        if: needs.process.result == 'success' && needs.render.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: render-report-*
+          path: workspace/reports
+          merge-multiple: true
+
+      - name: Consolidate render report
+        if: needs.process.result == 'success' && needs.render.result == 'success'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, glob
+          results, requested = [], 0
+          for f in sorted(glob.glob("workspace/reports/shard-report-*.json")):
+              r = json.load(open(f))
+              results.extend(r.get("results", []))
+              requested += int(r.get("requested", 0))
+          ok = [r for r in results if r.get("ok")]
+          report = {
+              "style": results[0].get("style") if results else "",
+              "caption_pace": results[0].get("caption_pace") if results else "",
+              "requested": requested,
+              "succeeded": len(ok),
+              "failed": len(results) - len(ok),
+              "results": results,
+          }
+          json.dump(report, open("workspace/render_report.json", "w"), indent=2)
+          print(f"MERGED_REPORT ok={len(ok)} failed={len(results)-len(ok)} requested={requested}")
+          PY
 
       - name: Generate thumbnails
         run: |
@@ -1708,7 +1931,7 @@ jobs:
         if: always()
         env:
           JOB_ID: ${{ inputs.job_id }}
-          JOB_STATUS: ${{ job.status }}
+          JOB_STATUS: ${{ env.OVERALL_STATUS }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -1767,14 +1990,14 @@ jobs:
       # 15. Failure handling
       # ─────────────────────────────────────────────────────────────────────
       - name: Record failure
-        if: failure()
+        if: env.OVERALL_STATUS == 'failed'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           JOB_ID: ${{ inputs.job_id }}
         run: |
           set -uo pipefail
-          STEP=$(cat workspace/.current_step 2>/dev/null || echo "unknown")
+          STEP="${CURRENT_STEP:-render_captions}"
           export STEP
 
           # Translate the internal stage name into something the customer can act on.

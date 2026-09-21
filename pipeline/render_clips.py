@@ -83,7 +83,10 @@ def _ping_progress(done: int, total: int) -> None:
     if not job_id or not url or not key or total <= 0:
         return
     try:
-        progress = 70 + round(15 * min(done, total) / total)
+        shard_index = int(os.environ.get("CLIPMINT_SHARD_INDEX", "0") or 0)
+        shard_total = max(1, int(os.environ.get("CLIPMINT_SHARD_TOTAL", "1") or 1))
+        shard_frac = (shard_index + min(done, total) / max(total, 1)) / shard_total
+        progress = 70 + round(15 * min(1.0, shard_frac))
         req = urllib.request.Request(
             f"{url.rstrip('/')}/rest/v1/jobs?id=eq.{job_id}",
             data=json.dumps({"status": "captioning", "progress": min(88, progress)}).encode(),
@@ -345,6 +348,13 @@ def main() -> int:
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--concurrency", type=int, default=2)
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SEC)
+    ap.add_argument("--shard-index", type=int, default=0,
+                    help="matrix shard this worker renders (0-based)")
+    ap.add_argument("--shard-count", type=int, default=1,
+                    help="total matrix shards — drives shard-aware progress pings")
+    ap.add_argument("--allow-empty", action="store_true",
+                    help="exit 0 with an empty report when the manifest has no clips "
+                         "(matrix shards legitimately receive zero clips)")
     ap.add_argument("--report", default="")
     args = ap.parse_args()
 
@@ -367,6 +377,15 @@ def main() -> int:
         return 2
     manifest = json.loads(manifest_path.read_text())
     if not manifest:
+        if args.allow_empty:
+            report_path = Path(args.report) if args.report else (clipsdir / "render_report.json")
+            report_path.write_text(json.dumps({
+                "style": args.style, "caption_pace": args.caption_pace,
+                "formats": [args.formats], "requested": 0, "succeeded": 0,
+                "failed": 0, "results": [], "shard": args.shard_index,
+            }, indent=2))
+            print("RENDER_SUMMARY ok=0 failed=0 total=0 (empty shard)")
+            return 0
         print("FATAL: no prepared clips to render", file=sys.stderr)
         return 2
 
@@ -432,6 +451,7 @@ def main() -> int:
     masters_ok = {r["index"] for r in ok if r.get("variant", "9x16") == "9x16"}
 
     report = {
+        "shard": args.shard_index,
         "style": args.style,
         "caption_pace": args.caption_pace,
         "formats": ["9x16", *extra_formats],
