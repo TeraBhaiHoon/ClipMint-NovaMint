@@ -443,11 +443,23 @@ jobs:
           done
           fi
 
+          # Last resort when cookies are stale: the rotated cookies themselves
+          # can trigger the bot check, while anonymous access sometimes still
+          # passes for public videos. One final attempt WITHOUT cookies.
+          if [ "$DOWNLOADED" -ne 1 ] && [ -s /tmp/yt_cookies.txt ]; then
+            echo "── download attempt 5/5 no-cookies (stale-cookie workaround) ──"
+            # shellcheck disable=SC2086
+            if yt-dlp                 --js-runtimes deno                 --remote-components ejs:github                 --force-ipv4                 --retries 5 --fragment-retries 5 --retry-sleep 3                 --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"                 --merge-output-format mp4                 --output "workspace/source/source.%(ext)s"                 --no-playlist --socket-timeout 60                 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"                 --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3                 --extractor-args youtube:player_client=tv,android_vr                 "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
+              [ -s workspace/source/source.mp4 ] && DOWNLOADED=1
+            fi
+          fi
+
           if [ "$DOWNLOADED" -ne 1 ]; then
             echo "════════ DOWNLOAD DIAGNOSIS ════════"
             if grep -qi "sign in to confirm\|not a bot" /tmp/ytdlp.log; then
               echo "YOUTUBE_BOT_CHECK — YouTube rejected the request as automated."
-              echo "  Fix: refresh the YOUTUBE_COOKIES secret from a signed-in browser session."
+              echo "  Fix: refresh the YOUTUBE_COOKIES secret from a signed-in browser session,"
+              echo "  or submit the video via direct upload / a non-YouTube link (no cookies needed)."
             elif grep -qi "cookies are no longer valid\|rotated" /tmp/ytdlp.log; then
               echo "YOUTUBE_COOKIES_STALE — the stored cookies were rotated by YouTube."
               echo "  Fix: re-export cookies and update the YOUTUBE_COOKIES secret."
