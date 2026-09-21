@@ -122,7 +122,7 @@ export async function POST(request: NextRequest) {
     // ── Quota checks (server-side; the browser check is UX only) ──
     const { data: profile, error: profileError } = await quotaClient
         .from("profiles")
-        .select("clips_used, clips_limit, videos_used, videos_limit, plan, plan_expires_at")
+        .select("clips_used, clips_limit, videos_used, videos_limit, plan, current_period_end")
         .eq("id", job.user_id)
         .single();
 
