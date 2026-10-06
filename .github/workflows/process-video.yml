@@ -2028,6 +2028,7 @@ jobs:
           # Translate the internal stage name into something the customer can act on.
           case "$STEP" in
             download)        export REASON="We could not download that video. Check that the link is public and is a supported source (YouTube, Instagram, Facebook, Vimeo, Google Drive or a direct video file)." ;;
+            process)         export REASON="We could not download or prepare that video. If it is a YouTube/social link, the source may be private or temporarily blocking automated downloads — try uploading the video file directly instead." ;;
             resume_checkpoint) export REASON="We could not restore the saved progress for this retry. Please try the retry again — it will fall back to full processing." ;;
             extract_audio)   export REASON="The downloaded file had no readable audio track." ;;
             transcribe)      export REASON="Speech transcription failed for this video." ;;
