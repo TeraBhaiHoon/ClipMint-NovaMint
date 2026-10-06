@@ -1335,13 +1335,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p workspace/clips workspace/output
-          cp -a "workspace/shard-${{ matrix.shard }}/clips/." workspace/clips/
-          cp workspace/meta/clips_manifest.json workspace/clips/
-          [ -f workspace/meta/viral_moments.json ] && cp workspace/meta/viral_moments.json workspace/clips/ || true
-          [ -f workspace/meta/.current_step ] && cp workspace/meta/.current_step workspace/ || true
+          # upload-artifact roots the artifact at the least common ancestor of
+          # its search paths (workspace/), so the downloaded tree starts at
+          # shard-N/ and meta/ — there is no workspace/ prefix.
+          if [ ! -d "shard-${{ matrix.shard }}/clips" ]; then
+            echo "!! unexpected artifact layout — downloaded tree:"
+            find . -maxdepth 3 -mindepth 1 -not -path "./remotion-captions*" -not -path "./.git*" | sort | head -60
+            exit 1
+          fi
+          cp -a "shard-${{ matrix.shard }}/clips/." workspace/clips/
+          cp meta/clips_manifest.json workspace/clips/
+          [ -f meta/viral_moments.json ] && cp meta/viral_moments.json workspace/clips/ || true
+          [ -f meta/.current_step ] && cp meta/.current_step workspace/ || true
           if [ "${{ needs.process.outputs.has_custom_bgm }}" = "true" ]; then
-            cp workspace/meta/custom/_custom.mp3 remotion-captions/public/bgm/_custom.mp3
-            cp workspace/meta/custom/custom_bgm.env workspace/custom_bgm.env
+            cp meta/custom/_custom.mp3 remotion-captions/public/bgm/_custom.mp3
+            cp meta/custom/custom_bgm.env workspace/custom_bgm.env
           fi
           echo "shard ${{ matrix.shard }}: $(python3 -c "import json; print(len(json.load(open('workspace/clips/clips_manifest.json'))))") clip(s)"
 
@@ -1436,16 +1444,12 @@ jobs:
           if [ "$PROCESS_RESULT" = "success" ] && [ "$RENDER_RESULT" = "success" ]; then
             echo "OVERALL_STATUS=success" >> "$GITHUB_ENV"
             echo "CURRENT_STEP=finalize" >> "$GITHUB_ENV"
-          elif [ "$RENDER_RESULT" != "success" ]; then
+          elif [ "$PROCESS_RESULT" != "success" ]; then
             echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
-            echo "CURRENT_STEP=render_captions" >> "$GITHUB_ENV"
+            echo "CURRENT_STEP=process" >> "$GITHUB_ENV"
           else
             echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
-            if [ -f workspace-downloaded/meta/.current_step ]; then
-              echo "CURRENT_STEP=$(cat workspace-downloaded/meta/.current_step)" >> "$GITHUB_ENV"
-            else
-              echo "CURRENT_STEP=process" >> "$GITHUB_ENV"
-            fi
+            echo "CURRENT_STEP=render_captions" >> "$GITHUB_ENV"
           fi
 
       - name: Merge shard outputs
