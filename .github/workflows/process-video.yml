@@ -2012,7 +2012,10 @@ jobs:
       # 15. Failure handling
       # ─────────────────────────────────────────────────────────────────────
       - name: Record failure
-        if: env.OVERALL_STATUS == 'failed'
+        # always() is REQUIRED: a step if without a status function gets an
+        # implicit success() &&, which is false after any failed step — the
+        # exact situation this step exists for.
+        if: always() && env.OVERALL_STATUS == 'failed'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
