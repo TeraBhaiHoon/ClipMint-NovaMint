@@ -1393,6 +1393,9 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────
   finalize:
     needs: [process, render]
+    # Without always() a render failure skips this job entirely and the
+    # job row is never marked failed in Supabase (stuck "downloading").
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -1493,6 +1496,9 @@ jobs:
           PY
 
       - name: Generate thumbnails
+        # Success-path only: on a failed run there are no clips, and a failed
+        # step would skip everything up to (but not incl.) Notify/Record.
+        if: env.OVERALL_STATUS == 'success'
         run: |
           set -euo pipefail
           echo "thumbnails" > workspace/.current_step
