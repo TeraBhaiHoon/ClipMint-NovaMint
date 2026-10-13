@@ -61,14 +61,26 @@ SCENE_MAX_SHIFT = 0.6
 
 VALID_FORMATS = ("9x16", "1x1", "16x9")
 
+# Subprocess hard caps: one stalled ffmpeg (bad seek, corrupt stream, disk
+# stall) must abort ITS clip, never hang the whole job. Generous on purpose —
+# a healthy 1080p cut/reframe on a 4-hour source stays well inside these.
+PROBE_TIMEOUT_S = 120
+SCENE_TIMEOUT_S = 1200
+CUT_TIMEOUT_S = 900
+REFRAME_TIMEOUT_S = 600
+ENHANCE_TIMEOUT_S = 600
+
 PIPELINE_DIR = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
 # Shell helpers
 # ---------------------------------------------------------------------------
-def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+def run(cmd: list[str], timeout: float | None = None, **kwargs) -> subprocess.CompletedProcess:
+    """Run a subprocess. `timeout` is a hard cap so a stalled ffmpeg can never
+    hang the whole job; callers treat subprocess.TimeoutExpired as a failure
+    of that one step/clip."""
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kwargs)
 
 
 def probe(path: Path) -> dict:
@@ -76,7 +88,7 @@ def probe(path: Path) -> dict:
     resp = run([
         "ffprobe", "-v", "error", "-print_format", "json",
         "-show_format", "-show_streams", str(path),
-    ])
+    ], timeout=PROBE_TIMEOUT_S)
     if resp.returncode != 0:
         raise RuntimeError(f"ffprobe failed for {path}: {resp.stderr[:300]}")
     data = json.loads(resp.stdout)
@@ -155,7 +167,7 @@ def detect_scenes(source: Path) -> list[float]:
             "ffmpeg", "-i", source.name,
             "-vf", f"select='gt(scene,{SCENE_THRESHOLD})',metadata=print:file={marks_name}",
             "-an", "-f", "null", "-", "-y", "-loglevel", "error",
-        ], cwd=str(source.parent))
+        ], cwd=str(source.parent), timeout=SCENE_TIMEOUT_S)
         if resp.returncode != 0 or not marks_file.exists():
             print(f"scene detect unavailable: {(resp.stderr or '').strip()[:200]}")
             return []
@@ -302,18 +314,26 @@ def build_clip(
     vertical = outdir / f"clip_{index:03d}.mp4"
 
     # ── 1. Precise cut ────────────────────────────────────────────────────
-    # -ss/-t AFTER -i is frame-accurate at the cost of a slow seek; for short
-    # clips that is the right trade because a keyframe-accurate cut can be
-    # seconds off and would desync every caption.
+    # -ss BEFORE -i is required on long sources: as an OUTPUT option (after
+    # -i) ffmpeg decodes and discards the ENTIRE file up to `start` — on a
+    # 3-hour video a clip at 2h50m costs ~3h of wasted decoding, which is why
+    # prepare could take over an hour. Input-side seeking is still
+    # frame-accurate: with accurate_seek (ffmpeg's default since 2.1) ffmpeg
+    # seeks to the previous keyframe and decodes+discards only that handful
+    # of seconds, so captions stay in sync while the cut cost drops to
+    # roughly the clip's own length.
     cut_cmd = [
-        "ffmpeg", "-i", str(source),
-        "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}",
+        "ffmpeg", "-ss", f"{start:.3f}", "-i", str(source),
+        "-t", f"{end - start:.3f}",
         "-c:v", "libx264", "-preset", preset_for(src_height), "-crf", "18",
         "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
         "-avoid_negative_ts", "make_zero",
         str(cut), "-y", "-loglevel", "error",
     ]
-    resp = run(cut_cmd)
+    try:
+        resp = run(cut_cmd, timeout=CUT_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"cut timed out after {CUT_TIMEOUT_S}s") from None
     if resp.returncode != 0 or not cut.exists():
         raise RuntimeError(f"cut failed: {resp.stderr[:400]}")
 
@@ -321,14 +341,19 @@ def build_clip(
 
     # ── 2. Reframe to vertical (face-aware) ───────────────────────────────
     if do_reframe:
-        resp = run([
-            sys.executable, str(PIPELINE_DIR / "smart_reframe.py"),
-            "--input", str(current), "--output", str(vertical),
-            "--width", "1080", "--height", "1920", "--mode", "auto",
-        ])
-        last = (resp.stdout or "").strip().splitlines()
+        reframe_timeout = False
+        try:
+            resp = run([
+                sys.executable, str(PIPELINE_DIR / "smart_reframe.py"),
+                "--input", str(current), "--output", str(vertical),
+                "--width", "1080", "--height", "1920", "--mode", "auto",
+            ], timeout=REFRAME_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            reframe_timeout = True
+            resp = None
+        last = (resp.stdout or "").strip().splitlines() if resp else []
         marker = next((l for l in reversed(last) if l.startswith("REFRAME_")), "")
-        if resp.returncode == 0 and vertical.exists():
+        if resp is not None and resp.returncode == 0 and vertical.exists():
             # Always report the decision: "face" vs "center" vs "skipped" matters
             # when judging output quality from the logs alone.
             if marker:
@@ -341,25 +366,37 @@ def build_clip(
         else:
             # Reframing is an enhancement: fall back to the cut rather than
             # failing the clip, but say so loudly.
-            print(f"  ! reframe failed for clip {index} (rc={resp.returncode}): "
-                  f"{(resp.stderr or '')[:200]}")
+            why = (f"timed out after {REFRAME_TIMEOUT_S}s" if reframe_timeout
+                   else f"rc={resp.returncode}")
+            detail = "" if resp is None else (resp.stderr or "")[:200]
+            print(f"  ! reframe failed for clip {index} ({why})"
+                  + (f": {detail}" if detail else ""))
             warnings.append("reframe_failed")
 
     # ── 3. Loudness normalisation ─────────────────────────────────────────
     if do_enhance:
         enhanced = outdir / f"clip_{index:03d}_enh.mp4"
-        resp = run([
-            sys.executable, str(PIPELINE_DIR / "enhance_audio.py"),
-            "--input", str(current), "--output", str(enhanced),
-            # Loudness normalisation is the last audio stage, so it runs once on
-            # the final cut. --video-copy keeps the picture generation-free.
-            "--target-lufs", "-14", "--true-peak", "-1.0", "--video-copy",
-        ])
-        if resp.returncode == 0 and enhanced.exists():
+        enhance_timeout = False
+        try:
+            resp = run([
+                sys.executable, str(PIPELINE_DIR / "enhance_audio.py"),
+                "--input", str(current), "--output", str(enhanced),
+                # Loudness normalisation is the last audio stage, so it runs once on
+                # the final cut. --video-copy keeps the picture generation-free.
+                "--target-lufs", "-14", "--true-peak", "-1.0", "--video-copy",
+            ], timeout=ENHANCE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            enhance_timeout = True
+            resp = None
+        if resp is not None and resp.returncode == 0 and enhanced.exists():
             current.unlink(missing_ok=True)
             current = enhanced
         else:
-            print(f"  ! audio enhance failed for clip {index}: {(resp.stderr or '')[:200]}")
+            why = (f"timed out after {ENHANCE_TIMEOUT_S}s" if enhance_timeout
+                   else f"rc={resp.returncode}")
+            detail = "" if resp is None else (resp.stderr or "")[:200]
+            print(f"  ! audio enhance failed for clip {index} ({why})"
+                  + (f": {detail}" if detail else ""))
             warnings.append("enhance_failed")
 
     if current != vertical:
@@ -558,7 +595,9 @@ def main() -> int:
 
     from validate_captions import validate_captions, repair_overlaps
 
-    results: list[ClipResult] = []
+    # ── Sequential phase: cheap maths + the caption gate decide WHICH
+    #    moments become clips; only survivors reach the expensive work. ──
+    work: list[tuple[int, float, float, float, float, list[dict]]] = []
     dropped: list[dict] = []
     for i, m in enumerate(moments):
         try:
@@ -592,26 +631,47 @@ def main() -> int:
             dropped.append({"index": i, "start": start, "end": end,
                             "reasons": defects})
             continue
+        work.append((i, start, end, raw_start, raw_end, window))
 
-        try:
-            res = build_clip(
-                i, source, outdir, start, end, captions,
-                do_reframe=not args.no_reframe,
-                do_enhance=not args.no_enhance,
-                src_height=src["height"],
-                keep_cut=keep_cut,
-                window=window,
-            )
-            results.append(res)
-            snapped = "" if (start == raw_start and end == raw_end) else (
-                f" (snapped from {raw_start:.1f}-{raw_end:.1f})")
-            geom = probe(Path(res.path))
-            print(f"[{i}] OK {start:.2f}s→{end:.2f}s  {res.duration:.1f}s  "
-                  f"{geom['width']}x{geom['height']}  "
-                  f"{res.caption_words} words  audio={res.has_audio}{snapped}"
-                  + (f"  warns={res.warnings}" if res.warnings else ""))
-        except Exception as exc:  # keep going: one bad moment must not kill the job
-            print(f"[{i}] FAILED: {exc}")
+    # ── Parallel phase: cut + reframe + enhance are subprocess-bound, so
+    #    worker threads overlap one clip's encode with another's ffmpeg. All
+    #    printing stays on the main thread and results are re-sorted by index,
+    #    so the manifest stays deterministic regardless of completion order. ──
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    workers = max(1, min(4, (os.cpu_count() or 4) // 2))
+    if workers > 1 and len(work) > 1:
+        print(f"preparing {len(work)} clip(s) with {workers} parallel workers")
+
+    def build_one(item):
+        i, start, end, _raw_start, _raw_end, window = item
+        return build_clip(
+            i, source, outdir, start, end, captions,
+            do_reframe=not args.no_reframe,
+            do_enhance=not args.no_enhance,
+            src_height=src["height"],
+            keep_cut=keep_cut,
+            window=window,
+        )
+
+    results: list[ClipResult] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(build_one, item): item for item in work}
+        for fut in as_completed(futures):
+            i, start, end, raw_start, raw_end, _window = futures[fut]
+            try:
+                res = fut.result()
+                results.append(res)
+                snapped = "" if (start == raw_start and end == raw_end) else (
+                    f" (snapped from {raw_start:.1f}-{raw_end:.1f})")
+                geom = probe(Path(res.path))
+                print(f"[{i}] OK {start:.2f}s→{end:.2f}s  {res.duration:.1f}s  "
+                      f"{geom['width']}x{geom['height']}  "
+                      f"{res.caption_words} words  audio={res.has_audio}{snapped}"
+                      + (f"  warns={res.warnings}" if res.warnings else ""))
+            except Exception as exc:  # keep going: one bad moment must not kill the job
+                print(f"[{i}] FAILED: {exc}")
+    results.sort(key=lambda r: r.index)
 
     manifest = [
         {
