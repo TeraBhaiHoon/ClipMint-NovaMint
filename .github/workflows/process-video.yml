@@ -1056,22 +1056,42 @@ jobs:
                   "Aim for 20-60 second clips unless the idea genuinely needs longer.\n\n"
                   f"Candidates:\n{candidates}{CONTEXT}"
               )
-              try:
-                  parsed = json.loads(ask(
-                      ranking,
-                      system=("You are a short-form video editor who finds "
-                              "clips that perform on Reels, Shorts and TikTok. "
-                              "Return only valid JSON."),
-                      is_json=True,
-                  ))
-                  found = parsed.get("clips", [])
+              parsed = None
+              for _attempt in (1, 2):
+                  # A 200-with-empty-body (or chopped JSON) is not a transport
+                  # error, so the provider chain does not fail over on it —
+                  # one in-place retry recovers the common flake cheaply.
+                  try:
+                      parsed = json.loads(ask(
+                          ranking,
+                          system=("You are a short-form video editor who finds "
+                                  "clips that perform on Reels, Shorts and TikTok. "
+                                  "Return only valid JSON."),
+                          is_json=True,
+                      ))
+                      break
+                  except Exception as exc:  # noqa: BLE001
+                      if _attempt == 2:
+                          print(f"  ranking failed: {exc}")
+              if isinstance(parsed, dict):
+                  found = parsed.get("clips") or []
                   print(f"  {len(found)} candidate(s)")
                   moments.extend(found)
-              except Exception as exc:  # noqa: BLE001
-                  print(f"  ranking failed: {exc}")
 
           if not moments:
-              print("FATAL: no moments identified"); sys.exit(1)
+              # A transient LLM failure (empty completion / malformed JSON on
+              # every retry) must not kill a job whose video has speech:
+              # degrade to heuristic speech-dense spans. The caption validator
+              # in prepare still drops anything that would render empty.
+              from fallback_moments import fallback_moments
+              fallback = fallback_moments(captions, duration, max_clips)
+              if fallback:
+                  print(f"VIRAL_FALLBACK: LLM produced no moments — using "
+                        f"{len(fallback)} heuristic speech-dense span(s)")
+                  moments = fallback
+              else:
+                  print("FATAL: no moments identified and no usable speech spans")
+                  sys.exit(1)
 
           # ── Normalise, clamp, de-duplicate ──────────────────────────────
           MOODS = ("energetic", "calm", "corporate", "inspiring")
