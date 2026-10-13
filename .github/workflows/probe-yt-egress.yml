@@ -1,0 +1,150 @@
+name: probe-yt-egress
+
+# Throwaway diagnostic (branch-only): which egress paths can yt-dlp use from
+# a GitHub runner for YouTube?  Legs: raw GitHub IP (several player clients,
+# with and without the stored cookies), the bgutil PO-token provider, and
+# Cloudflare WARP (official client, then usque/MASQUE fallback).
+#
+# Dispatch:  gh workflow run probe-yt-egress.yml --ref probe/yt-egress
+# Results:   grep LEG_ <run log>   (compact PASS/FAIL per leg)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Baseline
+        run: |
+          python3 -m pip install -q -U yt-dlp
+          echo "yt-dlp: $(yt-dlp --version)"
+          echo "deno: $(deno --version 2>/dev/null | head -1 || echo none)"
+          echo "== baseline egress =="
+          curl -s --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|warp)=" || true
+          curl -s --max-time 15 "https://ipinfo.io/org" || true; echo
+
+      - name: Legs on the raw GitHub IP
+        continue-on-error: true
+        run: |
+          URL="https://youtu.be/4Vz6L8B73i4"
+          YT=(--simulate --no-warnings --no-playlist --socket-timeout 30 --retries 2
+              --js-runtimes deno --remote-components ejs:github)
+          probe () {
+            local label="$1"; shift
+            echo "─────── LEG $label ───────"
+            if yt-dlp "${YT[@]}" "$@" "$URL" >/tmp/leg.log 2>&1; then
+              echo "LEG_$label=PASS" | tee -a /tmp/legs.txt
+            else
+              echo "LEG_$label=FAIL | $(grep -m1 -oE 'ERROR: .{0,130}' /tmp/leg.log | head -1)" | tee -a /tmp/legs.txt
+            fi
+          }
+          probe RAW_DEFAULT
+          probe RAW_TV --extractor-args youtube:player_client=tv
+          probe RAW_WEB_EMBEDDED --extractor-args youtube:player_client=web_embedded
+          probe RAW_MWEB --extractor-args youtube:player_client=mweb
+
+      - name: Legs with stored cookies on the raw GitHub IP
+        continue-on-error: true
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          printf '%s' "$YOUTUBE_COOKIES" > /tmp/cookies.txt
+          echo "cookie lines: $(wc -l < /tmp/cookies.txt)"
+          URL="https://youtu.be/4Vz6L8B73i4"
+          YT=(--simulate --no-warnings --no-playlist --socket-timeout 30 --retries 2
+              --js-runtimes deno --remote-components ejs:github)
+          probe () {
+            local label="$1"; shift
+            echo "─────── LEG $label ───────"
+            if yt-dlp "${YT[@]}" "$@" "$URL" >/tmp/leg.log 2>&1; then
+              echo "LEG_$label=PASS" | tee -a /tmp/legs.txt
+            else
+              echo "LEG_$label=FAIL | $(grep -m1 -oE 'ERROR: .{0,130}' /tmp/leg.log | head -1)" | tee -a /tmp/legs.txt
+            fi
+          }
+          probe RAWCOOKIES_DEFAULT --cookies /tmp/cookies.txt
+          probe RAWCOOKIES_TV --cookies /tmp/cookies.txt --extractor-args youtube:player_client=tv
+
+      - name: Legs with bgutil PO-token provider on the raw IP
+        continue-on-error: true
+        run: |
+          docker run -d --name bgutil -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider:latest \
+            || docker run -d --name bgutil -p 4416:4416 brainicism/bgutil-ytdlp-pot-provider || true
+          sleep 12
+          docker ps --format '{{.Names}} {{.Status}}' || true
+          docker logs bgutil 2>&1 | tail -5 || true
+          URL="https://youtu.be/4Vz6L8B73i4"
+          YT=(--simulate --no-warnings --no-playlist --socket-timeout 30 --retries 2
+              --js-runtimes deno --remote-components ejs:github)
+          if yt-dlp "${YT[@]}" --extractor-args "youtube:getpot_bgutil_baseurl=http://127.0.0.1:4416" "$URL" >/tmp/leg.log 2>&1; then
+            echo "LEG_BGUTIL_DEFAULT=PASS" | tee -a /tmp/legs.txt
+          else
+            echo "LEG_BGUTIL_DEFAULT=FAIL | $(grep -m1 -oE 'ERROR: .{0,130}' /tmp/leg.log | head -1)" | tee -a /tmp/legs.txt
+          fi
+
+      - name: Bring up Cloudflare WARP
+        continue-on-error: true
+        run: |
+          curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg \
+            | sudo gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/cloudflare-client.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cloudflare-warp || echo "official client install failed"
+          warp-cli --accept-tos registration new 2>&1 | tail -3 || true
+          warp-cli --accept-tos connect 2>&1 | tail -3 || true
+          sleep 10
+          warp-cli status 2>&1 | head -5 || true
+          if ! curl -s --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | grep -q "warp=on"; then
+            echo "official client did not come up -- trying usque (MASQUE)"
+            sudo systemctl stop warp-svc 2>/dev/null || true
+            mkdir -p /tmp/usque && cd /tmp/usque
+            ASSET=$(curl -s https://api.github.com/repos/Diniboy1123/usque/releases/latest \
+              | python3 -c "import json,sys;d=json.load(sys.stdin);print(next((a['browser_download_url'] for a in d['assets'] if 'linux' in a['name'].lower() and ('amd64' in a['name'].lower() or 'x86_64' in a['name'].lower())), ''))")
+            echo "usque asset: ${ASSET:-NOT FOUND}"
+            if [ -n "$ASSET" ]; then
+              curl -sL -o dl "$ASSET"
+              if tar -tzf dl >/dev/null 2>&1; then tar -xzf dl; else cp dl usque; fi
+              chmod +x usque* 2>/dev/null || true
+              ./usque --help 2>&1 | head -15 || true
+              ./usque register --accept-tos 2>&1 | tail -8 || true
+              nohup ./usque connect >connect.log 2>&1 &
+              sleep 15
+              tail -20 connect.log || true
+            fi
+          fi
+          echo "== egress after setup =="
+          curl -s --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|warp)=" || true
+          curl -s --max-time 15 "https://ipinfo.io/org" || true; echo
+
+      - name: Legs through WARP
+        continue-on-error: true
+        env:
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+        run: |
+          printf '%s' "$YOUTUBE_COOKIES" > /tmp/cookies.txt
+          URL="https://youtu.be/4Vz6L8B73i4"
+          YT=(--simulate --no-warnings --no-playlist --socket-timeout 30 --retries 2
+              --js-runtimes deno --remote-components ejs:github)
+          probe () {
+            local label="$1"; shift
+            echo "─────── LEG $label ───────"
+            if yt-dlp "${YT[@]}" "$@" "$URL" >/tmp/leg.log 2>&1; then
+              echo "LEG_$label=PASS" | tee -a /tmp/legs.txt
+            else
+              echo "LEG_$label=FAIL | $(grep -m1 -oE 'ERROR: .{0,130}' /tmp/leg.log | head -1)" | tee -a /tmp/legs.txt
+            fi
+          }
+          probe WARP_DEFAULT
+          probe WARP_TV --extractor-args youtube:player_client=tv
+          probe WARP_COOKIES_DEFAULT --cookies /tmp/cookies.txt
+
+      - name: Results
+        if: always()
+        run: |
+          echo "═════════════ PROBE RESULTS ═════════════"
+          cat /tmp/legs.txt 2>/dev/null || echo "(no legs recorded)"
+          echo "== final egress =="
+          curl -s --max-time 15 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|warp)=" || true
