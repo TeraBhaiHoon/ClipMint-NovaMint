@@ -139,22 +139,20 @@ jobs:
               print(r.text[:400])
           PY
 
-      - name: Probe yt-dlp + cookies (the current failure)
-        env:
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+      - name: Probe yt-dlp + WARP egress (the live download path)
         run: |
-          printf '%s' "$YOUTUBE_COOKIES" > /tmp/yt_cookies.txt
-          echo "cookie file bytes: $(stat --printf='%s' /tmp/yt_cookies.txt)"
-          echo "cookie file first line: $(head -1 /tmp/yt_cookies.txt | cut -c1-120)"
-          echo "cookie line count: $(wc -l < /tmp/yt_cookies.txt)"
-          echo
-          echo "=== A. cookie validity: fetch a public video's metadata WITH cookies ==="
-          yt-dlp --cookies /tmp/yt_cookies.txt --skip-download --print "%(id)s|%(title)s|%(duration)s" \
-            "https://www.youtube.com/watch?v=aqz-KE-bpKQ" 2>&1 | tail -20 || true
-          echo
-          echo "=== B. same WITHOUT cookies (is a cookie-less download viable?) ==="
+          echo "=== A. raw runner IP (expected: YouTube bot check) ==="
           yt-dlp --skip-download --print "%(id)s|%(title)s|%(duration)s" \
             "https://www.youtube.com/watch?v=aqz-KE-bpKQ" 2>&1 | tail -20 || true
+          echo
+          echo "=== B. via Cloudflare WARP (expected: PASS) ==="
+          if bash scripts/warp-egress.sh up; then
+            trap 'bash scripts/warp-egress.sh down || true' EXIT
+            yt-dlp --skip-download --print "%(id)s|%(title)s|%(duration)s" \
+              "https://www.youtube.com/watch?v=aqz-KE-bpKQ" 2>&1 | tail -20 || true
+          else
+            echo "warp: could not start"
+          fi
           echo
           echo "=== C. yt-dlp version ==="
           yt-dlp --version

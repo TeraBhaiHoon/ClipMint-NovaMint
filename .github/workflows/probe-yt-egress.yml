@@ -1,12 +1,15 @@
 name: probe-yt-egress
 
-# Throwaway diagnostic (branch-only): which egress paths can yt-dlp use from
-# a GitHub runner for YouTube?  Legs: raw GitHub IP (several player clients,
-# with and without the stored cookies), the bgutil PO-token provider, and
-# Cloudflare WARP (official client, then usque/MASQUE fallback).
+# Egress health check for YouTube downloads — run when URL downloads start
+# failing, or after any YouTube-side change:
+#   gh workflow run probe-yt-egress.yml
+# Expected: every RAW leg FAILS (YouTube bot-checks GitHub's IPs), the WARP
+# legs PASS. If a WARP leg starts failing too, YouTube is checking Cloudflare
+# IPs — use direct upload until the next probe passes.
+# Legs: raw GitHub IP (player clients), bgutil PO-token provider (documents
+# that PO tokens do not fix the bot check), Cloudflare WARP egress.
 #
-# Dispatch:  gh workflow run probe-yt-egress.yml --ref probe/yt-egress
-# Results:   grep LEG_ <run log>   (compact PASS/FAIL per leg)
+# Results: grep LEG_ <run log>   (compact PASS/FAIL per leg)
 
 on:
   workflow_dispatch: {}
@@ -44,28 +47,6 @@ jobs:
           probe RAW_TV --extractor-args youtube:player_client=tv
           probe RAW_WEB_EMBEDDED --extractor-args youtube:player_client=web_embedded
           probe RAW_MWEB --extractor-args youtube:player_client=mweb
-
-      - name: Legs with stored cookies on the raw GitHub IP
-        continue-on-error: true
-        env:
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
-        run: |
-          printf '%s' "$YOUTUBE_COOKIES" > /tmp/cookies.txt
-          echo "cookie lines: $(wc -l < /tmp/cookies.txt)"
-          URL="https://youtu.be/4Vz6L8B73i4"
-          YT=(--simulate --no-warnings --no-playlist --socket-timeout 30 --retries 2
-              --js-runtimes deno --remote-components ejs:github)
-          probe () {
-            local label="$1"; shift
-            echo "─────── LEG $label ───────"
-            if yt-dlp "${YT[@]}" "$@" "$URL" >/tmp/leg.log 2>&1; then
-              echo "LEG_$label=PASS" | tee -a /tmp/legs.txt
-            else
-              echo "LEG_$label=FAIL | $(grep -m1 -oE 'ERROR: .{0,130}' /tmp/leg.log | head -1)" | tee -a /tmp/legs.txt
-            fi
-          }
-          probe RAWCOOKIES_DEFAULT --cookies /tmp/cookies.txt
-          probe RAWCOOKIES_TV --cookies /tmp/cookies.txt --extractor-args youtube:player_client=tv
 
       - name: Legs with bgutil PO-token provider on the raw IP
         continue-on-error: true
@@ -121,10 +102,7 @@ jobs:
 
       - name: Legs through WARP
         continue-on-error: true
-        env:
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
         run: |
-          printf '%s' "$YOUTUBE_COOKIES" > /tmp/cookies.txt
           URL="https://youtu.be/4Vz6L8B73i4"
           YT=(--simulate --no-warnings --no-playlist --socket-timeout 30 --retries 2
               --js-runtimes deno --remote-components ejs:github)
@@ -139,7 +117,6 @@ jobs:
           }
           probe WARP_DEFAULT
           probe WARP_TV --extractor-args youtube:player_client=tv
-          probe WARP_COOKIES_DEFAULT --cookies /tmp/cookies.txt
 
       - name: Results
         if: always()

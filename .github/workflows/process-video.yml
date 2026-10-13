@@ -244,7 +244,6 @@ jobs:
         env:
           JOB_ID: ${{ inputs.job_id }}
           VIDEO_URL: ${{ inputs.video_url }}
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           RESUME_REQUESTED: ${{ inputs.resume_from_checkpoint }}
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: |
@@ -288,11 +287,14 @@ jobs:
           echo "resume: captions restored ($(wc -c < workspace/audio/full_captions.json) bytes), viral_ready=$VIRAL_READY"
 
           if [ ! -s workspace/source/source.mp4 ]; then
-            if [ -n "${YOUTUBE_COOKIES:-}" ]; then
-              printf '%s' "$YOUTUBE_COOKIES" > /tmp/yt_cookies.txt
-              COOKIE_ARG="--cookies /tmp/yt_cookies.txt"
+            # WARP egress is the PRIMARY download path for the whole pipeline:
+            # YouTube bot-checks GitHub's datacenter IPs outright, cookies or
+            # not — Cloudflare WARP passes (probe run 38435053338). There is
+            # no cookies path any more.
+            if bash scripts/warp-egress.sh up; then
+              trap 'bash scripts/warp-egress.sh down || true' EXIT
             else
-              COOKIE_ARG=""
+              echo "warp: unavailable — continuing on the runner's own IP"
             fi
             FETCHED=0
             ATTEMPTS=(
@@ -306,45 +308,18 @@ jobs:
               if yt-dlp \
                   --js-runtimes deno \
                   --remote-components ejs:github \
-                  --force-ipv4 \
                   --retries 5 --fragment-retries 5 --retry-sleep 3 \
                   --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
                   --merge-output-format mp4 \
                   --output "workspace/source/source.%(ext)s" \
                   --no-playlist --socket-timeout 60 \
                   --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-                  $COOKIE_ARG $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp_resume.log; then
+                  --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
+                  $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp_resume.log; then
                 if [ -s workspace/source/source.mp4 ]; then FETCHED=1; break; fi
               fi
               rm -f workspace/source/source.*
             done
-            # Same WARP last resort as the main download path: runner IPs are
-            # bot-checked outright, WARP egress passes (probe 38435053338).
-            if [ "$FETCHED" -ne 1 ]; then
-              if bash scripts/warp-egress.sh up; then
-                REXTRAS=("")
-                if [ -s /tmp/yt_cookies.txt ]; then REXTRAS+=("--cookies /tmp/yt_cookies.txt"); fi
-                for EXTRA in "${REXTRAS[@]}"; do
-                  echo "── resume source fetch via WARP ${EXTRA:+with cookies} ──"
-                  # shellcheck disable=SC2086
-                  if yt-dlp \
-                      --js-runtimes deno \
-                      --remote-components ejs:github \
-                      --retries 5 --fragment-retries 5 --retry-sleep 3 \
-                      --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
-                      --merge-output-format mp4 \
-                      --output "workspace/source/source.%(ext)s" \
-                      --no-playlist --socket-timeout 60 \
-                      --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-                      $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp_resume.log; then
-                    if [ -s workspace/source/source.mp4 ]; then FETCHED=1; fi
-                  fi
-                  if [ "$FETCHED" -eq 1 ]; then break; fi
-                  rm -f workspace/source/source.*
-                done
-                bash scripts/warp-egress.sh down || true
-              fi
-            fi
             if [ "$FETCHED" -ne 1 ]; then
               echo "RESUME_SOURCE_FAILED: the source video could not be re-downloaded for the resumed run"
               tail -15 /tmp/ytdlp_resume.log || true
@@ -376,7 +351,6 @@ jobs:
         if: steps.resolve.outputs.resumed != 'true'
         env:
           VIDEO_URL: ${{ inputs.video_url }}
-          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           JOB_ID: ${{ inputs.job_id }}
@@ -384,26 +358,14 @@ jobs:
           set -euo pipefail
           echo "download" > workspace/.current_step
 
-          # Cookies are optional: a missing file must not break non-YouTube
-          # sources, so its state is reported rather than required.
-          if [ -n "${YOUTUBE_COOKIES:-}" ]; then
-            printf '%s' "$YOUTUBE_COOKIES" > /tmp/yt_cookies.txt
-            echo "cookies: $(wc -l < /tmp/yt_cookies.txt) lines, $(stat --printf='%s' /tmp/yt_cookies.txt) bytes"
-          else
-            : > /tmp/yt_cookies.txt
-            echo "cookies: none configured"
-          fi
-
-          COOKIE_ARG=""
-          if [ -s /tmp/yt_cookies.txt ]; then
-            COOKIE_ARG="--cookies /tmp/yt_cookies.txt"
-          fi
-
           echo "host: $(echo "$VIDEO_URL" | cut -d/ -f3)"
 
-          # YouTube's bot checks are client-specific, so trying progressively
-          # different player clients clears most "Sign in to confirm you're not
-          # a bot" failures without any other change.
+          # YouTube's datacenter-IP bot checks are an IP problem, not a client
+          # or session problem (probe 38435053338: every player client and
+          # every cookie state fails from a GitHub runner). WARP egress is the
+          # fix and it is the PRIMARY download path — cookies are no longer
+          # used anywhere. Client variants below stay as cheap resilience
+          # against client-specific playback issues.
           ATTEMPTS=(
             "--extractor-args youtube:player_client=default,tv,web_safari"
             "--extractor-args youtube:player_client=web_safari,tv_embedded"
@@ -414,8 +376,8 @@ jobs:
           DOWNLOADED=0
 
           # Direct media URLs (Supabase signed upload links, plain MP4 links)
-          # are fetched with curl: yt-dlp's generic extractor adds nothing, and
-          # plain HTTP is faster and completely cookie-free.
+          # are fetched with curl: yt-dlp's generic extractor adds nothing,
+          # plain HTTP is faster, and these hosts do not bot-check.
           URL_PATH="${VIDEO_URL%%?*}"
           case "${URL_PATH,,}" in
             *.mp4|*.mov|*.m4v|*.webm|*.mkv|*.avi|*.flv|*.3gp|*.mpg|*.mpeg)
@@ -446,7 +408,17 @@ jobs:
               ;;
           esac
 
+          WARP_UP=0
           if [ "$DOWNLOADED" -ne 1 ]; then
+          # PRIMARY egress: every yt-dlp download runs through Cloudflare
+          # WARP before the first attempt. There is no cookies path and no
+          # fallback ordering — raw GitHub IPs are bot-checked outright.
+          if bash scripts/warp-egress.sh up; then
+            WARP_UP=1
+            trap 'bash scripts/warp-egress.sh down || true' EXIT
+          else
+            echo "warp: unavailable — continuing on the runner's own IP"
+          fi
           for i in "${!ATTEMPTS[@]}"; do
             EXTRA="${ATTEMPTS[$i]}"
             echo "── download attempt $((i + 1))/${#ATTEMPTS[@]} ${EXTRA:-generic} ──"
@@ -454,7 +426,6 @@ jobs:
             if yt-dlp \
                 --js-runtimes deno \
                 --remote-components ejs:github \
-                --force-ipv4 \
                 --retries 5 --fragment-retries 5 --retry-sleep 3 \
                 --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
                 --merge-output-format mp4 \
@@ -462,7 +433,7 @@ jobs:
                 --no-playlist --socket-timeout 60 \
                 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
                 --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
-                $COOKIE_ARG $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
+                $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
               if [ -s workspace/source/source.mp4 ]; then DOWNLOADED=1; break; fi
             fi
             echo "attempt $((i + 1)) failed"
@@ -470,67 +441,17 @@ jobs:
           done
           fi
 
-          # Last resort when cookies are stale: the rotated cookies themselves
-          # can trigger the bot check, while anonymous access sometimes still
-          # passes for public videos. One final attempt WITHOUT cookies.
-          if [ "$DOWNLOADED" -ne 1 ] && [ -s /tmp/yt_cookies.txt ]; then
-            echo "── download attempt 5/5 no-cookies (stale-cookie workaround) ──"
-            # shellcheck disable=SC2086
-            if yt-dlp                 --js-runtimes deno                 --remote-components ejs:github                 --force-ipv4                 --retries 5 --fragment-retries 5 --retry-sleep 3                 --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"                 --merge-output-format mp4                 --output "workspace/source/source.%(ext)s"                 --no-playlist --socket-timeout 60                 --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"                 --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3                 --extractor-args youtube:player_client=tv,android_vr                 "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
-              [ -s workspace/source/source.mp4 ] && DOWNLOADED=1
-            fi
-          fi
-
-          # ── Attempt 6: Cloudflare WARP egress ─────────────────────────────
-          # GitHub runner IPs are bot-checked by YouTube outright — every
-          # player client and every cookie state fails from them (verified,
-          # probe run 38435053338). WARP moves the request behind a Cloudflare
-          # consumer IP, which passes — cookies or not. Reached only when
-          # every in-place attempt failed, best effort: if the tunnel cannot
-          # come up, the diagnosis below still runs.
-          WARP_TRIED=0
-          if [ "$DOWNLOADED" -ne 1 ]; then
-            WARP_TRIED=1
-            if bash scripts/warp-egress.sh up; then
-              EXTRAS=("")
-              if [ -s /tmp/yt_cookies.txt ]; then EXTRAS+=("--cookies /tmp/yt_cookies.txt"); fi
-              for EXTRA in "${EXTRAS[@]}"; do
-                echo "── download attempt 6/6 via WARP ${EXTRA:+with cookies} ──"
-                # No --force-ipv4 here: the passing probe used default
-                # dual-stack resolution, so mirror the proven flag set.
-                # shellcheck disable=SC2086
-                if yt-dlp \
-                    --js-runtimes deno \
-                    --remote-components ejs:github \
-                    --retries 5 --fragment-retries 5 --retry-sleep 3 \
-                    --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
-                    --merge-output-format mp4 \
-                    --output "workspace/source/source.%(ext)s" \
-                    --no-playlist --socket-timeout 60 \
-                    --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-                    --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
-                    $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
-                  if [ -s workspace/source/source.mp4 ]; then DOWNLOADED=1; fi
-                fi
-                if [ "$DOWNLOADED" -eq 1 ]; then break; fi
-                rm -f workspace/source/source.*
-              done
-              # Later steps (artifact upload, APIs) go back to the runner's
-              # normal network.
-              bash scripts/warp-egress.sh down || true
-            fi
-          fi
-
           if [ "$DOWNLOADED" -ne 1 ]; then
             echo "════════ DOWNLOAD DIAGNOSIS ════════"
+            if [ "$WARP_UP" -ne 1 ]; then
+              echo "WARP_UNAVAILABLE — Cloudflare WARP egress did not come up, and the"
+              echo "  download failed on the runner's own IP. Retry the job; if it keeps"
+              echo "  failing run .github/workflows/probe-yt-egress.yml to check egress health."
+            fi
             if grep -qi "sign in to confirm\|not a bot" /tmp/ytdlp.log; then
               echo "YOUTUBE_BOT_CHECK — YouTube rejected the request as automated."
-              if [ "$WARP_TRIED" = 1 ]; then echo "  The automatic WARP-egress retry did not clear it."; fi
-              echo "  Fix: refresh the YOUTUBE_COOKIES secret from a signed-in browser session,"
-              echo "  or submit the video via direct upload / a non-YouTube link (no cookies needed)."
-            elif grep -qi "cookies are no longer valid\|rotated" /tmp/ytdlp.log; then
-              echo "YOUTUBE_COOKIES_STALE — the stored cookies were rotated by YouTube."
-              echo "  Fix: re-export cookies and update the YOUTUBE_COOKIES secret."
+              echo "  WARP egress did not clear it — YouTube may now be checking WARP IPs."
+              echo "  Re-run probe-yt-egress.yml to confirm, then retry or use direct upload."
             elif grep -qi "Unsupported URL" /tmp/ytdlp.log; then
               echo "UNSUPPORTED_URL — this host is not supported."
               echo "  Supported: YouTube, Instagram, Facebook, Vimeo, Google Drive, direct video file."
@@ -571,13 +492,10 @@ jobs:
           if "drive.google.com" in path_only or path_only.endswith((".mp4", ".mov", ".m4v", ".webm")):
               print("metadata: skipped (non-page provider)")
           else:
-              cookie = []
-              if os.path.exists("/tmp/yt_cookies.txt") and os.path.getsize("/tmp/yt_cookies.txt") > 0:
-                  cookie = ["--cookies", "/tmp/yt_cookies.txt"]
               raw = {}
               try:
                   dump = subprocess.run(
-                      ["yt-dlp", "--dump-json", "--no-playlist", *cookie, url],
+                      ["yt-dlp", "--dump-json", "--no-playlist", url],
                       capture_output=True, text=True, timeout=180)
                   if dump.returncode == 0 and dump.stdout.strip():
                       raw = json.loads(dump.stdout.strip().splitlines()[0])

@@ -112,9 +112,10 @@ Run these in order; each one exercises a different subsystem:
 - **Showcase carousel**: drop 4–8 real finished clips into `dashboard/public/showcase/clips/`
   and fill the entries in `public/showcase/manifest.json` (schema is inside the file).
   Until then the page shows generated poster cards.
-- **YouTube imports**: the cookies secret expires every few weeks — when a YouTube job
-  fails with `YOUTUBE_BOT_CHECK`, re-export cookies and update the `YOUTUBE_COOKIES`
-  secret. Direct uploads are immune.
+- **YouTube imports**: downloads run through Cloudflare WARP automatically (no
+  cookies, no secret to refresh). If a YouTube job ever fails with
+  `YOUTUBE_BOT_CHECK` or `WARP_UNAVAILABLE`, run the `probe-yt-egress.yml`
+  workflow to check egress health; direct uploads always work.
 - **Remotion licence**: the Free License covers ≤3 employees and automation use — keep
   the confirmation handy if you exceed that.
 
