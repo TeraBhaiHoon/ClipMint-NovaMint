@@ -318,6 +318,33 @@ jobs:
               fi
               rm -f workspace/source/source.*
             done
+            # Same WARP last resort as the main download path: runner IPs are
+            # bot-checked outright, WARP egress passes (probe 38435053338).
+            if [ "$FETCHED" -ne 1 ]; then
+              if bash scripts/warp-egress.sh up; then
+                REXTRAS=("")
+                if [ -s /tmp/yt_cookies.txt ]; then REXTRAS+=("--cookies /tmp/yt_cookies.txt"); fi
+                for EXTRA in "${REXTRAS[@]}"; do
+                  echo "── resume source fetch via WARP ${EXTRA:+with cookies} ──"
+                  # shellcheck disable=SC2086
+                  if yt-dlp \
+                      --js-runtimes deno \
+                      --remote-components ejs:github \
+                      --retries 5 --fragment-retries 5 --retry-sleep 3 \
+                      --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
+                      --merge-output-format mp4 \
+                      --output "workspace/source/source.%(ext)s" \
+                      --no-playlist --socket-timeout 60 \
+                      --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+                      $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp_resume.log; then
+                    if [ -s workspace/source/source.mp4 ]; then FETCHED=1; fi
+                  fi
+                  if [ "$FETCHED" -eq 1 ]; then break; fi
+                  rm -f workspace/source/source.*
+                done
+                bash scripts/warp-egress.sh down || true
+              fi
+            fi
             if [ "$FETCHED" -ne 1 ]; then
               echo "RESUME_SOURCE_FAILED: the source video could not be re-downloaded for the resumed run"
               tail -15 /tmp/ytdlp_resume.log || true
@@ -454,10 +481,51 @@ jobs:
             fi
           fi
 
+          # ── Attempt 6: Cloudflare WARP egress ─────────────────────────────
+          # GitHub runner IPs are bot-checked by YouTube outright — every
+          # player client and every cookie state fails from them (verified,
+          # probe run 38435053338). WARP moves the request behind a Cloudflare
+          # consumer IP, which passes — cookies or not. Reached only when
+          # every in-place attempt failed, best effort: if the tunnel cannot
+          # come up, the diagnosis below still runs.
+          WARP_TRIED=0
+          if [ "$DOWNLOADED" -ne 1 ]; then
+            WARP_TRIED=1
+            if bash scripts/warp-egress.sh up; then
+              EXTRAS=("")
+              if [ -s /tmp/yt_cookies.txt ]; then EXTRAS+=("--cookies /tmp/yt_cookies.txt"); fi
+              for EXTRA in "${EXTRAS[@]}"; do
+                echo "── download attempt 6/6 via WARP ${EXTRA:+with cookies} ──"
+                # No --force-ipv4 here: the passing probe used default
+                # dual-stack resolution, so mirror the proven flag set.
+                # shellcheck disable=SC2086
+                if yt-dlp \
+                    --js-runtimes deno \
+                    --remote-components ejs:github \
+                    --retries 5 --fragment-retries 5 --retry-sleep 3 \
+                    --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
+                    --merge-output-format mp4 \
+                    --output "workspace/source/source.%(ext)s" \
+                    --no-playlist --socket-timeout 60 \
+                    --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+                    --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
+                    $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
+                  if [ -s workspace/source/source.mp4 ]; then DOWNLOADED=1; fi
+                fi
+                if [ "$DOWNLOADED" -eq 1 ]; then break; fi
+                rm -f workspace/source/source.*
+              done
+              # Later steps (artifact upload, APIs) go back to the runner's
+              # normal network.
+              bash scripts/warp-egress.sh down || true
+            fi
+          fi
+
           if [ "$DOWNLOADED" -ne 1 ]; then
             echo "════════ DOWNLOAD DIAGNOSIS ════════"
             if grep -qi "sign in to confirm\|not a bot" /tmp/ytdlp.log; then
               echo "YOUTUBE_BOT_CHECK — YouTube rejected the request as automated."
+              if [ "$WARP_TRIED" = 1 ]; then echo "  The automatic WARP-egress retry did not clear it."; fi
               echo "  Fix: refresh the YOUTUBE_COOKIES secret from a signed-in browser session,"
               echo "  or submit the video via direct upload / a non-YouTube link (no cookies needed)."
             elif grep -qi "cookies are no longer valid\|rotated" /tmp/ytdlp.log; then
