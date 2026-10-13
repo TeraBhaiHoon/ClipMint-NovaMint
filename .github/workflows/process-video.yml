@@ -1463,11 +1463,23 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import json, glob
-          results, requested = [], 0
+          # Dedupe by (index, variant) with an ok-preferring merge: if two shard
+          # reports ever disagree about the same clip, an actual success must
+          # never be erased by another shard's stale failure. (After the shard
+          # partition fix in render_clips.py duplicates should not occur at
+          # all; this guards against future regressions in either place.)
+          seen: dict = {}
+          requested = 0
           for f in sorted(glob.glob("workspace/reports/shard-report-*.json")):
               r = json.load(open(f))
-              results.extend(r.get("results", []))
               requested += int(r.get("requested", 0))
+              for item in r.get("results", []):
+                  key = (item.get("index"), item.get("variant", "9x16"))
+                  prev = seen.get(key)
+                  if prev is None or (not prev.get("ok") and item.get("ok")):
+                      seen[key] = item
+          results = sorted(seen.values(),
+                           key=lambda r: (r.get("index") or 0, r.get("variant", "9x16")))
           ok = [r for r in results if r.get("ok")]
           report = {
               "style": results[0].get("style") if results else "",

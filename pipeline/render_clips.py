@@ -376,6 +376,23 @@ def main() -> int:
         print("FATAL: clips_manifest.json missing — prepare step did not run", file=sys.stderr)
         return 2
     manifest = json.loads(manifest_path.read_text())
+
+    # ── Shard partition (15-way matrix) ───────────────────────────────────
+    # Each matrix worker's workspace contains ONLY its own shard's clip files
+    # (the split step copies that subset), so it must render ONLY those.
+    # Position-based round-robin — the same scheme the split step uses.
+    # Without this, a worker attempts every other shard's entries, fails on
+    # their missing inputs, and pollutes its report with bogus "failed" rows
+    # for clips another shard renders successfully — which the merged report
+    # then treated as real failures.
+    shard_total = max(1, args.shard_count)
+    if shard_total > 1:
+        total_before = len(manifest)
+        manifest = [e for pos, e in enumerate(manifest)
+                    if pos % shard_total == args.shard_index]
+        print(f"shard {args.shard_index}/{shard_total}: "
+              f"{len(manifest)} of {total_before} clip(s) belong to this worker")
+
     if not manifest:
         if args.allow_empty:
             report_path = Path(args.report) if args.report else (clipsdir / "render_report.json")
