@@ -1165,6 +1165,37 @@ jobs:
 
           kept.sort(key=lambda m: m["viral_score"], reverse=True)
           kept = kept[:max_clips]
+
+          # ── Caption-gate alignment ──────────────────────────────────────
+          # A moment that prepare's caption validator will certainly reject
+          # must not be emitted: on sparse videos the LLM occasionally picks a
+          # cinematic beat with zero speech, the validator then drops it, and
+          # the job dies with "no clips could be prepared". Apply the SAME
+          # rule here and substitute heuristic speech-dense spans when nothing
+          # survives, so the job still delivers.
+          from prepare_clips import captions_for_window
+          from validate_captions import validate_captions as _vc, repair_overlaps as _ro
+
+          def gate_ok(m) -> bool:
+              win = captions_for_window(captions, m["start_time"], m["end_time"])
+              win, _ = _ro(win)
+              ok, _ = _vc(win, m["end_time"] - m["start_time"])
+              return ok
+
+          viable = [m for m in kept if gate_ok(m)]
+          if len(viable) != len(kept):
+              print(f"viral: dropped {len(kept) - len(viable)} moment(s) the caption gate would reject")
+          if not viable:
+              from fallback_moments import fallback_moments as _fb
+              fb = [m for m in _fb(captions, duration, max_clips) if gate_ok(m)]
+              if fb:
+                  print(f"viral: substituted {len(fb)} heuristic speech-dense span(s)")
+              viable = fb
+          kept = viable
+          if not kept:
+              print("FATAL: no moment survives the caption gate and no speech-dense spans exist")
+              sys.exit(1)
+
           json.dump({"clips": kept}, open("workspace/clips/viral_moments.json", "w"), indent=2)
           print(f"VIRAL_OK moments={len(kept)} top_score={kept[0]['viral_score']:.0f} "
                 f"chapter_boosts={boosted}")
