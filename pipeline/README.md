@@ -357,6 +357,55 @@ because each one silently degraded output rather than erroring.
 
 ---
 
+## Tool 3 — asset library (`asset_library.py`, `asset_search.py`, `asset_select.py`, `audio_analysis.py`)
+
+A searchable SFX/BGM/effects library layered on top of the four vendored tracks,
+with commercial-licence gating and deterministic per-clip picks.
+
+### Data flow
+
+```
+asset_library.py ingest/enrich     asset_search.py (BM25)     asset_select.py
+   Drive/local mirror  ──────────▶  assets.jsonl index  ─────▶  per-clip plans
+                                                              (clip_XXX_assets.json)
+                                                                        │
+             process-video.yml "Select asset plan" ────────────────────────┤
+             stages chosen BGM → workspace/assets/bgm/clip_XXX.mp3         ▼
+                                                    render_clips.py load_plan_bgm
+                                                    (custom upload > plan > mood map)
+```
+
+### Wiring (added 2026-10-15)
+
+* **`process` job, "Select asset plan" step** — runs `asset_select.py` against
+  the clips manifest. With no index (`assets/index/`) it prints
+  `ASSET_SELECT_WARN` and emits empty plans; the job continues on the vendored
+  library. With the repo variable `CLIPMINT_ASSET_ROOT` set to a local library
+  mirror, each clip's chosen BGM is also **staged** (copied) into
+  `workspace/assets/bgm/clip_XXX.mp3` and recorded as `bgm.public_path`.
+* **"Split render shards"** — ships each per-clip plan next to its clip, plus
+  the job-level `asset_plan.json` and all staged audio through the artifact
+  (`meta/bgm/`), because the render runners re-checkout the repo and cannot
+  see files written by the `process` job.
+* **`render` job, "Restore shard workspace"** — lands the staged audio in
+  `remotion-captions/public/bgm/`, where Remotion's `staticFile()` resolves it.
+* **`render_clips.py` `load_plan_bgm()`** — per clip, resolves
+  `bgm.public_path` from the plan **only if the file is physically present**
+  in the Remotion public dir. BGM priority is explicit: **custom upload >
+  asset-library plan > mood map > none**. Every failure mode (missing plan,
+  corrupt JSON, un-staged file, traversal-shaped path) falls back to the mood
+  map instead of failing the render; the plan's SFX slots and attribution
+  notes are logged for the operator but timed SFX is not rendered until
+  `CaptionedClip.tsx` consumes per-slot audio.
+
+### Probes
+
+`_audit/probe_assets.py` — 40 checks covering the licence gate, malformed
+manifests, search filters, selection determinism, the full
+library→plan→staging→render chain, and every `load_plan_bgm` fallback path.
+
+---
+
 ## Verification environment
 
 - Python 3.11.9

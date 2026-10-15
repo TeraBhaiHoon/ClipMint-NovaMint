@@ -1273,6 +1273,37 @@ jobs:
           fi
 
       # ─────────────────────────────────────────────────────────────────────
+      # 10a. Pick per-clip SFX/BGM from the asset library (when one exists).
+      # With no index the selector emits empty plans and the renderer falls
+      # back to the vendored mood library — this step must never block a job.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Select asset plan
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          # Optional repo variable: absolute path to a local mirror of the
+          # asset library on the runner (set CLIPMINT_ASSET_ROOT in repo
+          # variables to activate library BGM). Unset → advisory plans only.
+          ASSET_ROOT: ${{ vars.CLIPMINT_ASSET_ROOT }}
+        run: |
+          set -euo pipefail
+          echo "asset_select" > workspace/.current_step
+          SELECT_ARGS=(
+            --clips workspace/clips/clips_manifest.json
+            --index "${CLIPMINT_ASSET_INDEX:-assets/index}"
+            --outdir workspace/assets
+            --job-id "$JOB_ID"
+          )
+          if [ -n "$ASSET_ROOT" ] && [ -d "$ASSET_ROOT" ]; then
+            # A local library mirror is available: chosen BGMs are copied into
+            # workspace/assets/bgm and shipped to the render shards.
+            python3 pipeline/asset_select.py "${SELECT_ARGS[@]}" \
+              --library-root "$ASSET_ROOT" \
+              --public-bgm-dir workspace/assets/bgm
+          else
+            python3 pipeline/asset_select.py "${SELECT_ARGS[@]}"
+          fi
+
+      # ─────────────────────────────────────────────────────────────────────
       # 10b. Split prepared clips across the render matrix
       # ─────────────────────────────────────────────────────────────────────
       - name: Split render shards
@@ -1302,6 +1333,11 @@ jobs:
                   src = root / "clips" / f"clip_{e['index']:03d}.captions.json"
                   if src.exists():
                       shutil.copy2(src, d / src.name)
+                  # Per-clip asset plan (asset_select.py) rides with the clip;
+                  # render_clips.py reads it for the library BGM override.
+                  plan = root / "assets" / f"clip_{e['index']:03d}_assets.json"
+                  if plan.is_file():
+                      shutil.copy2(plan, d / plan.name)
               (d / "clips_manifest.json").write_text(json.dumps(entries, indent=2))
 
           meta = root / "meta"
@@ -1311,6 +1347,16 @@ jobs:
               src = root / "clips" / f
               if src.exists():
                   shutil.copy2(src, meta / f)
+          # Job-level asset plan + the staged BGM audio files (the render job
+          # re-checks out the repo, so per-job audio must ship via artifact).
+          if (root / "assets" / "asset_plan.json").is_file():
+              shutil.copy2(root / "assets" / "asset_plan.json", meta / "asset_plan.json")
+          bgm_dir = root / "assets" / "bgm"
+          if bgm_dir.is_dir():
+              (meta / "bgm").mkdir(parents=True, exist_ok=True)
+              for f in bgm_dir.iterdir():
+                  if f.is_file():
+                      shutil.copy2(f, meta / "bgm" / f.name)
           step = root / ".current_step"
           if step.exists():
               shutil.copy2(step, meta / ".current_step")
@@ -1387,6 +1433,12 @@ jobs:
           if [ "${{ needs.process.outputs.has_custom_bgm }}" = "true" ]; then
             cp meta/custom/_custom.mp3 remotion-captions/public/bgm/_custom.mp3
             cp meta/custom/custom_bgm.env workspace/custom_bgm.env
+          fi
+          # Staged asset-library BGM (from the Select asset plan step): the
+          # per-clip plans reference bgm/clip_XXX.mp3 inside the Remotion
+          # public dir, which only exists here once these copies land.
+          if [ -d meta/bgm ]; then
+            cp -a meta/bgm/. remotion-captions/public/bgm/
           fi
           echo "shard ${{ matrix.shard }}: $(python3 -c "import json; print(len(json.load(open('workspace/clips/clips_manifest.json'))))") clip(s)"
 

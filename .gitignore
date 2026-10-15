@@ -45,6 +45,12 @@ task.md.resolved
 # Local end-to-end test scratch space
 .testrun/
 
+# Asset-library scratch (local indexing / probe work — regenerable)
+.tmp-audio/
+.tmp-lib/
+.tmp-index/
+ckrun_runtime.txt
+
 # Python bytecode
 __pycache__/
 *.pyc

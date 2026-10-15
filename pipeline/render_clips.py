@@ -119,6 +119,45 @@ def load_bgm_map() -> dict:
         return {}
 
 
+def load_plan_bgm(clipsdir: Path, index: int, remotion_dir: Path) -> tuple[str | None, dict]:
+    """Per-clip BGM from the asset-library plan (clip_XXX_assets.json), if any.
+
+    The plan is produced by `asset_select.py` and shipped next to the clip by
+    the shard split. Only a staged track counts: the plan's `bgm.public_path`
+    must exist under the Remotion public dir, because a plan that references an
+    un-copied library file would render silence. Anything unreadable, missing
+    or unstageable returns (None, {}) and the mood library applies — an
+    asset-plan problem must never fail a render the vendored library can serve.
+
+    Returns (public_path, plan) — plan is the full per-clip plan for logging.
+    """
+    plan_path = clipsdir / f"clip_{index:03d}_assets.json"
+    if not plan_path.exists():
+        return None, {}
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"  [{index}] asset plan unreadable ({exc}) — mood library applies")
+        return None, {}
+    if not isinstance(plan, dict):
+        return None, {}
+    bgm = plan.get("bgm")
+    if not isinstance(bgm, dict):
+        return None, plan
+    public_path = (bgm.get("public_path") or "").strip()
+    if not public_path:
+        return None, plan
+    # Reject traversal: a tampered plan must not reach outside public/.
+    if public_path.startswith(("/", "..")) or ":" in public_path:
+        print(f"  [{index}] asset plan public_path rejected ({public_path!r})")
+        return None, plan
+    if not (remotion_dir / "public" / public_path).exists():
+        print(f"  [{index}] asset plan BGM not staged ({public_path}) — "
+              "mood library applies")
+        return None, plan
+    return public_path, plan
+
+
 def validate_render(path: Path, expected_sec: float) -> tuple[bool, str]:
     """ffprobe a finished render: exists, video stream present, duration
     within tolerance of the requested length."""
@@ -169,9 +208,9 @@ def build_props(
     find an audio track, so we only enable reactivity when ffprobe confirmed
     a stream. This value comes from the preparation manifest, not a guess.
 
-    `bgmSrc`/`sfxEnabled` are only set when the assets manifest provides a
-    track for this clip's mood — otherwise the keys are omitted and the
-    engine's defaults apply.
+    `bgmSrc`/`sfxEnabled` are only set when a track was resolved for this clip —
+    from the asset-library plan, the assets manifest's mood map, or a custom
+    upload — otherwise the keys are omitted and the engine's defaults apply.
     """
     props: dict = {
         "videoSrc": clip_filename,
@@ -261,21 +300,37 @@ def render_one(
     public_clip = f"_render_{index:03d}{suffix}.mp4"
     shutil.copy2(clip_path, public_dir / public_clip)
 
-    # ── BGM selection: custom upload > mood library > none ──────────────
+    # ── BGM selection: custom upload > asset-library plan > mood library ─
     # SFX is INDEPENDENT of the BGM decision — it used to be coupled, so a
     # missing mood silently killed the pops/whoosh too.
     custom_bgm = os.environ.get("CLIPMINT_CUSTOM_BGM", "").strip()
     env_mood = os.environ.get("CLIPMINT_BGM_MOOD", "").strip()
-    # Priority: explicit user choice > the AI's per-clip mood > energetic.
+    plan_bgm, plan = load_plan_bgm(clipsdir, index, remotion_dir)
+    # Priority: explicit user choice > the curated per-clip library pick >
+    # the AI's per-clip mood > energetic.
     mood = env_mood if env_mood and env_mood != "auto" else (entry.get("mood") or "energetic")
-    bgm_src = bgm_map.get(mood) if (mood and mood != "none") else None
     if custom_bgm:
         bgm_src = custom_bgm
         print(f"  [{index}:{variant}] BGM: custom track ({os.path.basename(custom_bgm)})")
-    elif bgm_src:
-        print(f"  [{index}:{variant}] BGM: {mood} → {bgm_src}")
+    elif plan_bgm:
+        bgm_src = plan_bgm
+        print(f"  [{index}:{variant}] BGM: asset library → {plan_bgm} "
+              f"(mood={mood}, score={plan['bgm'].get('score') or 0:.2f})")
     else:
-        print(f"  [{index}:{variant}] BGM: none (mood={mood!r})")
+        bgm_src = bgm_map.get(mood) if (mood and mood != "none") else None
+        if bgm_src:
+            print(f"  [{index}:{variant}] BGM: {mood} → {bgm_src}")
+        else:
+            print(f"  [{index}:{variant}] BGM: none (mood={mood!r})")
+    if plan:
+        sfx_slots = plan.get("sfx") or []
+        if sfx_slots:
+            # The plan's timed SFX roles are advisory until CaptionedClip
+            # consumes per-slot audio; the engine's own SFX engine stays on.
+            print(f"  [{index}] plan: {len(sfx_slots)} SFX slot(s) noted "
+                  "(timed SFX not rendered — engine SFX apply)")
+        for note in plan.get("attribution") or []:
+            print(f"  [{index}] ATTRIBUTION: {note}")
     sfx_enabled = os.environ.get("CLIPMINT_SFX", "1") == "1"
 
     props = build_props(
