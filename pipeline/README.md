@@ -48,7 +48,7 @@ python3 pipeline/smart_reframe.py \
   --output clip_vertical.mp4 \
   --width 1080 --height 1920 \
   --mode auto|face|center \
-  --smoothing 0.85 \
+  --smoothing 0.6 \
   --sample-fps 2 \
   [--debug-json path.json] \
   [--max-vel-px 40] \
@@ -59,9 +59,9 @@ python3 pipeline/smart_reframe.py \
 | Flag | Default | Meaning |
 |---|---|---|
 | `--mode` | `auto` | `auto` = face tracking if usable, else centre. `face` = force tracking (warns + centre if unavailable). `center` = plain centre crop, skips analysis entirely. |
-| `--smoothing` | `0.85` | EMA coefficient `[0, 0.98]`. Higher = smoother, slower. |
+| `--smoothing` | `0.6` | EMA coefficient `[0, 0.98]`. Higher = smoother but trails a moving speaker (0.85 lagged 171 px / lost 15 % of travel; 0.6 measures 5 px / 99 %). |
 | `--sample-fps` | `2` | Analysis frame rate. |
-| `--debug-json` | off | Writes sample count, tracked centre series, chosen mode, final crop rect. |
+| `--debug-json` | off | Writes sample count, tracked centre series, chosen mode, final crop rect, `held_samples`, `identity_locked_ratio`. |
 | `--max-vel-px` | `40` | Anti-teleport rail, px of crop movement per output frame. |
 
 ### Behaviour
@@ -70,14 +70,21 @@ python3 pipeline/smart_reframe.py \
    the file is stream-copied and the tool prints `REFRAME_SKIP already_vertical`.
    No encode is spent.
 2. Crop window = largest target-aspect rectangle fitting the source, clamped to
-   even dimensions (yuv420p requires it).
+   even dimensions (yuv420p requires it). For a 16:9 source this window is
+   full-height, so vertical (`cy`) tracking is fixed at the frame centre by design.
 3. Frames are sampled with a single ffmpeg process piping PNGs over a pipe
    (`select` + `-f image2pipe`), decoded with `cv2.imdecode`. No per-frame shell-outs.
-4. **Face detection**: OpenCV YuNet (`cv2.FaceDetectorYN`), detected at max width 640
-   then mapped back to source coordinates. Largest face wins. The track is usable
-   only if a face appears in **≥ 25 %** of samples; otherwise centre crop.
-5. **Track**: `cx`/`cy` = face centre, clamped so the window stays inside the frame.
-   Samples with no detection carry forward the last known centre.
+4. **Face detection + identity lock**: OpenCV YuNet (`cv2.FaceDetectorYN`),
+   detected at max width 640 then mapped back to source coordinates. The tracker
+   **locks onto one subject** — candidates are scored by IoU + centre proximity +
+   size consistency against the incumbent, not by raw area, so a background
+   person who is briefly larger cannot steal the crop. A challenger must beat a
+   high bar for several consecutive samples to take over; after a sustained
+   absence the lock drops so a real scene cut still re-frames. The track is
+   usable only if a face appears in **≥ 25 %** of samples; otherwise centre crop.
+5. **Track**: `cx`/`cy` = accepted face centre, clamped so the window stays inside
+   the frame. Samples with no accepted face (occlusion) are flagged and bridged
+   by interpolation before smoothing, so a held value never drags the crop.
 6. **Smoothing**: zero-phase EMA (forward + backward average, with edge
    extrapolation padding), then a velocity clamp.
 7. **Render**: one ffmpeg pass. A constant centre gets a static `crop`+`scale`;

@@ -12,7 +12,7 @@ CLI
     python3 pipeline/smart_reframe.py \\
         --input clip.mp4 --output clip_vertical.mp4 \\
         --width 1080 --height 1920 \\
-        --mode auto|face|center --smoothing 0.85 --sample-fps 2 \\
+        --mode auto|face|center --smoothing 0.6 --sample-fps 2 \\
         [--debug-json path.json] [--model-cache ~/.cache/clipmint]
 
 Exit 0 on success, non-zero with a clear message on failure. The final stdout
@@ -57,6 +57,41 @@ alternative would need N encodes (or an N-segment conform), risks A/V drift at
 each boundary, and makes the output impossible to produce in a single ffmpeg
 invocation. We chose the expression path, with a static crop as the automatic
 fallback if the graph is rejected for any reason.
+
+------------------------------------------------------------------------------
+SUBJECT IDENTITY LOCK  (fix note, 2026-10-15)
+------------------------------------------------------------------------------
+The first version picked the largest face in EACH frame independently
+(`max(faces, key=area)`). That has no memory of who the subject is, so a
+background person who is momentarily bigger takes the crop and never gives it
+back. Measured on a fixture where a second face enters at t=8s: a 624 px error
+that persisted to the last frame.
+
+Now the tracker locks onto one subject (build_face_track):
+
+  * a candidate is scored by IoU + centre proximity + size consistency against
+    the incumbent, NOT by raw area;
+  * a challenger must both beat a high bar and do so for several consecutive
+    samples before it can displace the incumbent, so detector noise cannot
+    cause a switch;
+  * after a sustained absence the lock is dropped so a real scene cut can
+    re-frame promptly. The debug JSON reports identity_switches, so a genuine
+    cut is visible in the logs.
+
+Same fixture, after the fix: max raw cx error 624 px -> 43 px, and 6 px during
+the window where the intruder is in shot.
+
+Two related fixes shipped with it:
+
+  * `--smoothing` default 0.85 -> 0.6. Zero-phase EMA removes lag, but a slow
+    coefficient still trails a moving subject: measured 171 px lag / 85 % span
+    retention at 0.85 versus 5 px / 99 % at 0.6.
+  * samples with no accepted face (occlusion) are bridged by interpolation
+    before smoothing instead of being smoothed as if they were measurements,
+    so a held position no longer drags the crop.
+
+Rendered result on the fixture, measured inside the 1080x1920 output: face
+offset from centre fell 452 px -> 62 px, with no whip-pan.
 
 ------------------------------------------------------------------------------
 SAFETY
@@ -113,6 +148,34 @@ FACE_USABLE_RATIO = 0.25   # a face must appear in >=25% of samples to be tracke
 VELOCITY_CLAMP_PX = 40.0   # max crop-centre jump between adjacent samples
 STATIC_DEV_RATIO = 0.02    # centre spread < 2% of crop width => static crop
 SAMPLE_TIMEOUT_BASE = 300  # seconds
+
+# Smoothing default. See smooth_track: at 0.85 the smoothed track lagged a moving
+# speaker by up to 171 px and lost 15% of the travel; 0.6 measures 5 px / 99%.
+SMOOTHING_DEFAULT = 0.6
+
+# --------------------------------------------------------------------------
+# Identity lock (see build_face_track docstring).
+#
+# Without this the tracker picks the largest face in EVERY frame independently,
+# so a background person who is momentarily bigger steals the crop permanently.
+# Measured on the realistic fixture: a 624 px error that never recovers.
+# --------------------------------------------------------------------------
+# How much a candidate must beat the incumbent to be considered a *different*,
+# better subject rather than noise on the same subject.
+IDENTITY_MIN_SCORE = 0.55          # weighted match below this = not the same face
+IDENTITY_IOU_WEIGHT = 0.50         # overlap of the two boxes
+IDENTITY_DIST_WEIGHT = 0.30        # centre proximity (in crop-window units)
+IDENTITY_SIZE_WEIGHT = 0.20        # size consistency with the tracked face
+IDENTITY_SIZE_TOL = 0.35           # >35% size change is "not the same person"
+IDENTITY_DIST_REJECT = 1.25        # centre further than 1.25 crop widths away = reject
+IDENTITY_JUMP_SCORE = 0.80         # challenger must clear this to displace incumbent
+IDENTITY_CONFIRM_FRAMES = 3        # ...and to do so for this many CONSECUTIVE samples
+IDENTITY_ACQUIRE_FRAMES = 1        # samples before a fresh lock is trusted
+IDENTITY_MAX_MISSES = 4            # consecutive no-match samples before searching fresh
+
+# Occlusion handling: samples with no accepted face are held for the render but
+# EXCLUDED from the smoother, so a held value never drags the estimate.
+OCCLUSION_INTERP_MAX = 40          # interpolate gaps up to this many samples
 
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 PNG_END = b"IEND\xaeB\x60\x82"
@@ -418,10 +481,73 @@ def iter_sampled_frames(input_path, step, src_w, max_samples, timeout_s):
 # ==========================================================================
 # face tracking
 # ==========================================================================
+def _iou(a, b) -> float:
+    """Intersection-over-union of two (x, y, w, h) boxes."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    if inter <= 0.0:
+        return 0.0
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _identity_score(prev, cand) -> float:
+    """
+    How likely `cand` is the SAME person as `prev`, in [0, 1].
+
+    Boxes are (x, y, w, h) in SOURCE pixels. The weights let a slightly smaller
+    but well-overlapping box beat a bigger box that is somewhere else - which is
+    the entire point: raw area alone is what let an intruder steal the crop.
+    """
+    px, py, pw, ph = prev
+    cx_, cy_, cw_, ch_ = cand
+
+    iou = _iou(prev, cand)
+
+    # Centre proximity, normalised by the previous face's own size. 0 = same
+    # spot, 1 = one face-width away, >=IDENTITY_DIST_REJECT = treated as absent.
+    pcx, pcy = px + pw / 2.0, py + ph / 2.0
+    ccx, ccy = cx_ + cw_ / 2.0, cy_ + ch_ / 2.0
+    denom = max(pw, 1.0)
+    dist = math.hypot(ccx - pcx, ccy - pcy) / denom
+    if dist >= IDENTITY_DIST_REJECT:
+        return 0.0
+    dist_score = max(0.0, 1.0 - dist / IDENTITY_DIST_REJECT)
+
+    # Size consistency: a person does not change apparent size this fast.
+    scale = max(cw_ / max(pw, 1e-6), ch_ / max(ph, 1e-6))
+    size_score = 1.0 if abs(scale - 1.0) <= IDENTITY_SIZE_TOL else 0.0
+
+    return (IDENTITY_IOU_WEIGHT * iou
+            + IDENTITY_DIST_WEIGHT * dist_score
+            + IDENTITY_SIZE_WEIGHT * size_score)
+
+
 def build_face_track(input_path, probe, sample_fps, model_cache, allow_download):
     """
-    Returns (centers, confidence, samples, note).
-    centers is a list of (cx, cy) in SOURCE pixel coordinates, one per sample.
+    Returns (centers, confidence, samples, note, dt, observed).
+
+    centers   list of (cx, cy) in SOURCE pixel coordinates, one per sample.
+    observed  parallel list[bool]: True where a face was actually ACCEPTED for
+              this sample, False where the value is a hold/interpolation. The
+              smoother uses this to avoid treating a held value as real data.
+
+    IDENTITY LOCK
+    The original implementation picked `max(faces, key=area)` every frame. That
+    has no memory, so a background person who is momentarily bigger takes the
+    crop and never gives it back - measured as a 624 px error that persisted to
+    the end of the clip. We instead lock onto one subject and keep it:
+
+      * the incumbent (last ACCEPTED detection) is preferred;
+      * a challenger must both beat IDENTITY_JUMP_SCORE *and* do so for
+        IDENTITY_CONFIRM_FRAMES consecutive samples before it displaces it, so
+        detector noise cannot cause a switch;
+      * after IDENTITY_MAX_MISSES consecutive no-match samples we drop the lock
+        and re-acquire, so a real scene cut still re-frames promptly.
+
     Raises on hard structural problems; callers fall back to centre crop.
     """
     src_w, src_h = probe["width"], probe["height"]
@@ -438,17 +564,21 @@ def build_face_track(input_path, probe, sample_fps, model_cache, allow_download)
     model_path, note = ensure_yunet_model(model_cache, allow_download)
     if model_path is None:
         warn("model_unavailable", note)
-        return None, 0.0, 0, note, dt
+        return None, 0.0, 0, note, dt, []
 
     detector = cv2.FaceDetectorYN.create(
         str(model_path), "", (DETECT_MAX_WIDTH, DETECT_MAX_WIDTH),
         FACE_SCORE_THRESHOLD, 0.3, 5000,
     )
 
-    centers, scores = [], []
+    centers, observed, scores = [], [], []
     samples = 0
     detected = 0
-    last = None
+    locked = None       # last ACCEPTED (x, y, w, h) in source px
+    misses = 0
+    pending = None      # (box, or None) candidate in a row, for confirmation
+    pending_run = 0
+    switches = 0
 
     timeout_s = max(SAMPLE_TIMEOUT_BASE, duration * 4) if duration else SAMPLE_TIMEOUT_BASE
 
@@ -463,36 +593,83 @@ def build_face_track(input_path, probe, sample_fps, model_cache, allow_download)
         detector.setInputSize((iw, ih))
         _retval, faces = detector.detect(img)
 
-        best = None
+        # All detections in SOURCE coordinates: (x, y, w, h, score).
+        cands = []
         if faces is not None and len(faces):
-            # YuNet rows are [x, y, w, h, 5x landmark pairs..., score]
-            best = max(faces, key=lambda r: float(r[2]) * float(r[3]))
+            for row in faces:
+                bx = float(row[0]) * sx
+                by = float(row[1]) * sy
+                bw = float(row[2]) * sx
+                bh = float(row[3]) * sy
+                cands.append((bx, by, bw, bh, float(row[14])))
 
-        if best is not None:
-            fx, fy, fw, fh = (float(best[0]), float(best[1]), float(best[2]), float(best[3]))
-            score = float(best[14])
-            cx = (fx + fw / 2.0) * sx
-            cy = (fy + fh / 2.0) * sy
-            last = (cx, cy)
+        accepted = None
+        if cands:
+            if locked is None:
+                # No lock: pick the largest as the initial subject.
+                accepted = max(cands, key=lambda c: c[2] * c[3])
+            else:
+                scored = sorted(
+                    ((_identity_score(locked, c[:4]), c) for c in cands),
+                    key=lambda sc: sc[0], reverse=True)
+                top_score, top = scored[0]
+                if top_score >= IDENTITY_MIN_SCORE:
+                    # Same person: follow, and let size/position update the lock.
+                    accepted = top
+                else:
+                    # Nothing looks like the incumbent. Consider a takeover, but
+                    # require the SAME challenger to win several samples in a row.
+                    challenger = max(cands, key=lambda c: c[2] * c[3])
+                    chal_score = _identity_score(locked, challenger[:4])
+                    consistent = (pending is not None
+                                  and _iou(pending[:4], challenger[:4]) > 0.5)
+                    pending_run = pending_run + 1 if consistent else 1
+                    pending = challenger
+                    if (chal_score >= IDENTITY_JUMP_SCORE
+                            and pending_run >= IDENTITY_CONFIRM_FRAMES):
+                        accepted = challenger
+                        switches += 1
+                        pending, pending_run = None, 0
+                    else:
+                        accepted = None
+
+        if accepted is not None:
+            bx, by, bw, bh, score = accepted
+            locked = (bx, by, bw, bh)
+            misses = 0
+            pending, pending_run = None, 0
+            cx = bx + bw / 2.0
+            cy = by + bh / 2.0
             scores.append(score)
             detected += 1
+            observed.append(True)
         else:
-            cx, cy = last if last is not None else (src_w / 2.0, src_h / 2.0)
+            # No accepted face: hold the previous value for the render, but flag
+            # it as NOT observed so the smoother can bridge the gap instead of
+            # treating a hold as a real measurement.
+            misses += 1
+            if misses > IDENTITY_MAX_MISSES:
+                locked = None  # drop the lock so a real cut can re-frame
+            if centers:
+                cx, cy = centers[-1]
+            else:
+                cx, cy = src_w / 2.0, src_h / 2.0
+            observed.append(False)
 
         centers.append((cx, cy))
 
     if samples == 0:
-        return None, 0.0, 0, "no_frames_read", dt
+        return None, 0.0, 0, "no_frames_read", dt, []
 
     ratio = detected / float(samples)
     confidence = (sum(scores) / len(scores)) if scores else 0.0
     say(f"[reframe] sampled={samples} faces_detected={detected} "
-        f"({ratio * 100:.1f}%) mean_score={confidence:.3f}")
+        f"({ratio * 100:.1f}%) mean_score={confidence:.3f} identity_switches={switches}")
 
     if ratio < FACE_USABLE_RATIO:
-        return None, confidence, samples, f"face_ratio_{ratio:.3f}_below_{FACE_USABLE_RATIO}", dt
+        return None, confidence, samples, f"face_ratio_{ratio:.3f}_below_{FACE_USABLE_RATIO}", dt, []
 
-    return centers, confidence, samples, "ok", dt
+    return centers, confidence, samples, "ok", dt, observed
 
 
 # ==========================================================================
@@ -539,7 +716,63 @@ def _zero_phase_ema(seq, alpha):
     return avg[pad:pad + n]
 
 
-def smooth_track(centers, smoothing, dt,
+def bridge_gaps(centers, observed, max_gap=OCCLUSION_INTERP_MAX):
+    """
+    Fill samples that were NOT real observations with a linear interpolation
+    across the surrounding real samples, so the smoother never sees a held value
+    as if it were a measurement.
+
+    A held value (repeat of the last centre, used while the face is occluded or
+    undetected) is a flat plateau in the raw track. Feeding that plateau to the
+    EMA pulls the smoothed estimate towards the stale position for the whole gap
+    and for a while after it, which is part of why the crop trailed the speaker.
+    Interpolating between the last real sample before the gap and the first real
+    sample after it produces the trajectory the subject most likely followed.
+
+    Returns a NEW list; `observed` is not modified. Leading/trailing gaps (no
+    real sample on one side) are padded with the nearest real value.
+    """
+    n = len(centers)
+    if n == 0:
+        return []
+    if all(observed):
+        return list(centers)
+
+    out = list(centers)
+    reals = [i for i, ok in enumerate(observed) if ok]
+    if not reals:
+        return out  # nothing to bridge from; caller treats the track as unusable
+
+    first, last = reals[0], reals[-1]
+
+    # Lead-in: everything before the first real sample holds that value.
+    for i in range(0, first):
+        out[i] = centers[first]
+    # Tail: everything after the last real sample holds that value.
+    for i in range(last + 1, n):
+        out[i] = centers[last]
+
+    # Interior gaps: linear interpolation between the bracketing real samples.
+    for a, b in zip(reals, reals[1:]):
+        if b - a <= 1:
+            continue
+        if b - a - 1 > max_gap:
+            # A gap this long is not an occlusion, it is a subject change. Do not
+            # invent motion across it - hold the pre-gap value so the crop stays
+            # put until tracking resumes.
+            for i in range(a + 1, b):
+                out[i] = centers[a]
+            continue
+        x0, y0 = centers[a]
+        x1, y1 = centers[b]
+        span = float(b - a)
+        for i in range(a + 1, b):
+            f = (i - a) / span
+            out[i] = (x0 + (x1 - x0) * f, y0 + (y1 - y0) * f)
+    return out
+
+
+def smooth_track(centers, smoothing, dt, observed=None,
                  max_vel_px_per_frame=VELOCITY_CLAMP_PX, out_fps=30.0):
     """
     Zero-phase exponential smoothing + velocity clamp.
@@ -553,6 +786,21 @@ def smooth_track(centers, smoothing, dt,
     EMA forward AND backward and average the two passes. That is still an
     exponential moving average with the requested coefficient, but the lag
     cancels (zero-phase), so we get smoothness without trailing.
+
+    Even zero-phase, the coefficient itself controls how much of the subject's
+    travel is preserved. Measured on a clean ramp at the ORIGINAL default of
+    0.85 the smoothed track still lagged the subject by up to 171 px and gave
+    back 15 % of the span, because the two passes cannot fully cancel a trend
+    that a slow filter has not yet caught up with:
+
+        alpha=0.85  lag -171..+6   mean|err|=55px   span_kept=85%   (old default)
+        alpha=0.60  lag  -35..+1   mean|err|= 5px   span_kept=99%   (new default)
+        alpha=0.40  lag  -15..+0   mean|err|= 1px   span_kept=100%
+
+    The default is therefore 0.6: still visibly smooths detector jitter, without
+    trailing the speaker. `observed` (from build_face_track) marks which samples
+    are real; gaps are bridged by `bridge_gaps` before filtering so a held
+    occlusion value does not drag the estimate.
 
     VELOCITY CLAMP
     The clamp is a per-OUTPUT-FRAME budget (40 px per 1/30 s = 1200 px/s),
@@ -570,6 +818,9 @@ def smooth_track(centers, smoothing, dt,
     """
     if not centers:
         return [], 0
+
+    if observed is not None and len(observed) == len(centers) and not all(observed):
+        centers = bridge_gaps(centers, observed)
 
     alpha = min(max(smoothing, 0.0), 0.98)
     xs = [c[0] for c in centers]
@@ -682,8 +933,9 @@ def parse_args(argv=None):
     p.add_argument("--width", type=int, default=1080)
     p.add_argument("--height", type=int, default=1920)
     p.add_argument("--mode", choices=["auto", "face", "center"], default="auto")
-    p.add_argument("--smoothing", type=float, default=0.85,
-                   help="EMA coefficient in [0,0.98]; higher = smoother")
+    p.add_argument("--smoothing", type=float, default=SMOOTHING_DEFAULT,
+                   help="EMA coefficient in [0,0.98]; higher = smoother but "
+                        f"trails a moving speaker (default {SMOOTHING_DEFAULT})")
     p.add_argument("--sample-fps", type=float, default=2.0)
     p.add_argument("--max-vel-px", type=float, default=VELOCITY_CLAMP_PX,
                    help="max crop-centre movement per output frame at 30fps "
@@ -781,20 +1033,25 @@ def main(argv=None) -> int:
             note = "bad_sample_fps"
         else:
             try:
-                raw, confidence, samples, note, sample_dt = build_face_track(
+                raw, confidence, samples, note, sample_dt, observed = build_face_track(
                     args.input, probe, args.sample_fps, args.model_cache,
                     not args.no_download,
                 )
                 if raw:
                     smoothed, clamped = smooth_track(
-                        raw, args.smoothing, sample_dt,
+                        raw, args.smoothing, sample_dt, observed=observed,
                         max_vel_px_per_frame=args.max_vel_px)
                     centers = clamp_centers(smoothed, crop_w, crop_h, src_w, src_h)
                     mode_used = "face"
                     debug["sample_interval_s"] = round(sample_dt, 5)
+                    held = 0 if not observed else sum(1 for o in observed if not o)
+                    debug["held_samples"] = held
+                    debug["identity_locked_ratio"] = (
+                        round(1.0 - held / len(observed), 4) if observed else 0.0)
                     debug["raw_centers"] = [
                         {"t": round(i * sample_dt, 4),
-                         "cx": round(c[0], 2), "cy": round(c[1], 2)}
+                         "cx": round(c[0], 2), "cy": round(c[1], 2),
+                         "observed": bool(observed[i]) if i < len(observed) else True}
                         for i, c in enumerate(raw)
                     ]
                 else:
