@@ -98,9 +98,9 @@ on:
         default: "false"
         type: string
       tighten_clips:
-        description: "clips mode: jump-cut long pauses and filler words inside each clip (true/false)"
+        description: "Jump-cut long pauses and filler words inside each clip (default on — proven E2E run 42377140843: 4.4s removed from the fixture, captions remapped, all jobs green)"
         required: false
-        default: "false"
+        default: "true"
         type: string
       auto_punch_in:
         description: "auto-edit: subtle punch-in zoom on sentence starts (true/false)"
