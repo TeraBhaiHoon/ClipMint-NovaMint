@@ -77,7 +77,7 @@ export default function HowItWorks() {
         <div className="flex flex-col items-center text-center mb-16">
           <p className="kicker kicker-center mb-4">How it works</p>
           <h2 className="text-[var(--fs-h2)] font-bold leading-[1.06] tracking-[-0.02em] text-ink-50 mb-5 max-w-xl">
-            Three steps. <span className="grad-mint-text">Zero editing.</span>
+            Three steps. <span className="grad-signal-text">Zero editing.</span>
           </h2>
           <p className="section-subheading" style={{ marginBottom: 0 }}>
             Transcribe, score, clip, render captions — the pipeline runs in
@@ -100,7 +100,7 @@ export default function HowItWorks() {
               return (
                 <StaggerItem key={item.step}>
                   <div className="relative flex items-start gap-6">
-                    <div className="relative z-10 shrink-0 w-14 h-14 rounded-2xl bg-[var(--surface-card)] border border-mint-500/25 flex items-center justify-center text-mint-400 shadow-[var(--shadow-rest)]">
+                    <div className="relative z-10 shrink-0 w-14 h-14 rounded-2xl bg-[var(--surface-card)] border border-signal-500/25 flex items-center justify-center text-signal-400 shadow-[var(--shadow-rest)]">
                       <Icon className="w-[22px] h-[22px]" />
                     </div>
                     <div className="pt-1">

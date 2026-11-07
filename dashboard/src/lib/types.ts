@@ -120,6 +120,14 @@ export interface Clip {
     hashtags: string[] | null;
     hook_caption: string | null;
     viral_score: number | null;
+    /** Quality-instrument score 0-100 (pipeline/clip_qa.py). NULL = not measured. */
+    quality_score: number | null;
+    /** Per-check breakdown {checks:[{id,label,status,value,detail}], loudness, clip}. */
+    quality_report: {
+        checks?: { id: string; label: string; status: string; value: string; detail: string }[];
+        loudness?: { lufs: number | null; true_peak_dbfs: number | null };
+        clip?: Record<string, unknown>;
+    } | null;
     drive_file_id: string | null;
     drive_url: string | null;
     thumbnail_url: string | null;

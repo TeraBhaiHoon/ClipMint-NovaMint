@@ -42,7 +42,7 @@ export default function ScrollProgress() {
     <div
       ref={barRef}
       aria-hidden="true"
-      className="fixed top-0 left-0 right-0 h-[2px] bg-mint-500 origin-left z-[100] pointer-events-none"
+      className="fixed top-0 left-0 right-0 h-[2px] bg-signal-500 origin-left z-[100] pointer-events-none"
       style={{ transform: "scaleX(0)" }}
     />
   );

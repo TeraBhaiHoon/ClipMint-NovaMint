@@ -73,9 +73,9 @@ export default function Footer() {
                       className="group inline-flex items-center gap-2.5 text-sm text-ink-300 no-underline hover:text-ink-50 transition-colors duration-200"
                     >
                       {Icon && (
-                        <Icon className="w-4 h-4 text-ink-500 group-hover:text-mint-400 transition-colors duration-200" />
+                        <Icon className="w-4 h-4 text-ink-500 group-hover:text-signal-400 transition-colors duration-200" />
                       )}
-                      <span className="group-hover:underline decoration-mint-400/50 underline-offset-4">
+                      <span className="group-hover:underline decoration-signal-400/50 underline-offset-4">
                         {link.label}
                       </span>
                     </Link>
@@ -90,13 +90,13 @@ export default function Footer() {
       <div className="relative border-t border-[var(--border-faint)] pt-8 flex flex-col md:flex-row justify-between items-center gap-6 max-w-6xl mx-auto">
         <div className="flex flex-col items-center md:items-start gap-4">
           <span className="flex items-center gap-2.5 font-[family-name:var(--font-display)] font-bold text-lg leading-none tracking-[-0.02em] text-ink-50">
-            <IconMark className="w-5 h-5 text-mint-400" />
-            ClipMint<span className="text-mint-400">.</span>
+            <IconMark className="w-5 h-5 text-signal-400" />
+            ClipMint<span className="text-signal-400">.</span>
           </span>
           <span className="inline-flex items-center gap-2.5 rounded-full border border-white/10 px-3.5 py-1.5 text-[11px] font-medium text-ink-300">
             <span className="relative flex w-2 h-2" aria-hidden="true">
-              <span className="absolute inline-flex h-full w-full rounded-full bg-mint-500 opacity-40 animate-ping" />
-              <span className="relative inline-flex rounded-full w-2 h-2 bg-mint-500" />
+              <span className="absolute inline-flex h-full w-full rounded-full bg-signal-500 opacity-40 animate-ping" />
+              <span className="relative inline-flex rounded-full w-2 h-2 bg-signal-500" />
             </span>
             Made in India
           </span>

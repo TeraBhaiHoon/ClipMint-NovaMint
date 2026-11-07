@@ -78,7 +78,7 @@ export default function FeatureBento() {
         <div className="flex flex-col items-center text-center mb-16">
           <p className="kicker kicker-center mb-4">Capabilities</p>
           <h2 className="text-[var(--fs-h2)] font-bold leading-[1.06] tracking-[-0.02em] text-ink-50 mb-5 max-w-2xl">
-            What the pipeline <span className="grad-mint-text">delivers.</span>
+            What the pipeline <span className="grad-signal-text">delivers.</span>
           </h2>
           <p className="section-subheading" style={{ marginBottom: 0 }}>
             No magic claims — just what happens between your upload and a
@@ -100,7 +100,7 @@ export default function FeatureBento() {
                         "radial-gradient(90% 70% at 20% 0%, rgba(57,229,8,0.10), transparent 60%)",
                     }}
                   />
-                  <div className="w-12 h-12 rounded-2xl bg-mint-500/10 border border-mint-500/25 flex items-center justify-center text-mint-400 shrink-0">
+                  <div className="w-12 h-12 rounded-2xl bg-signal-500/10 border border-signal-500/25 flex items-center justify-center text-signal-400 shrink-0">
                     <Icon className="w-[20px] h-[20px]" />
                   </div>
                   <div className="relative">

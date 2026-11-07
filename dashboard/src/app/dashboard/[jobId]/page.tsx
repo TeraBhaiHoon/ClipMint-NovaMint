@@ -9,6 +9,7 @@ import {
     ArrowLeft, Download, ExternalLink, Copy, Share2, Star,
     Clock, Film, Loader2, RefreshCw, AlertTriangle, Image,
     Check, ChevronRight, Play, X,
+    Gauge,
 } from "lucide-react";
 
 const PIPELINE_STEPS = [
@@ -74,6 +75,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     const [retrying, setRetrying] = useState(false);
     const [downloadingAll, setDownloadingAll] = useState(false);
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    const [qaOpenId, setQaOpenId] = useState<string | null>(null);
     const [previewClip, setPreviewClip] = useState<Clip | null>(null);
     // Ticks on every poll so the "stuck" check re-evaluates without extra timers.
     const [now, setNow] = useState(() => Date.now());
@@ -366,7 +368,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     <div className={`step-circle ${state}`}>
                                         {state === "completed" ? <Check size={14} /> : i + 1}
                                     </div>
-                                    <span className={`text-[10px] font-semibold mt-1.5 ${state === "active" ? "text-mint-400" : state === "completed" ? "text-[#10b981]" : "text-[#64748b]"}`}>
+                                    <span className={`text-[10px] font-semibold mt-1.5 ${state === "active" ? "text-signal-400" : state === "completed" ? "text-[#10b981]" : "text-[#64748b]"}`}>
                                         {step.label}
                                     </span>
                                 </div>
@@ -442,7 +444,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
 
             {/* ─── Clips Gallery ─── */}
             <h2 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
-                <Film size={18} className="text-mint-400" />
+                <Film size={18} className="text-signal-400" />
                 {clips.length} Clip{clips.length !== 1 ? "s" : ""} Generated
             </h2>
 
@@ -461,7 +463,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                         return (
                         <div 
                             key={clip.id} 
-                            className="glass-card animate-fade-in-up !p-0 overflow-hidden hover:border-mint-500/35 shadow-lg flex flex-col" 
+                            className="glass-card animate-fade-in-up !p-0 overflow-hidden hover:border-signal-500/35 shadow-lg flex flex-col" 
                             style={{ animationDelay: `${i * 0.06}s` }}
                         >
                             {/* Preview area */}
@@ -499,15 +501,31 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     </div>
                                 )}
                                 {clip.viral_score != null && (
-                                    <div 
+                                    <div
                                         className={`absolute top-2.5 right-2.5 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold backdrop-blur-md border ${
-                                            clip.viral_score >= 80 
-                                                ? "bg-emerald-500/20 text-[#10b981] border-emerald-500/20" 
+                                            clip.viral_score >= 80
+                                                ? "bg-emerald-500/20 text-[#10b981] border-emerald-500/20"
                                                 : "bg-amber-500/20 text-[#f59e0b] border-amber-500/20"
                                         }`}
                                     >
                                         <Star size={13} /> {clip.viral_score}
                                     </div>
+                                )}
+                                {clip.quality_score != null && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setQaOpenId(qaOpenId === clip.id ? null : clip.id)}
+                                        title="Quality check — click for the full report"
+                                        className={`absolute top-2.5 left-2.5 flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold backdrop-blur-md border font-[family-name:var(--font-mono)] ${
+                                            clip.quality_score >= 85
+                                                ? "bg-emerald-500/20 text-[#10b981] border-emerald-500/20"
+                                                : clip.quality_score >= 70
+                                                    ? "bg-amber-500/20 text-[#f59e0b] border-amber-500/20"
+                                                    : "bg-red-500/20 text-[#f87171] border-red-500/20"
+                                        }`}
+                                    >
+                                        <Gauge size={13} /> QA {clip.quality_score}
+                                    </button>
                                 )}
                                 {duration != null && (
                                     <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-bold text-slate-200 backdrop-blur-sm">
@@ -530,7 +548,26 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     {clip.hashtags && clip.hashtags.length > 0 && (
                                         <div className="flex flex-wrap gap-1.5 mb-3.5">
                                             {clip.hashtags.slice(0, 4).map((tag) => (
-                                                <span key={tag} className="text-[9px] px-2 py-0.5 rounded bg-mint-500/10 text-mint-300 font-semibold border border-mint-500/10">{tag}</span>
+                                                <span key={tag} className="text-[9px] px-2 py-0.5 rounded bg-signal-500/10 text-signal-300 font-semibold border border-signal-500/10">{tag}</span>
+                                            ))}
+                                        </div>
+                                    )}
+                                    {qaOpenId === clip.id && clip.quality_report?.checks && (
+                                        <div className="mt-1 mb-3.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-raised)] p-2.5 space-y-1">
+                                            <p className="text-[10px] font-semibold font-[family-name:var(--font-mono)] uppercase tracking-[0.12em] text-ink-400 mb-1.5">
+                                                Quality report
+                                            </p>
+                                            {clip.quality_report.checks.map((c) => (
+                                                <div key={c.id} className="flex items-start gap-2 text-[11px] leading-snug">
+                                                    <span className={
+                                                        c.status === "fail" ? "text-[#f87171]" :
+                                                        c.status === "warn" ? "text-[#f59e0b]" : "text-[#10b981]"
+                                                    }>{c.status === "fail" ? "✕" : c.status === "warn" ? "!" : "✓"}</span>
+                                                    <span className="text-slate-300 font-medium shrink-0">{c.label}</span>
+                                                    <span className="text-[#64748b] ml-auto text-right">
+                                                        {c.value}{c.detail ? ` — ${c.detail}` : ""}
+                                                    </span>
+                                                </div>
                                             ))}
                                         </div>
                                     )}

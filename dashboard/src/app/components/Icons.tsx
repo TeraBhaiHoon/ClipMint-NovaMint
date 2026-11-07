@@ -3,7 +3,7 @@ import type { SVGProps } from "react";
 /**
  * ClipMint custom icon set — hand-drawn inline SVGs, 24×24 viewBox.
  * Stroke icons use a consistent 1.75 hairline at "round" caps/joins so
- * they read as one family next to the mint-on-ink palette. No third-party
+ * they read as one family next to the signal-on-ink palette. No third-party
  * icon library. All icons default to `aria-hidden`; add an explicit
  * `aria-label` + `role="img"` at the call site when the icon carries
  * meaning on its own.

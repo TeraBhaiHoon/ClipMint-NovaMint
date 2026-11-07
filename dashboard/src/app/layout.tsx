@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import { Syne, Inter, JetBrains_Mono } from "next/font/google";
+import { Bricolage_Grotesque, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const display = Syne({
+const display = Bricolage_Grotesque({
   subsets: ["latin"],
   weight: ["500", "600", "700", "800"],
   variable: "--font-display",
@@ -44,7 +44,7 @@ export const metadata: Metadata = {
     description:
       "Upload one video, get platform-ready 9:16 clips with animated captions. AI finds the moments. Free to start.",
     type: "website",
-    url: "https://clipmint.vikashbuilds.in",
+    url: "https://clipmint.novamintnetworks.in",
     siteName: "ClipMint",
   },
   twitter: {

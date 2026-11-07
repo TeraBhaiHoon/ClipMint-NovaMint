@@ -86,10 +86,10 @@ export default function FeaturesPage() {
             <div className="max-w-6xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-32">
                 {/* Header */}
                 <div className="text-center mb-20">
-                    <p className="cm-eyebrow text-mint-300 mb-4">Features</p>
+                    <p className="cm-eyebrow text-signal-300 mb-4">Features</p>
                     <h1 className="text-[clamp(32px,4.5vw,52px)] font-bold leading-[1.08] tracking-[-0.02em] mb-4">
                         Everything the pipeline{" "}
-                        <span className="text-mint-400">does.</span>
+                        <span className="text-signal-400">does.</span>
                     </h1>
                     <p className="text-base sm:text-[17px] text-ink-300 leading-[1.6] max-w-xl mx-auto">
                         One long video in, caption-ready clips out — here is
@@ -110,7 +110,7 @@ export default function FeaturesPage() {
                                     className={`font-[family-name:var(--font-display)] font-bold text-3xl tracking-[-0.02em] ${
                                         s.muted
                                             ? "text-ink-500 line-through"
-                                            : "text-mint-400"
+                                            : "text-signal-400"
                                     }`}
                                 >
                                     {s.value}
@@ -127,7 +127,7 @@ export default function FeaturesPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-24">
                     {FEATURES.map((feat) => (
                         <div key={feat.title} className="cm-card p-7 flex flex-col gap-4">
-                            <div className="w-11 h-11 rounded-xl bg-mint-500/10 border border-mint-500/20 flex items-center justify-center text-mint-400">
+                            <div className="w-11 h-11 rounded-xl bg-signal-500/10 border border-signal-500/20 flex items-center justify-center text-signal-400">
                                 {feat.icon}
                             </div>
                             <div>
@@ -137,7 +137,7 @@ export default function FeaturesPage() {
                                 <p className="text-[15px] leading-[1.6] text-ink-300 mb-4">
                                     {feat.desc}
                                 </p>
-                                <span className="inline-block text-xs font-semibold text-mint-300 bg-mint-500/10 border border-mint-500/20 rounded-lg px-2.5 py-1.5">
+                                <span className="inline-block text-xs font-semibold text-signal-300 bg-signal-500/10 border border-signal-500/20 rounded-lg px-2.5 py-1.5">
                                     {feat.detail}
                                 </span>
                             </div>
@@ -146,7 +146,7 @@ export default function FeaturesPage() {
                 </div>
 
                 {/* CTA — same treatment as the landing final panel */}
-                <div className="rounded-3xl bg-ink-850 border border-mint-500/30 shadow-[var(--shadow-accent)] p-10 md:p-14 text-center">
+                <div className="rounded-3xl bg-ink-850 border border-signal-500/30 shadow-[var(--shadow-accent)] p-10 md:p-14 text-center">
                     <h2 className="text-[clamp(26px,3.5vw,38px)] font-bold tracking-[-0.02em] leading-[1.08] mb-3">
                         Ready to try it?
                     </h2>
