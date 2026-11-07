@@ -1658,6 +1658,46 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
+      # 11b. Clip quality instrument
+      # ─────────────────────────────────────────────────────────────────────
+      # One ffmpeg pass per master clip: loudness (EBU R128), true peak,
+      # black/freeze frames, trailing dead air, resolution/fps/bitrate
+      # sanity, caption coverage. Results land in workspace/qa/*.json and
+      # are stored on the clip rows (clips.quality_score / quality_report)
+      # so the dashboard can show an explainable quality badge. Best effort:
+      # a QA failure removes points only in the report, never the job.
+      - name: Score clip quality
+        if: env.OVERALL_STATUS == 'success'
+        run: |
+          set -euo pipefail
+          echo "qa" > workspace/.current_step
+          mkdir -p workspace/qa
+          python3 - <<'PY'
+          import glob, json, subprocess
+          from pathlib import Path
+
+          clips = sorted(Path("workspace/captioned").glob("*_captioned.mp4"))
+          made = 0
+          for clip in clips:
+              index = int(clip.stem.split("_")[1])
+              caps = Path("workspace/clips") / f"clip_{index:03d}.captions.json"
+              out = Path("workspace/qa") / f"clip_{index:03d}_qa.json"
+              r = subprocess.run(
+                  ["python3", "pipeline/clip_qa.py", "--clip", str(clip),
+                   "--captions", str(caps) if caps.exists() else "",
+                   "--json", str(out)],
+                  capture_output=True, text=True, timeout=300)
+              line = (r.stdout or "").strip().splitlines()
+              marker = next((l for l in reversed(line) if l.startswith("QA_")), "?")
+              print(f"  clip_{index:03d}: {marker}")
+              if out.exists():
+                  made += 1
+          print(f"QA_DONE scored={made}/{len(clips)}")
+          if made == 0 and clips:
+              raise SystemExit("QA_STEP_FAILED: no clip could be scored")
+          PY
+
+      # ─────────────────────────────────────────────────────────────────────
       # 12. Upload
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: uploading"
@@ -1859,7 +1899,7 @@ jobs:
           set -euo pipefail
           echo "save_results" > workspace/.current_step
           python3 - <<'PY'
-          import json, os, sys
+          import glob, json, os, re, sys
           from datetime import datetime, timezone
 
           sys.path.insert(0, "pipeline")
@@ -1890,6 +1930,21 @@ jobs:
                   if name.endswith(suffix):
                       return variant, name[: -len(suffix)]
               return "9x16", name[: -len(".mp4")]
+
+          # Quality-instrument reports (finalize's "Score clip quality" step):
+          # per MASTER clip index → {score, checks, loudness, clip}. Older
+          # jobs and skipped QA runs leave this empty → NULL in the row, which
+          # the dashboard renders as "not measured".
+          qa_by = {}
+          for f in glob.glob("workspace/qa/clip_*_qa.json"):
+              try:
+                  qa_by[int(re.search(r"clip_(\d+)_qa", f).group(1))] = json.load(open(f))
+              except (OSError, ValueError, AttributeError):
+                  continue
+          qa_score_by = {
+              i: int(r["score"]) for i, r in qa_by.items()
+              if isinstance(r.get("score"), (int, float))
+          }
 
           user_id = db.get_job(job_id)["user_id"]
           rows, failed = [], []
@@ -1925,6 +1980,9 @@ jobs:
                   "hashtags": moment.get("hashtags", []),
                   "hook_caption": moment.get("hook", ""),
                   "viral_score": int(float(moment.get("viral_score", 50) or 50)),
+                  # Quality instrument (master clip). NULL = not measured.
+                  "quality_score": qa_score_by.get(index),
+                  "quality_report": qa_by.get(index) or None,
                   "drive_file_id": clip.get("id", ""),
                   "drive_url": clip.get("url", ""),
                   "thumbnail_url": clip.get("thumbnail_url", ""),
