@@ -76,7 +76,6 @@ const DIRECT_MEDIA_EXTENSIONS = /\.(mp4|mov|m4v|webm)$/;
  * anyway (whitespace, control characters) plus the three that could break out of
  * a quoted string in any future caller that regresses: backtick, `$`, `\`.
  */
-// eslint-disable-next-line no-control-regex
 const SHELL_UNSAFE = /[`$\\\s\u0000-\u001f]/;
 
 /** Query params that only carry tracking/analytics data. */

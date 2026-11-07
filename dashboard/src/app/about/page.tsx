@@ -22,7 +22,7 @@ export default function AboutPage() {
                 <div className="text-center mb-16">
                     <div className="inline-flex items-center gap-2.5 mb-6">
                         <div className="w-9 h-9 rounded-lg overflow-hidden border border-white/10 shadow-md">
-                            <img src="/clipsignal-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
+                            <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
                         </div>
                         <span className="gradient-text font-black text-3xl tracking-tight bg-text-signal-400">
                             ClipMint

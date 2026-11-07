@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import type { Clip, Job } from "@/lib/types";
 import {
-    BarChart3, TrendingUp, Film, Clock, Calendar, Loader2,
+    BarChart3, TrendingUp, Film, Calendar,
     Star, Hash, Sparkles, Play,
 } from "lucide-react";
 
@@ -247,7 +247,7 @@ export default function AnalyticsPage() {
         return (
             <div className="flex flex-col gap-2">
                 <div className={`h-48 flex items-end px-1 ${days > 30 ? "gap-0.5" : "gap-1"}`}>
-                    {bars.map((bar, i) => {
+                    {bars.map((bar) => {
                         const height = bar.count === 0 ? 3 : Math.max(8, (bar.count / maxCount) * 100);
                         return (
                             <div

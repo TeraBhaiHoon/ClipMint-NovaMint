@@ -11,12 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping ClipMint Supabase
+        env:
+          # The anon key is public by design (RLS protects the data) — but
+          # it belongs in a secret, not hardcoded, so rotation is one place.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           echo "🏓 Pinging ClipMint Supabase..."
           RESPONSE=$(curl -s -w "\n%{http_code}" \
-            "https://zwgooqazqxqnfdgmhsev.supabase.co/rest/v1/profiles?select=count&limit=1" \
-            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp3Z29vcWF6cXhxbmZkZ21oc2V2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NDcxOTYsImV4cCI6MjA4ODMyMzE5Nn0.7KnhAaVTHXQGgHDjFaZUlnGvkCvFMCVpzQo-KNfptKk" \
-            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp3Z29vcWF6cXhxbmZkZ21oc2V2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NDcxOTYsImV4cCI6MjA4ODMyMzE5Nn0.7KnhAaVTHXQGgHDjFaZUlnGvkCvFMCVpzQo-KNfptKk")
+            "${SUPABASE_URL}/rest/v1/profiles?select=count&limit=1" \n            -H "apikey: ${SUPABASE_ANON_KEY}" \n            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | head -n -1)
           echo "Status: $HTTP_CODE"

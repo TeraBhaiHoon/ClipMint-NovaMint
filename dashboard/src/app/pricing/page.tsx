@@ -9,8 +9,6 @@ import {
     ChevronDown,
     Loader2,
     Zap,
-    CreditCard,
-    RefreshCw,
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
@@ -427,7 +425,7 @@ export default function PricingPage() {
                                     ["Priority processing", "—", "✓", "✓", "✓"],
                                     ["Team accounts", "—", "—", "—", "✓"],
                                     ["White-label", "—", "—", "—", "✓"],
-                                ].map((row, i) => (
+                                ].map((row) => (
                                     <tr
                                         key={row[0]}
                                         className="border-b border-white/5 last:border-0 hover:bg-white/5"

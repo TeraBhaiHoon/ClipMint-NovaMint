@@ -105,7 +105,7 @@ export default function UpdatePasswordPage() {
                 {/* Logo */}
                 <div className="flex items-center justify-center gap-2.5 mb-2">
                     <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 shadow-md">
-                        <img src="/clipsignal-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
+                        <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
                     </div>
                     <span className="gradient-text font-black text-2xl tracking-tight bg-text-signal-400">
                         ClipMint

@@ -3,7 +3,7 @@
 import Navbar from "../components/Navbar";
 import Footer from "../components/Footer";
 import Link from "next/link";
-import { HelpCircle, Calendar, ArrowLeft, Mail, AlertTriangle, BadgePercent } from "lucide-react";
+import { Calendar, ArrowLeft, Mail, AlertTriangle, BadgePercent } from "lucide-react";
 
 export default function RefundPolicyPage() {
     return (

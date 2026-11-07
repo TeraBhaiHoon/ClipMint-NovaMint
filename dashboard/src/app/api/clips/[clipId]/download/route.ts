@@ -91,7 +91,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 
     // ── Fast path: still in the cache ──
     if (await r2Head(key)) {
-        return redirectToSigned(key, inline, filename, kind);
+        return redirectToSigned(key, inline, filename);
     }
 
     // ── Cache miss: re-materialise this one file from the Drive archive ──
@@ -114,14 +114,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         return new NextResponse("Could not prepare this clip for download. Please try again.", { status: 502 });
     }
 
-    return redirectToSigned(key, inline, filename, kind);
+    return redirectToSigned(key, inline, filename);
 }
 
 async function redirectToSigned(
     key: string,
     inline: boolean,
-    filename: string,
-    kind: string
+    filename: string
 ): Promise<NextResponse> {
     const signed = await r2PresignGet(key, SIGNED_TTL_SECONDS, {
         type: inline ? "inline" : "attachment",

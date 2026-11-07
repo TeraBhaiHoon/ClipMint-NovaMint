@@ -7,7 +7,6 @@ import { createClient } from "@/lib/supabase";
 import type { Profile } from "@/lib/types";
 import { PLAN_LIMITS } from "@/lib/types";
 import {
-    Film,
     LayoutDashboard,
     Upload,
     Settings,
@@ -18,7 +17,6 @@ import {
     ChevronLeft,
     ChevronRight,
     Sparkles,
-    Crown,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -109,7 +107,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {/* Logo + Collapse toggle */}
                 <div className="flex items-center justify-between px-2 mb-6">
                     <Link href="/" className="flex items-center gap-2.5 no-underline text-inherit">
-                        <img src="/clipsignal-logo.jpg" alt="ClipMint" className="h-7 w-7 rounded-md object-cover flex-shrink-0 border border-white/10" />
+                        <img src="/clipmint-logo.jpg" alt="ClipMint" className="h-7 w-7 rounded-md object-cover flex-shrink-0 border border-white/10" />
                         {!collapsed && <span className="gradient-text sidebar-label text-lg font-extrabold tracking-tight from-signal-500 to-signal-700">ClipMint</span>}
                     </Link>
                     <button

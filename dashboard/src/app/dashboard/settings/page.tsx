@@ -9,7 +9,7 @@ import {
     User, Bell, CreditCard, ShieldAlert, Save, Loader2,
     ExternalLink, Check, Crown, Sparkles, AlertTriangle,
     Trash2, Lock, ArrowUpRight, Calendar,
-    Receipt, Zap, ArrowRight,
+    Receipt, Zap,
 } from "lucide-react";
 import Link from "next/link";
 

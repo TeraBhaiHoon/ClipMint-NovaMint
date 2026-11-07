@@ -6,9 +6,9 @@ import Link from "next/link";
 import type { Job, Clip, JobStatus } from "@/lib/types";
 import { JOB_STATUS_LABELS } from "@/lib/types";
 import {
-    ArrowLeft, Download, ExternalLink, Copy, Share2, Star,
+    ArrowLeft, Download, ExternalLink, Copy, Star,
     Clock, Film, Loader2, RefreshCw, AlertTriangle, Image,
-    Check, ChevronRight, Play, X,
+    Check, Play, X,
     Gauge,
 } from "lucide-react";
 
