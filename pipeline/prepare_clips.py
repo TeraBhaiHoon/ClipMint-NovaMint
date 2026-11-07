@@ -69,6 +69,7 @@ SCENE_TIMEOUT_S = 1200
 CUT_TIMEOUT_S = 900
 REFRAME_TIMEOUT_S = 600
 ENHANCE_TIMEOUT_S = 600
+MAX_TIGHTEN_SEGMENTS = 40   # more micro-cuts than this reads as stutter
 
 PIPELINE_DIR = Path(__file__).resolve().parent
 
@@ -308,6 +309,7 @@ def build_clip(
     src_height: int,
     keep_cut: bool = False,
     window: list[dict] | None = None,
+    tighten: bool = False,
 ) -> ClipResult:
     warnings: list[str] = []
     cut = outdir / f"clip_{index:03d}_cut.mp4"
@@ -338,6 +340,56 @@ def build_clip(
         raise RuntimeError(f"cut failed: {resp.stderr[:400]}")
 
     current = cut
+
+    # ── 1b. Tighten (optional): jump-cut pauses + fillers INSIDE the clip ─
+    # Same engine as captions mode (auto_edit), applied to this clip's own
+    # timeline: the caption window is clip-local (re-zeroed by
+    # captions_for_window), so segments stay local for the remap while the
+    # ffmpeg pass gets source-absolute times. If the plan would remove very
+    # little, skip the re-encode entirely. A failure here falls back to the
+    # untightened cut — tightening is an enhancement, never a gate.
+    if tighten and window:
+        from auto_edit import build_segments as _segments, remap_words as _remap, apply_cuts as _apply
+
+        clip_len_ms = int((end - start) * 1000)
+        try:
+            segs_local, removed_ms = _segments(window, clip_len_ms, remove_fillers=True)
+            worth_it = (
+                removed_ms >= 800
+                and len(segs_local) <= MAX_TIGHTEN_SEGMENTS
+                and removed_ms <= clip_len_ms * 0.5      # never hollow the clip out
+            )
+            if worth_it:
+                tightened = outdir / f"clip_{index:03d}_tight.mp4"
+                has_audio = probe(cut)["has_audio"]
+                _apply(str(source),
+                       [(start + s / 1000.0, start + e / 1000.0) for s, e in segs_local],
+                       str(tightened), has_audio=has_audio)
+                if tightened.exists() and tightened.stat().st_size > 10_240:
+                    window = _remap(window, segs_local)
+                    if keep_cut:
+                        # Multi-format variants render from cut_file with the
+                        # SAME (remapped) captions — the cut file must carry
+                        # the tightened timeline or the variants desync.
+                        shutil.copy2(tightened, cut)
+                        tightened.unlink(missing_ok=True)
+                        current = cut
+                    else:
+                        cut.unlink(missing_ok=True)
+                        current = tightened
+                    warnings.append(f"tightened(-{removed_ms / 1000:.1f}s)")
+                    print(f"  tighten[{index}]: removed {removed_ms / 1000:.1f}s "
+                          f"in {len(segs_local)} cut(s)")
+                else:
+                    tightened.unlink(missing_ok=True)
+                    warnings.append("tighten_failed")
+                    print(f"  ! tighten[{index}]: output missing — keeping the plain cut")
+            else:
+                print(f"  tighten[{index}]: not worth it "
+                      f"(removed={removed_ms}ms segments={len(segs_local)})")
+        except Exception as exc:  # noqa: BLE001 — enhancement only
+            warnings.append("tighten_failed")
+            print(f"  ! tighten[{index}]: {exc} — keeping the plain cut")
 
     # ── 2. Reframe to vertical (face-aware) ───────────────────────────────
     if do_reframe:
@@ -552,6 +604,8 @@ def main() -> int:
                     help="clips = cut viral moments; captions = caption the whole video")
     ap.add_argument("--remove-silences", action="store_true",
                     help="captions mode: jump-cut silences from the word gaps")
+    ap.add_argument("--tighten", action="store_true",
+                    help="clips mode: jump-cut long pauses and filler words inside each clip")
     ap.add_argument("--no-scene-detect", action="store_true")
     ap.add_argument("--no-reframe", action="store_true")
     ap.add_argument("--no-enhance", action="store_true")
@@ -652,6 +706,7 @@ def main() -> int:
             src_height=src["height"],
             keep_cut=keep_cut,
             window=window,
+            tighten=args.tighten,
         )
 
     results: list[ClipResult] = []

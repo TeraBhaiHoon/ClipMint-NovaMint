@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -29,11 +30,23 @@ MIN_SEGMENT_MS = 900   # speech runs closer than this are merged (no micro-cuts)
 MIN_SEG_LEN_MS = 250   # a kept segment shorter than this is dropped entirely
 MAX_SEGMENTS = 400     # pathological cut lists fall back to "no cut" upstream
 
+# Unambiguous spoken fillers removed by the clip tightener. Deliberately tiny
+# and language-conservative: every entry here is safe to cut in ANY context.
+# Content-bearing words ("like", "basically", Hindi fillers such as मतलब) are
+# NOT listed — a wrong cut removes meaning, which is worse than a pause.
+FILLER_WORDS = {"um", "umm", "uh", "uhh", "uhm", "erm", "hmm", "hmmm", "mm",
+                "mmm", "mhm", "uh-huh", "um-hmm"}
+
 
 def build_segments(
-    words: list[dict], duration_ms: int
+    words: list[dict], duration_ms: int, remove_fillers: bool = False
 ) -> tuple[list[tuple[int, int]], int]:
     """Word list → kept [start, end] ms segments + total removed ms.
+
+    remove_fillers: treat FILLER_WORDS spans as removable — dropping them
+    from the speech runs makes the surrounding pauses merge with the filler's
+    own duration, so a ~300 ms "um" between short pauses becomes a cut. Only
+    unambiguous fillers are matched (case-folded, punctuation-stripped).
 
     Returns ([], 0) when the words cannot support a cut plan.
     """
@@ -42,6 +55,10 @@ def build_segments(
         s, e = w.get("startMs"), w.get("endMs")
         if s is None or e is None or e <= s:
             continue
+        if remove_fillers:
+            token = re.sub(r"[^\w\s'-]", "", str(w.get("text") or ""), flags=re.UNICODE)
+            if token.strip().casefold() in FILLER_WORDS:
+                continue
         spans.append((int(s), int(e)))
     if not spans:
         return [], 0

@@ -97,6 +97,11 @@ on:
         required: false
         default: "false"
         type: string
+      tighten_clips:
+        description: "clips mode: jump-cut long pauses and filler words inside each clip (true/false)"
+        required: false
+        default: "false"
+        type: string
       auto_punch_in:
         description: "auto-edit: subtle punch-in zoom on sentence starts (true/false)"
         required: false
@@ -1225,12 +1230,16 @@ jobs:
           OUTPUT_FORMATS: ${{ inputs.output_formats }}
           JOB_MODE: ${{ inputs.job_mode }}
           REMOVE_SILENCES: ${{ inputs.remove_silences }}
+          TIGHTEN_CLIPS: ${{ inputs.tighten_clips }}
         run: |
           set -euo pipefail
           echo "prepare_clips" > workspace/.current_step
           MODE_FLAGS="--mode $JOB_MODE"
           if [ "$JOB_MODE" = "captions" ] && [ "$REMOVE_SILENCES" = "true" ]; then
             MODE_FLAGS="$MODE_FLAGS --remove-silences"
+          fi
+          if [ "$JOB_MODE" = "clips" ] && [ "$TIGHTEN_CLIPS" = "true" ]; then
+            MODE_FLAGS="$MODE_FLAGS --tighten"
           fi
           python3 pipeline/prepare_clips.py \
             --source workspace/source/source.mp4 \
