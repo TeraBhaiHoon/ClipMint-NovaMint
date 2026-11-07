@@ -52,7 +52,7 @@ export default function ContactPage() {
                         Get In <span className="gradient-text bg-text-mint-400">Touch</span>
                     </h1>
                     <p className="text-base sm:text-lg text-slate-400 max-w-md mx-auto leading-relaxed">
-                        Have a question, suggestion, or need help? We'd love to hear from you.
+                        Have a question, suggestion, or need help? We&apos;d love to hear from you.
                     </p>
                 </div>
 
@@ -133,7 +133,7 @@ export default function ContactPage() {
                                     Message Sent!
                                 </h3>
                                 <p className="text-sm text-slate-400 max-w-xs mx-auto leading-relaxed">
-                                    We'd love to help you. We will get back to you within 24 hours.
+                                    We&apos;d love to help you. We will get back to you within 24 hours.
                                 </p>
                                 <button
                                     className="btn-secondary mt-6 py-2.5 px-6 text-sm"

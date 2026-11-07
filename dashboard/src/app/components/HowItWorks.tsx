@@ -34,15 +34,14 @@ const STEPS = [
 
 export default function HowItWorks() {
   const railRef = useRef<HTMLDivElement>(null);
-  const fillRef = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
-  const [progress, setProgress] = useState(reduced ? 1 : 0);
+  const [measured, setMeasured] = useState(0);
+  // Derive: reduced motion renders the rail fully drawn without syncing
+  // state from the effect body.
+  const progress = reduced ? 1 : measured;
 
   useEffect(() => {
-    if (reduced) {
-      setProgress(1);
-      return;
-    }
+    if (reduced) return;
     let raf = 0;
     const measure = () => {
       const rail = railRef.current;
@@ -52,7 +51,7 @@ export default function HowItWorks() {
       const start = vh * 0.82; // rail head enters view
       const end = vh * 0.5;    // rail tail settles near mid-viewport
       const raw = (start - rect.top) / (start - end);
-      setProgress(Math.min(1, Math.max(0, raw)));
+      setMeasured(Math.min(1, Math.max(0, raw)));
     };
     const onScroll = () => {
       cancelAnimationFrame(raf);

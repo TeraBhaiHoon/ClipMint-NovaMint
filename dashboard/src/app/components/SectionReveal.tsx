@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 
@@ -21,16 +22,22 @@ import {
  * state), so the observer is simply skipped.
  */
 
+const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+function subscribeReducedMotion(onChange: () => void): () => void {
+  const mq = window.matchMedia(REDUCED_MOTION_QUERY);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
 export function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    setReduced(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-  return reduced;
+  // An external store (the OS setting), not component state — reading it via
+  // useSyncExternalStore avoids the setState-in-effect cascade.
+  return useSyncExternalStore(
+    subscribeReducedMotion,
+    () => window.matchMedia(REDUCED_MOTION_QUERY).matches,
+    () => false, // server render: assume motion is fine
+  );
 }
 
 function useInViewOnce<T extends HTMLElement>(enabled: boolean) {
@@ -41,8 +48,10 @@ function useInViewOnce<T extends HTMLElement>(enabled: boolean) {
     const node = ref.current;
     if (!node || !enabled) return;
     if (!("IntersectionObserver" in window)) {
-      setSeen(true);
-      return;
+      // Ancient browser without IO: reveal asynchronously instead of
+      // setting state synchronously inside the effect body.
+      const raf = requestAnimationFrame(() => setSeen(true));
+      return () => cancelAnimationFrame(raf);
     }
     const io = new IntersectionObserver(
       (entries) => {

@@ -86,10 +86,6 @@ export default function ApiKeysPage() {
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [copiedPrefix, setCopiedPrefix] = useState<string | null>(null);
 
-    useEffect(() => {
-        loadKeys();
-    }, []);
-
     async function loadKeys() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
@@ -103,6 +99,13 @@ export default function ApiKeysPage() {
         if (data) setKeys(data as ApiKeyRow[]);
         setLoading(false);
     }
+
+    useEffect(() => {
+        // Defer one frame: the loader's sync prefix would otherwise set state
+        // synchronously inside the effect (cascading-render pattern).
+        const raf = requestAnimationFrame(() => { void loadKeys(); });
+        return () => cancelAnimationFrame(raf);
+    }, []);
 
     async function createKey() {
         if (!newKeyName.trim()) return;

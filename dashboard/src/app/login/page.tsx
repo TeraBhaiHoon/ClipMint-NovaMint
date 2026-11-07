@@ -80,7 +80,11 @@ export default function LoginPage() {
         if (typeof window === "undefined") return;
         const params = new URLSearchParams(window.location.search);
         const mapped = friendlyUrlError(params.get("error"));
-        if (mapped) setError(mapped);
+        if (!mapped) return;
+        // Set asynchronously (not in the effect body): one frame later is
+        // imperceptible, and it avoids the cascading-render pattern.
+        const raf = requestAnimationFrame(() => setError(mapped));
+        return () => cancelAnimationFrame(raf);
     }, []);
 
     // Preserve the destination the middleware saved when it bounced the user

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { IconMenu, IconClose, IconMark, IconArrowRight } from "./Icons";
@@ -22,7 +21,6 @@ const NAV_LINKS = [
 ];
 
 export default function Navbar() {
-  const pathname = usePathname();
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [user, setUser] = useState<unknown>(null);
@@ -34,10 +32,6 @@ export default function Navbar() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +126,7 @@ export default function Navbar() {
               <Link
                 key={link.href}
                 href={link.href}
+                onClick={() => setMobileOpen(false)}
                 className="px-3 py-3.5 rounded-xl text-xl font-semibold text-ink-100 hover:bg-white/5 no-underline flex items-center justify-between"
                 style={{ animationDelay: `${0.06 * i}s` }}
               >
@@ -142,15 +137,15 @@ export default function Navbar() {
           </div>
           <div className="mt-10 flex flex-col gap-3">
             {authDone && user ? (
-              <Link href="/dashboard" className="cm-btn-primary w-full py-3.5 text-base">
+              <Link href="/dashboard" onClick={() => setMobileOpen(false)} className="cm-btn-primary w-full py-3.5 text-base">
                 Dashboard
               </Link>
             ) : (
               <>
-                <Link href="/login" className="cm-btn-primary w-full py-3.5 text-base">
+                <Link href="/login" onClick={() => setMobileOpen(false)} className="cm-btn-primary w-full py-3.5 text-base">
                   Start free — no card
                 </Link>
-                <Link href="/login" className="cm-btn-ghost w-full py-3.5 text-base">
+                <Link href="/login" onClick={() => setMobileOpen(false)} className="cm-btn-ghost w-full py-3.5 text-base">
                   Login
                 </Link>
               </>

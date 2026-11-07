@@ -45,6 +45,9 @@ export default function SettingsPage() {
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleteInput, setDeleteInput] = useState("");
     const [deleting, setDeleting] = useState(false);
+    // Captured once per mount: render must stay pure, and a page that stays
+    // open across an expiry boundary re-checking on the next visit is fine.
+    const [nowMs] = useState(() => Date.now());
 
     useEffect(() => {
         async function load() {
@@ -151,7 +154,7 @@ export default function SettingsPage() {
     // "active" until its expiry date, then reverts to Free.
     const periodEndDate = profile?.current_period_end ? new Date(profile.current_period_end) : null;
     const isExpired =
-        !!periodEndDate && profile?.plan !== "free" && periodEndDate.getTime() < Date.now();
+        !!periodEndDate && profile?.plan !== "free" && periodEndDate.getTime() < nowMs;
 
     // Use Math.max to guarantee minimum free limits display of 2 videos / 5 clips
     const clipsLimit = profile ? Math.max(planInfo.clips, profile.clips_limit) : planInfo.clips;

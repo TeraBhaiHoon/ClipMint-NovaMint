@@ -47,30 +47,34 @@ function StyleDonut({ data }: { data: Record<string, number> }) {
     const strokeWidth = 18;
     const radius = (size - strokeWidth) / 2;
     const circumference = 2 * Math.PI * radius;
-    let cumulativeOffset = 0;
+
+    // Precompute arc geometry in a plain loop: a render-scope for-loop is
+    // synchronous and closure-free, unlike mutating a captured variable
+    // inside a .map callback (which the compiler lint rightly rejects).
+    const arcs: { style: string; color: string; dash: number; offset: number }[] = [];
+    let running = 0;
+    for (let i = 0; i < entries.length; i++) {
+        const dash = (entries[i][1] / total) * circumference;
+        arcs.push({ style: entries[i][0], color: COLORS[i % COLORS.length], dash, offset: running });
+        running += dash;
+    }
 
     return (
         <div className="flex items-center gap-6 flex-wrap">
             <div className="relative inline-flex items-center justify-center">
                 <svg width={size} height={size} className="-rotate-90">
-                    {entries.map(([style, count], i) => {
-                        const pct = count / total;
-                        const dash = pct * circumference;
-                        const offset = cumulativeOffset;
-                        cumulativeOffset += dash;
-                        return (
-                            <circle
-                                key={style}
-                                cx={size / 2} cy={size / 2} r={radius}
-                                fill="none" stroke={COLORS[i % COLORS.length]}
-                                strokeWidth={strokeWidth}
-                                strokeDasharray={`${dash} ${circumference - dash}`}
-                                strokeDashoffset={-offset}
-                                strokeLinecap="butt"
-                                className="transition-all duration-500"
-                            />
-                        );
-                    })}
+                    {arcs.map((arc) => (
+                        <circle
+                            key={arc.style}
+                            cx={size / 2} cy={size / 2} r={radius}
+                            fill="none" stroke={arc.color}
+                            strokeWidth={strokeWidth}
+                            strokeDasharray={`${arc.dash} ${circumference - arc.dash}`}
+                            strokeDashoffset={-arc.offset}
+                            strokeLinecap="butt"
+                            className="transition-all duration-500"
+                        />
+                    ))}
                 </svg>
                 <span className="absolute text-lg font-extrabold text-slate-100">
                     {total}
@@ -149,10 +153,6 @@ export default function AnalyticsPage() {
     const [loading, setLoading] = useState(true);
     const [timeRange, setTimeRange] = useState<TimeRange>("30d");
 
-    useEffect(() => {
-        loadStats();
-    }, [timeRange]);
-
     async function loadStats() {
         setLoading(true);
         const { data: { user } } = await supabase.auth.getUser();
@@ -217,6 +217,13 @@ export default function AnalyticsPage() {
         });
         setLoading(false);
     }
+
+    useEffect(() => {
+        // Defer one frame: the loader's sync prefix would otherwise set state
+        // synchronously inside the effect (cascading-render pattern).
+        const raf = requestAnimationFrame(() => { void loadStats(); });
+        return () => cancelAnimationFrame(raf);
+    }, [timeRange]);
 
     /* Build chart bars from clipsByDay data */
     function renderChart() {

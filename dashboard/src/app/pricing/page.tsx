@@ -153,7 +153,10 @@ export default function PricingPage() {
         setTimeout(() => setToast(null), 5000);
     }, []);
 
-    async function handleCheckout(planKey: string) {
+    // useCallback (not a function declaration): the React-compiler lint can't
+    // prove a plain inner function is event-only, and it assigns to
+    // window.location.href — an event handler by contract.
+    const handleCheckout = useCallback(async (planKey: string) => {
         if (planKey === "free") {
             window.location.href = "/login";
             return;
@@ -236,7 +239,7 @@ export default function PricingPage() {
             showToast("error", "Something went wrong. Please try again.");
             setLoadingPlan(null);
         }
-    }
+    }, [annual, isLoggedIn, showToast]);
 
     return (
         <main className="min-h-screen bg-ink-950 text-ink-50">

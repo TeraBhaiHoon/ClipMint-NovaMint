@@ -9,6 +9,10 @@ import { useReducedMotion } from "./SectionReveal";
  * with an ease-out-expo curve (respects reduced motion by rendering the
  * final value immediately). Compound values ("1080×1920", "-14 LUFS") pass
  * through untouched.
+ *
+ * The rendered value is DERIVED from (reduced-motion, animation) state —
+ * never synchronised into state from an effect body, so there is no
+ * cascading render when reduced-motion flips.
  */
 export default function CountUp({
   value,
@@ -21,16 +25,11 @@ export default function CountUp({
   const reduced = useReducedMotion();
   const isNumeric = /^-?\d+$/.test(value.trim());
   const [seen, setSeen] = useState(false);
-  const [display, setDisplay] = useState<string>(() =>
-    isNumeric && !reduced ? "0" : value.trim()
-  );
+  // null = the animation has not started yet
+  const [anim, setAnim] = useState<number | null>(null);
 
   useEffect(() => {
-    if (!isNumeric) return;
-    if (reduced) {
-      setDisplay(value.trim());
-      return;
-    }
+    if (!isNumeric || reduced) return;
     const node = ref.current;
     if (!node) return;
     const io = new IntersectionObserver(
@@ -44,10 +43,10 @@ export default function CountUp({
     );
     io.observe(node);
     return () => io.disconnect();
-  }, [isNumeric, reduced, value]);
+  }, [isNumeric, reduced]);
 
   useEffect(() => {
-    if (!isNumeric || !seen) return;
+    if (!isNumeric || reduced || !seen) return;
     const target = parseInt(value.trim(), 10);
     const duration = 1100;
     const start = performance.now();
@@ -55,12 +54,20 @@ export default function CountUp({
     const tick = (now: number) => {
       const t = Math.min(1, (now - start) / duration);
       const eased = 1 - Math.pow(1 - t, 4);
-      setDisplay(String(Math.round(eased * target)));
+      setAnim(Math.round(eased * target));
       if (t < 1) raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [isNumeric, seen, value]);
+  }, [isNumeric, reduced, seen, value]);
+
+  const display = !isNumeric
+    ? value.trim()
+    : reduced
+      ? value.trim()
+      : anim !== null
+        ? String(anim)
+        : "0";
 
   return (
     <span ref={ref} className={className}>

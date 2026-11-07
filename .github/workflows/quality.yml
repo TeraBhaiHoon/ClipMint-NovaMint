@@ -1,0 +1,131 @@
+# ClipMint — quality gate: runs on every push that touches code.
+#
+# All checks are the ones that have caught real bugs here: unit tests for the
+# pure pipeline functions, bash/python syntax for every workflow run block,
+# TypeScript for the dashboard and the caption engine, and a production
+# `next build` so a broken deploy is caught before Vercel sees it.
+#
+# Kept deliberately dependency-light and green-by-default: anything that
+# flakes (network-dependent probes, GPU/CV fixtures) stays out.
+
+name: Quality checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pipeline/**"
+      - "tests/**"
+      - "scripts/**"
+      - ".github/workflows/**"
+      - "remotion-captions/**"
+      - "dashboard/**"
+  workflow_dispatch: {}
+
+jobs:
+  python-pipeline:
+    name: Pipeline — tests + syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install -q pytest
+
+      - name: Unit tests (pytest)
+        run: python -m pytest -q tests
+
+      - name: Compile every pipeline + scripts module
+        run: |
+          python3 - <<'PY'
+          import py_compile, sys
+          from pathlib import Path
+          files = sorted(Path("pipeline").glob("*.py")) + sorted(Path("scripts").glob("*.py"))
+          bad = 0
+          for f in files:
+              try:
+                  py_compile.compile(str(f), doraise=True)
+              except py_compile.PyCompileError as exc:
+                  bad += 1
+                  print(f"COMPILE_ERROR {f}: {exc}")
+          print(f"compiled {len(files)} file(s)")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Legacy unit scripts (check-style, exit-code gated)
+        run: |
+          (cd pipeline && python ../_audit/test_pipeline2_units.py)
+          (cd pipeline && python ../_audit/probe_assets.py)
+          python _audit/test_url_regex.py
+
+      - name: Workflow static checks
+        run: python scripts/check_workflows.py
+
+  dashboard:
+    name: Dashboard — tsc + eslint + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: dashboard
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript
+        working-directory: dashboard
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        working-directory: dashboard
+        run: npx eslint src
+
+      # Placeholder envs: the build only needs the NEXT_PUBLIC_* names to
+      # exist — real values come from Vercel at deploy time.
+      - name: Production build
+        working-directory: dashboard
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          NEXT_PUBLIC_APP_URL: https://clipmint.example.com
+          NEXT_PUBLIC_CASHFREE_APP_ID: placeholder
+          NEXT_PUBLIC_API_URL: https://api.example.com
+        run: npm run build
+
+  remotion-captions:
+    name: Caption engine — tsc
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: remotion-captions/package-lock.json
+
+      - name: Install dependencies
+        working-directory: remotion-captions
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript
+        working-directory: remotion-captions
+        run: npm run verify
