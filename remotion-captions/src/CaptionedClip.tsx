@@ -47,6 +47,7 @@ import { z } from "zod";
 import { zColor } from "@remotion/zod-types";
 import { type Caption } from "@remotion/captions";
 import { loadFont } from "@remotion/google-fonts/Inter";
+import { loadFont as loadBaloo2 } from "@remotion/google-fonts/Baloo2";
 import { useWindowedAudioData, visualizeAudio } from "@remotion/media-utils";
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,15 @@ const { fontFamily: interFont } = loadFont("normal", {
     weights: ["400", "500", "600", "700", "800", "900"],
     subsets: ["latin"],
 });
+
+// Baloo 2 (SIL OFL) carries Devanagari glyphs — Inter has none, so Hindi/
+// Hinglish captions currently fall through to inconsistent system fonts.
+// Latin keeps rendering with Inter; Devanagari falls through to Baloo 2.
+const { fontFamily: baloo2Font } = loadBaloo2("normal", {
+    weights: ["400", "500", "600", "700", "800"],
+    subsets: ["devanagari", "latin"],
+});
+const captionFonts = `${interFont}, ${baloo2Font}, sans-serif`;
 
 // ---------------------------------------------------------------------------
 // Safe areas
@@ -387,7 +397,7 @@ const useFitFontSize = (
                     const { fontSize } = fitText({
                         text: longest,
                         withinWidth: maxWidth,
-                        fontFamily: interFont,
+                        fontFamily: captionFonts,
                         fontWeight: 900,
                         textTransform: uppercase ? "uppercase" : "none",
                         validateFontIsLoaded: true,
@@ -686,7 +696,7 @@ const WordTokenSpan: React.FC<{
 }) => {
     const common: React.CSSProperties = {
         fontSize,
-        fontFamily: interFont,
+        fontFamily: captionFonts,
         fontWeight: weight,
         textTransform: uppercase ? "uppercase" : "none",
         letterSpacing,
@@ -1025,7 +1035,7 @@ export const CaptionedClip: React.FC<CaptionedClipProps> = ({
                         textAlign: "center",
                         color: "rgba(255,255,255,0.22)",
                         fontSize: 22,
-                        fontFamily: interFont,
+                        fontFamily: captionFonts,
                         fontWeight: 700,
                         letterSpacing: 4,
                         textTransform: "uppercase",
@@ -1471,7 +1481,7 @@ const FadePage: React.FC<PageRendererProps> = ({ page, pageFrames, fontSize, wid
                         key={`${i}-${token.fromMs}`}
                         style={{
                             fontSize: fontSize * 0.94,
-                            fontFamily: interFont,
+                            fontFamily: captionFonts,
                             fontWeight: 600,
                             color: "#FFFFFF",
                             whiteSpace: "pre",
@@ -1575,7 +1585,7 @@ const TypewriterPage: React.FC<PageRendererProps> = ({
             <div
                 style={{
                     fontSize: fontSize * 0.82,
-                    fontFamily: interFont, // was monospace → DejaVu fallback in CI
+                    fontFamily: captionFonts, // was monospace → DejaVu fallback in CI
                     fontWeight: 700,
                     color: "#FFFFFF",
                     textAlign: "left",
@@ -1671,7 +1681,7 @@ const GlitchPage: React.FC<PageRendererProps> = ({
                             key={`r-${i}-${token.fromMs}`}
                             style={{
                                 fontSize,
-                                fontFamily: interFont,
+                                fontFamily: captionFonts,
                                 fontWeight: 900,
                                 textTransform: "uppercase",
                                 whiteSpace: "pre",
@@ -1701,7 +1711,7 @@ const GlitchPage: React.FC<PageRendererProps> = ({
                             key={`c-${i}-${token.fromMs}`}
                             style={{
                                 fontSize,
-                                fontFamily: interFont,
+                                fontFamily: captionFonts,
                                 fontWeight: 900,
                                 textTransform: "uppercase",
                                 whiteSpace: "pre",
@@ -1747,7 +1757,7 @@ const NeonPage: React.FC<PageRendererProps> = ({
             <div
                 style={{
                     fontSize,
-                    fontFamily: interFont,
+                    fontFamily: captionFonts,
                     fontWeight: 700, // 300 was never loaded — it silently fell back
                     color: "#FFFFFF",
                     opacity: flicker,
@@ -1826,7 +1836,7 @@ const ColorfulPage: React.FC<PageRendererProps> = ({
                             key={`${i}-${token.fromMs}`}
                             style={{
                                 fontSize,
-                                fontFamily: interFont,
+                                fontFamily: captionFonts,
                                 fontWeight: 900,
                                 color: isActive ? accentColor : RAINBOW_COLORS[i % RAINBOW_COLORS.length],
                                 transform: `scale(${entrance * (isActive ? 1.07 + bassIntensity * 0.08 : 1)}) rotate(${(1 - entrance) * -8}deg)`,
@@ -1898,7 +1908,7 @@ const MinimalPage: React.FC<PageRendererProps> = ({
                             key={`${i}-${token.fromMs}`}
                             style={{
                                 fontSize: fontSize * 0.8,
-                                fontFamily: interFont,
+                                fontFamily: captionFonts,
                                 fontWeight: 600,
                                 color: "#FFFFFF",
                                 letterSpacing: 0.3,
