@@ -56,6 +56,10 @@ export default function SettingsPage() {
 
             setEmail(user.email ?? "");
 
+            // Roll the monthly usage window first (no-op unless due) so the
+            // plan card shows current-month usage, not a stale lifetime count.
+            await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
+
             const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
             if (data) {
                 const p = data as Profile;
@@ -207,7 +211,7 @@ export default function SettingsPage() {
             {activeTab === "profile" && (
                 <div className="glass-card p-6 sm:p-8">
                     <div className="flex items-center gap-5 mb-8">
-                        <div className="w-16 h-16 rounded-full bg-text-mint-400 flex items-center justify-center text-2xl font-black text-white shadow-lg shadow-mint-500/10 flex-shrink-0">
+                        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-2xl font-black text-white shadow-lg shadow-mint-500/10 flex-shrink-0">
                             {initial}
                         </div>
                         <div>
@@ -331,7 +335,7 @@ export default function SettingsPage() {
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
                                     <Crown size={20} className={planKey === "free" ? "text-ink-400" : "text-mint-400"} />
-                                    <span className="gradient-text bg-text-mint-400 text-xl font-extrabold">
+                                    <span className="gradient-text text-xl font-extrabold">
                                         {planInfo.label} Plan
                                     </span>
                                 </div>
@@ -353,7 +357,7 @@ export default function SettingsPage() {
                                 <span>{usagePercent}%</span>
                             </div>
                             <div className="h-2 w-full rounded-full bg-[var(--bg-inset)] overflow-hidden">
-                                <div className="h-full rounded-full bg-text-mint-400 transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
+                                <div className="h-full rounded-full bg-mint-500 transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
                             </div>
                         </div>
                     </div>

@@ -304,8 +304,14 @@ export default function PricingPage() {
                             >
                                 <div className="relative">
                                     {plan.highlighted && (
-                                        <div className="absolute -top-3.5 right-0 bg-mint-500 text-ink-950 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
-                                            Popular
+                                        // In normal flow (not -top-absolute): .cm-card
+                                        // has overflow:hidden, which clipped the old
+                                        // -top-3.5 badge in half. text-ink-50 = dark
+                                        // on the bright mint fill in light theme.
+                                        <div className="flex justify-end mb-2">
+                                            <span className="bg-mint-500 text-ink-50 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider leading-none">
+                                                Popular
+                                            </span>
                                         </div>
                                     )}
                                     <h3 className="text-lg font-semibold text-ink-50 mb-3">

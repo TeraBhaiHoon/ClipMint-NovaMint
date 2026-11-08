@@ -49,7 +49,7 @@ export default function ContactPage() {
 
                 <div className="text-center mb-16">
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
-                        Get In <span className="gradient-text bg-text-mint-400">Touch</span>
+                        Get In <span className="gradient-text">Touch</span>
                     </h1>
                     <p className="text-base sm:text-lg text-ink-300 max-w-md mx-auto leading-relaxed">
                         Have a question, suggestion, or need help? We&apos;d love to hear from you.

@@ -30,7 +30,7 @@ export default function PrivacyPolicyPage() {
                         <span>GDPR-Compliant Security</span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
-                        Privacy <span className="gradient-text bg-text-mint-400">Policy</span>
+                        Privacy <span className="gradient-text">Policy</span>
                     </h1>
                     <p className="text-ink-300 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />

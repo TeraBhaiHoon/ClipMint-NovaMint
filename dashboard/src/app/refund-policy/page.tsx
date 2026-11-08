@@ -30,7 +30,7 @@ export default function RefundPolicyPage() {
                         <span>7-Day Full Protection Window</span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
-                        Refund <span className="gradient-text bg-text-mint-400">Policy</span>
+                        Refund <span className="gradient-text">Policy</span>
                     </h1>
                     <p className="text-ink-300 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />

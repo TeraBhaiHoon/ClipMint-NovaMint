@@ -122,6 +122,8 @@ export async function POST(request: NextRequest) {
                             videos_limit: planInfo.videos,
                             clips_used: 0,
                             videos_used: 0,
+                            // Fresh monthly usage window starts with the new pass.
+                            usage_period_start: new Date().toISOString(),
                             cashfree_order_id: order.order_id || null,
                             cashfree_customer_id: payment.customer_id || null,
                             subscription_status: period === "one_time" ? "none" : "active",
@@ -264,6 +266,10 @@ export async function POST(request: NextRequest) {
                         subscription_status: "none",
                         cashfree_subscription_id: null,
                         current_period_end: null,
+                        // Downgrade starts a fresh Free usage window (5 clips / month).
+                        clips_used: 0,
+                        videos_used: 0,
+                        usage_period_start: new Date().toISOString(),
                     })
                     .eq("id", userId);
 

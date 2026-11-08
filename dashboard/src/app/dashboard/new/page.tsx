@@ -106,9 +106,14 @@ export default function NewVideoPage() {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) { setError("You must be logged in."); setIsSubmitting(false); return; }
 
+        // Roll the monthly usage window first (no-op unless due), then read the
+        // plan + expiry too — effectiveLimits needs both or paid plans would
+        // silently gate at Free limits here.
+        await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
+
         const { data: profile, error: profileError } = await supabase
             .from("profiles")
-            .select("clips_used, clips_limit, videos_used, videos_limit")
+            .select("plan, current_period_end, clips_used, clips_limit, videos_used, videos_limit")
             .eq("id", user.id)
             .single();
 

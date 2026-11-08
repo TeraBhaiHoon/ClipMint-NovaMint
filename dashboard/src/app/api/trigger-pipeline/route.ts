@@ -120,6 +120,10 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Quota checks (server-side; the browser check is UX only) ──
+    // Roll the monthly usage window first (no-op unless due) so gating uses
+    // this window's usage, not a stale lifetime count.
+    await quotaClient.rpc("roll_usage_period_if_due", { p_user_id: job.user_id });
+
     const { data: profile, error: profileError } = await quotaClient
         .from("profiles")
         .select("clips_used, clips_limit, videos_used, videos_limit, plan, current_period_end")

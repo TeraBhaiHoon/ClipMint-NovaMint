@@ -56,3 +56,6 @@ __pycache__/
 *.pyc
 .testrun2/
 ENV_SETUP.md
+
+# Local rclone credentials (OAuth tokens) — never commit
+rclone-local.conf

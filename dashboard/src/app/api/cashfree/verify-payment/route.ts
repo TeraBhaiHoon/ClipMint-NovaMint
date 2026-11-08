@@ -174,6 +174,8 @@ async function handleVerification(request: NextRequest) {
                     videos_limit: planInfo.videos,
                     clips_used: 0,
                     videos_used: 0,
+                    // Fresh monthly usage window starts with the new pass.
+                    usage_period_start: new Date().toISOString(),
                     cashfree_order_id: orderId,
                     cashfree_customer_id:
                         orderData.customer_details?.customer_id || null,

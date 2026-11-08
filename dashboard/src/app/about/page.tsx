@@ -24,12 +24,12 @@ export default function AboutPage() {
                         <div className="w-9 h-9 rounded-lg overflow-hidden border border-[var(--border-subtle)] shadow-md">
                             <img src="/logo-cm-128.png" alt="ClipMint" className="w-full h-full object-cover" />
                         </div>
-                        <span className="gradient-text font-black text-3xl tracking-tight bg-text-mint-400">
+                        <span className="gradient-text font-black text-3xl tracking-tight">
                             ClipMint
                         </span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
-                        Turning Long Videos Into <span className="gradient-text bg-text-mint-400">Viral Moments</span>
+                        Turning Long Videos Into <span className="gradient-text">Viral Moments</span>
                     </h1>
                     <p className="text-base sm:text-lg text-ink-300 max-w-xl mx-auto leading-relaxed">
                         ClipMint was built to solve a simple problem: content creators

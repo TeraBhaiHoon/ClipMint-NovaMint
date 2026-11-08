@@ -203,7 +203,7 @@ export default function LoginPage() {
                     <div className="w-8 h-8 rounded-lg overflow-hidden border border-[var(--border-subtle)] shadow-md">
                         <img src="/logo-cm-128.png" alt="ClipMint" className="w-full h-full object-cover" />
                     </div>
-                    <span className="gradient-text font-black text-2xl tracking-tight bg-text-mint-400">
+                    <span className="gradient-text font-black text-2xl tracking-tight">
                         ClipMint
                     </span>
                 </div>

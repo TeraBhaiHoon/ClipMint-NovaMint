@@ -30,7 +30,7 @@ export default function TermsPage() {
                         <span>Platform Terms of Service</span>
                     </div>
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
-                        Terms &amp; <span className="gradient-text bg-text-mint-400">Conditions</span>
+                        Terms &amp; <span className="gradient-text">Conditions</span>
                     </h1>
                     <p className="text-ink-300 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />

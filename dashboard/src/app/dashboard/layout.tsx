@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import type { Profile } from "@/lib/types";
-import { PLAN_LIMITS } from "@/lib/types";
+import { PLAN_LIMITS, effectivePlanKey } from "@/lib/types";
 import {
     LayoutDashboard,
     Upload,
@@ -78,6 +78,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) { router.push("/login"); return; }
 
+            // Roll the monthly usage window first (no-op unless due) so the
+            // sidebar always shows this month's usage against the effective plan.
+            await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
+
             const { data } = await supabase
                 .from("profiles")
                 .select("*")
@@ -96,9 +100,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         router.refresh();
     }
 
-    const planLimit = profile ? PLAN_LIMITS[profile.plan] : PLAN_LIMITS.free;
-    const usagePercent = profile ? Math.round((profile.clips_used / planLimit.clips) * 100) : 0;
-    const planKey = profile?.plan ?? "free";
+    // Effective plan everywhere: an expired paid plan displays — and gates — as Free.
+    const planKey = profile ? effectivePlanKey(profile) : "free";
+    const planLimit = PLAN_LIMITS[planKey];
+    const usagePercent = profile
+        ? Math.min(100, Math.round(((profile.clips_used ?? 0) / planLimit.clips) * 100))
+        : 0;
 
     return (
         <div className="flex min-h-screen bg-[var(--bg-inset)] text-ink-50">
@@ -123,7 +130,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {!collapsed && profile && (
                     <div className="p-3 mb-4 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)]">
                         <div className="flex items-center gap-2.5">
-                            <div className="w-9 h-9 rounded-full from-mint-500 to-mint-700 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
                                 {(profile.full_name || "U").charAt(0).toUpperCase()}
                             </div>
                             <div className="overflow-hidden">
@@ -183,8 +190,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {!collapsed && planKey === "free" && (
                     <Link href="/pricing" className="upgrade-card sidebar-label block no-underline">
                         <Sparkles size={16} className="text-mint-400 mx-auto mb-1.5" />
-                        <div className="text-xs font-bold text-ink-100 mb-0.5">Upgrade to Pro</div>
-                        <div className="text-[10px] text-ink-400">Unlock unlimited clips</div>
+                        <div className="text-xs font-bold text-ink-100 mb-0.5">Upgrade your plan</div>
+                        <div className="text-[10px] text-ink-400">More clips every month</div>
                     </Link>
                 )}
 
