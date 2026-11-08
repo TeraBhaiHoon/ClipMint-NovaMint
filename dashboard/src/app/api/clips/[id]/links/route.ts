@@ -4,7 +4,7 @@ import { r2Configured, r2Head, r2Put, r2PresignGet } from "@/lib/r2";
 import { driveDownloadFile } from "@/lib/driveAuth";
 
 /**
- * GET /api/clips/[jobId]/links
+ * GET /api/clips/[id]/links
  *
  * Signed thumbnail URLs for the job page grid — minted fresh per visit and
  * never stored. Videos do NOT flow through here: their download button hits
@@ -18,8 +18,8 @@ import { driveDownloadFile } from "@/lib/driveAuth";
 const SIGNED_TTL_SECONDS = 60 * 60;
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;
 
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ jobId: string }> }) {
-    const { jobId } = await params;
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+    const { id: jobId } = await params;
 
     const supabase = await createClient();
     const {

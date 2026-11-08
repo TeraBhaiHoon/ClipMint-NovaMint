@@ -270,7 +270,7 @@ export default function NewVideoPage() {
                         <div className="flex items-center gap-2.5 flex-shrink-0">
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
                                 currentStep >= step.num 
-                                    ? "bg-mint-500 text-ink-950 shadow-[0_0_12px_rgba(139,92,246,0.3)]" 
+                                    ? "bg-mint-500 text-ink-50 shadow-[0_0_12px_rgba(45,194,4,0.3)]" 
                                     : "bg-[var(--bg-inset)] text-ink-400 border border-[var(--border-subtle)]"
                             }`}>
                                 {currentStep > step.num ? <Check size={14} /> : step.num}
@@ -280,7 +280,7 @@ export default function NewVideoPage() {
                             </span>
                         </div>
                         {i < STEPS.length - 1 && (
-                            <div className={`flex-1 h-0.5 mx-3 rounded-full transition-all duration-300 ${currentStep > step.num ? "bg-mint-500" : "bg-white/5"}`} />
+                            <div className={`flex-1 h-0.5 mx-3 rounded-full transition-all duration-300 ${currentStep > step.num ? "bg-mint-500" : "bg-ink-800"}`} />
                         )}
                     </div>
                 ))}
@@ -336,7 +336,7 @@ export default function NewVideoPage() {
                         </label>
                         <label
                             className={`glass-card p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all text-center ${
-                                videoFile ? "border-mint-500/40 bg-mint-500/5" : "hover:border-white/20"
+                                videoFile ? "border-mint-500/40 bg-mint-500/5" : "hover:border-[var(--border-strong)]"
                             }`}
                         >
                             <input
@@ -427,7 +427,7 @@ export default function NewVideoPage() {
                                 onClick={() => { setJobMode(mode.value); setCurrentStep(3); }}
                                 className={`glass-card p-4 text-left cursor-pointer transition-all ${
                                     jobMode === mode.value
-                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
+                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(45,194,4,0.12)]"
                                         : "hover:border-[var(--border-subtle)]"
                                 }`}
                             >
@@ -492,7 +492,7 @@ export default function NewVideoPage() {
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
                                     bgmChoice === c.value
                                         ? "border-mint-500 bg-mint-500/10 text-mint-400"
-                                        : "border-[var(--border-subtle)] text-ink-300 hover:border-white/20"
+                                        : "border-[var(--border-subtle)] text-ink-300 hover:border-[var(--border-strong)]"
                                 }`}
                             >
                                 {c.label}
@@ -531,7 +531,7 @@ export default function NewVideoPage() {
                                 onClick={() => { setCaptionStyle(style.value); setCurrentStep(3); }}
                                 className={`glass-card p-4 text-left cursor-pointer transition-all ${
                                     captionStyle === style.value 
-                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]" 
+                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(45,194,4,0.12)]" 
                                         : "hover:border-[var(--border-subtle)]"
                                 }`}
                             >
@@ -583,7 +583,7 @@ export default function NewVideoPage() {
                             value={maxClips}
                             onChange={(e) => setMaxClips(Number(e.target.value))}
                             style={{
-                                background: `linear-gradient(to right, #39E508 0%, #39E508 ${((maxClips - 1) / 19) * 100}%, rgba(255, 255, 255, 0.08) ${((maxClips - 1) / 19) * 100}%, rgba(255, 255, 255, 0.08) 100%)`,
+                                background: `linear-gradient(to right, #39E508 0%, #39E508 ${((maxClips - 1) / 19) * 100}%, rgba(11, 18, 13, 0.10) ${((maxClips - 1) / 19) * 100}%, rgba(11, 18, 13, 0.10) 100%)`,
                             }}
                             className="custom-range"
                         />
@@ -617,7 +617,7 @@ export default function NewVideoPage() {
                 </button>
 
                 {/* ─── Info ─── */}
-                <div className="glass-card p-4.5 mt-5 flex gap-3 bg-white/[0.01]">
+                <div className="glass-card p-4.5 mt-5 flex gap-3">
                     <Info size={18} className="text-mint-400 flex-shrink-0 mt-0.5" />
                     <div>
                         <div className="text-xs font-bold text-ink-100 mb-1">How long does it take?</div>

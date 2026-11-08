@@ -159,7 +159,7 @@ export default function JobsPage() {
     const activeFilterLabel = FILTER_OPTIONS.find((f) => f.value === statusFilter);
 
     const statCards = [
-        { label: "Total Jobs", value: totalJobs, icon: Film, color: "var(--accent-primary)", bg: "rgba(108,92,231,0.12)" },
+        { label: "Total Jobs", value: totalJobs, icon: Film, color: "var(--accent-primary)", bg: "rgba(57,229,8,0.12)" },
         { label: "Processing", value: processing, icon: Clock, color: "#F59E0B", bg: "rgba(245,158,11,0.12)" },
         { label: "Completed", value: completed, icon: CheckCircle2, color: "#10B981", bg: "rgba(16,185,129,0.12)" },
         { label: "Clips Generated", value: totalClips, icon: Clapperboard, color: "#06B6D4", bg: "rgba(6,182,212,0.12)" },
@@ -217,7 +217,7 @@ export default function JobsPage() {
                 </div>
                 <div ref={filterRef} className="relative">
                     <button
-                        className={`btn-secondary w-full sm:w-auto px-4 py-3 text-xs font-semibold justify-center gap-2 h-full ${statusFilter !== "all" ? "border-mint-500 bg-mint-500/10 text-white" : ""}`}
+                        className={`btn-secondary w-full sm:w-auto px-4 py-3 text-xs font-semibold justify-center gap-2 h-full ${statusFilter !== "all" ? "border-mint-500 bg-mint-500/10 text-ink-50" : ""}`}
                         onClick={() => setShowFilterDropdown(!showFilterDropdown)}
                     >
                         <Filter size={14} />
@@ -232,7 +232,7 @@ export default function JobsPage() {
                                 <button
                                     key={opt.value}
                                     onClick={() => { setStatusFilter(opt.value); setShowFilterDropdown(false); }}
-                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-mint-500/15 text-ink-50" : "bg-transparent text-ink-300 hover:bg-white/5 hover:text-ink-100"}`}
+                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-mint-500/15 text-ink-50" : "bg-transparent text-ink-300 hover:bg-[rgba(11,18,13,0.05)] hover:text-ink-100"}`}
                                 >
                                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: opt.color }} />
                                     {opt.label}
@@ -289,7 +289,7 @@ export default function JobsPage() {
                                 {/* Info */}
                                 <div className="flex-1 min-w-0">
                                     <div className="text-sm font-semibold text-ink-100 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
-                                        {job.video_url || job.video_filename || "Untitled"}
+                                        {job.video_filename || job.video_url || "Untitled"}
                                     </div>
                                     <div className="flex items-center gap-2 text-xs text-ink-400">
                                         <span>{job.caption_style}</span>
@@ -309,7 +309,7 @@ export default function JobsPage() {
                                     {isProcessing && (
                                         <div className="relative w-9 h-9">
                                             <svg width="36" height="36" className="-rotate-90">
-                                                <circle cx="18" cy="18" r="14" fill="none" stroke="var(--bg-secondary)" strokeWidth="3" />
+                                                <circle cx="18" cy="18" r="14" fill="none" stroke="var(--bg-sunken)" strokeWidth="3" />
                                                 <circle
                                                     cx="18" cy="18" r="14" fill="none" stroke="var(--accent-primary)" strokeWidth="3"
                                                     strokeDasharray={2 * Math.PI * 14} strokeDashoffset={2 * Math.PI * 14 * (1 - (job.progress || 0) / 100)}

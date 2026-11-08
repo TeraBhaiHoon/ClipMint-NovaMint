@@ -64,6 +64,11 @@
   --accent-green: #2DC204;
   --accent-orange: #F5A300;
   --accent-red: #ef4444;
+  /* Chart palette — referenced across the dashboard but never defined
+     (the style donut's largest arc silently rendered nothing). */
+  --accent-primary: #16A34A;
+  --accent-secondary: #15803D;
+  --accent-cyan: #0E7490;
 
   /* ── Depth: layered gradients, glass shine, glows ── */
   --grad-mint: linear-gradient(135deg, #4ADE80 0%, #22C55E 52%, #16A34A 100%);
@@ -618,19 +623,19 @@
 
 /* Inputs */
 .input-field {
-  width: 100%; background: rgba(255,255,255,0.02);
+  width: 100%; background: var(--surface-card);
   border: 1px solid var(--border-subtle); border-radius: 12px;
   padding: 14px 18px; color: var(--text-primary); font-size: 15px;
   transition: all .3s ease; outline: none; font-family: inherit;
 }
-.input-field:focus { border-color: var(--border-active); box-shadow: 0 0 0 3px rgba(57,229,8,0.14); background: rgba(255,255,255,0.04); }
+.input-field:focus { border-color: var(--border-active); box-shadow: 0 0 0 3px rgba(57,229,8,0.14); background: var(--surface-card); }
 .input-field::placeholder { color: var(--text-muted); }
 
 /* Toggle */
 .toggle-switch {
   position: relative; width: 48px; height: 26px; border-radius: 13px;
-  background: rgba(255,255,255,0.1); cursor: pointer;
-  transition: background .3s ease; border: 1px solid rgba(255,255,255,0.05); padding: 0;
+  background: rgba(11,18,13,0.10); cursor: pointer;
+  transition: background .3s ease; border: 1px solid rgba(11,18,13,0.08); padding: 0;
 }
 .toggle-switch::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
@@ -641,9 +646,9 @@
 .toggle-switch.active::after { transform: translateX(22px); }
 
 /* Progress + range */
-.progress-bar { width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+.progress-bar { width: 100%; height: 6px; background: rgba(11,18,13,0.08); border-radius: 3px; overflow: hidden; }
 .progress-bar-fill { height: 100%; background: var(--mint-500); border-radius: 3px; transition: width .5s ease; }
-input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 3px; background: rgba(255,255,255,0.05); outline: none; }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 6px; border-radius: 3px; background: rgba(11,18,13,0.08); outline: none; }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
   background: white; cursor: pointer; border: 3px solid var(--mint-500);
@@ -677,7 +682,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 /* Mobile bottom nav */
 .dash-bottom-nav {
   display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
-  background: rgba(4,7,5,0.94); border-top: 1px solid var(--border-subtle);
+  background: rgba(255,255,255,0.94); border-top: 1px solid var(--border-subtle); box-shadow: 0 -8px 30px -18px rgba(16,24,16,.25);
   padding: 8px 8px calc(env(safe-area-inset-bottom, 4px) + 8px);
   justify-content: space-around; backdrop-filter: blur(16px);
 }
@@ -706,7 +711,7 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 }
 .stat-card::before {
   content: ""; position: absolute; inset: 0; border-radius: 16px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.03) 0%, transparent 60%);
+  background: linear-gradient(135deg, rgba(57,229,8,0.05) 0%, transparent 60%);
   pointer-events: none;
 }
 .stat-card:hover { border-color: rgba(57,229,8,0.3); transform: translateY(-2px); box-shadow: var(--shadow-lift); }
@@ -724,9 +729,9 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .step-connector.active { background: var(--mint-500); }
 
 /* Tabs */
-.tab-nav { display: flex; gap: 6px; padding: 6px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px solid var(--border-subtle); margin-bottom: 24px; align-self: flex-start; }
+.tab-nav { display: flex; gap: 6px; padding: 6px; background: rgba(11,18,13,0.03); border-radius: 12px; border: 1px solid var(--border-subtle); margin-bottom: 24px; align-self: flex-start; }
 .tab-item { padding: 8px 18px; border-radius: 8px; border: none; background: transparent; color: var(--text-muted); font-size: 13px; font-weight: 500; cursor: pointer; transition: all .2s ease; font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 6px; }
-.tab-item:hover { color: var(--text-secondary); background: rgba(255,255,255,0.03); }
+.tab-item:hover { color: var(--text-secondary); background: rgba(11,18,13,0.05); }
 .tab-item.active { background: rgba(57,229,8,0.13); color: var(--text-primary); font-weight: 600; border: 1px solid rgba(57,229,8,0.2); }
 
 /* Grids */

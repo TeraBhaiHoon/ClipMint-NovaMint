@@ -39,7 +39,7 @@ function DonutMeter({ percent, size = 56, strokeWidth = 5 }: { percent: number; 
             <svg width={size} height={size}>
                 <circle
                     cx={size / 2} cy={size / 2} r={radius}
-                    fill="none" stroke="var(--bg-primary)" strokeWidth={strokeWidth}
+                    fill="none" stroke="var(--bg-sunken)" strokeWidth={strokeWidth}
                 />
                 <circle
                     cx={size / 2} cy={size / 2} r={radius}
@@ -130,7 +130,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {!collapsed && profile && (
                     <div className="p-3 mb-4 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)]">
                         <div className="flex items-center gap-2.5">
-                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-sm font-bold text-ink-50 flex-shrink-0">
                                 {(profile.full_name || "U").charAt(0).toUpperCase()}
                             </div>
                             <div className="overflow-hidden">

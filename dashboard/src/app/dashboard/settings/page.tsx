@@ -211,7 +211,7 @@ export default function SettingsPage() {
             {activeTab === "profile" && (
                 <div className="glass-card p-6 sm:p-8">
                     <div className="flex items-center gap-5 mb-8">
-                        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-2xl font-black text-white shadow-lg shadow-mint-500/10 flex-shrink-0">
+                        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-2xl font-black text-ink-50 shadow-lg shadow-mint-500/10 flex-shrink-0">
                             {initial}
                         </div>
                         <div>
@@ -313,7 +313,7 @@ export default function SettingsPage() {
                                             href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks"
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-1.5 mt-2.5 text-xs text-mint-400 hover:text-[#a78bfa] transition-colors no-underline font-medium"
+                                            className="inline-flex items-center gap-1.5 mt-2.5 text-xs text-mint-400 hover:text-mint-700 transition-colors no-underline font-medium"
                                         >
                                             <ExternalLink size={12} />
                                             <span>How to create a Discord webhook</span>

@@ -4,7 +4,7 @@ import { r2Configured, r2Head, r2Put, r2PresignGet } from "@/lib/r2";
 import { driveDownloadFile } from "@/lib/driveAuth";
 
 /**
- * GET /api/clips/[clipId]/download[?kind=video|thumb][&inline=1]
+ * GET /api/clips/[id]/download[?kind=video|thumb][&inline=1]
  *
  * THE download path — and the re-materialiser.
  *
@@ -35,8 +35,8 @@ function driveRecoveryAvailable(): boolean {
     return Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON_B64 || process.env.RCLONE_CONF_B64);
 }
 
-export async function GET(request: NextRequest, { params }: { params: Promise<{ clipId: string }> }) {
-    const { clipId } = await params;
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params;
     const url = new URL(request.url);
     const kind = url.searchParams.get("kind") === "thumb" ? "thumb" : "video";
     const inline = url.searchParams.get("inline") === "1";
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const { data: clip } = await admin
         .from("clips")
         .select("id, job_id, filename, storage_path, thumbnail_path, drive_file_id")
-        .eq("id", clipId)
+        .eq("id", id)
         .single();
 
     if (!clip) {

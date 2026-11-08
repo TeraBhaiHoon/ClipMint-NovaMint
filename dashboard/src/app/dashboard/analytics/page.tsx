@@ -40,7 +40,7 @@ function StyleDonut({ data }: { data: Record<string, number> }) {
     const COLORS = [
         "var(--accent-primary)", "var(--accent-green)", "var(--accent-orange)",
         "var(--accent-cyan)", "var(--accent-red)", "var(--accent-secondary)",
-        "#F472B6", "#A78BFA", "#34D399",
+        "#4ADE80", "#A36600", "#0A3706",
     ];
 
     const size = 140;
@@ -117,13 +117,13 @@ function ActivityHeatmap({ data }: { data: Record<string, number> }) {
                 {days.map((day) => {
                     const intensity = day.count / maxCount;
                     const bg = day.count === 0
-                        ? "rgba(255, 255, 255, 0.02)"
-                        : `rgba(139, 92, 246, ${0.25 + intensity * 0.75})`;
+                        ? "var(--bg-sunken)"
+                        : `rgba(45, 194, 4, ${0.22 + intensity * 0.78})`;
                     return (
                         <div
                             key={day.date}
                             title={`${day.date}: ${day.count} clip${day.count !== 1 ? "s" : ""}`}
-                            className="aspect-square rounded-sm cursor-pointer transition-all duration-200 min-w-0 hover:scale-110 hover:shadow-[0_0_8px_rgba(139,92,246,0.45)] hover:z-10"
+                            className="aspect-square rounded-sm cursor-pointer transition-all duration-200 min-w-0 hover:scale-110 hover:shadow-[0_0_8px_rgba(45,194,4,0.4)] hover:z-10"
                             style={{
                                 backgroundColor: bg,
                             }}
@@ -136,8 +136,8 @@ function ActivityHeatmap({ data }: { data: Record<string, number> }) {
                 <div className="flex items-center gap-1.5">
                     <span>Less</span>
                     {[0, 0.25, 0.5, 0.75, 1].map((v) => (
-                        <span key={v} className="w-2.5 h-2.5 rounded-sm border border-white/[0.02]" style={{
-                            backgroundColor: v === 0 ? "rgba(255,255,255,0.02)" : `rgba(139, 92, 246, ${0.25 + v * 0.75})`,
+                        <span key={v} className="w-2.5 h-2.5 rounded-sm border border-[var(--border-faint)]" style={{
+                            backgroundColor: v === 0 ? "var(--bg-sunken)" : `rgba(45, 194, 4, ${0.22 + v * 0.78})`,
                         }} />
                     ))}
                     <span>More</span>
@@ -256,7 +256,7 @@ export default function AnalyticsPage() {
                                 className="flex-1 rounded-t cursor-pointer transition-all duration-500 hover:opacity-100 min-w-[2px]"
                                 style={{
                                     height: `${height}%`,
-                                    background: bar.count > 0 ? "var(--gradient-hero)" : "rgba(255, 255, 255, 0.02)",
+                                    background: bar.count > 0 ? "linear-gradient(180deg, var(--mint-600) 0%, var(--mint-800) 100%)" : "var(--bg-sunken)",
                                     opacity: bar.count > 0 ? 0.7 + (bar.count / maxCount) * 0.3 : 0.3,
                                 }}
                             />
@@ -275,7 +275,7 @@ export default function AnalyticsPage() {
     const s = stats;
 
     const statCards = s ? [
-        { label: "Total Videos", value: s.totalVideos, icon: Film, color: "var(--accent-primary)", bg: "rgba(139,92,246,0.12)" },
+        { label: "Total Videos", value: s.totalVideos, icon: Film, color: "var(--accent-primary)", bg: "rgba(57,229,8,0.12)" },
         { label: "Clips Generated", value: s.totalClips, icon: Play, color: "var(--accent-green)", bg: "rgba(16,185,129,0.12)" },
         { label: "Avg Viral Score", value: s.avgViralScore > 0 ? s.avgViralScore : "—", icon: TrendingUp, color: "var(--accent-orange)", bg: "rgba(245,158,11,0.12)" },
         { label: "Top Score", value: s.topClips.length > 0 ? (s.topClips[0].viral_score ?? "—") : "—", icon: Star, color: "var(--accent-cyan)", bg: "rgba(6,182,212,0.12)" },
@@ -399,8 +399,8 @@ export default function AnalyticsPage() {
                                         <div 
                                             className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black flex-shrink-0"
                                             style={{
-                                                background: i === 0 ? "rgba(255,215,0,0.15)" : i === 1 ? "rgba(192,192,192,0.12)" : i === 2 ? "rgba(205,127,50,0.12)" : "#0d0c12",
-                                                color: i === 0 ? "#FFD700" : i === 1 ? "#C0C0C0" : i === 2 ? "#CD7F32" : "#64748b",
+                                                background: i === 0 ? "rgba(255,215,0,0.18)" : i === 1 ? "rgba(148,163,184,0.18)" : i === 2 ? "rgba(205,127,50,0.15)" : "var(--bg-sunken)",
+                                                color: i === 0 ? "#A36600" : i === 1 ? "#64748b" : i === 2 ? "#A36600" : "var(--text-muted)",
                                             }}
                                         >
                                             #{i + 1}

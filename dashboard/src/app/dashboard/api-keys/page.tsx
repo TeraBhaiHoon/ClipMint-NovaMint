@@ -33,14 +33,14 @@ function timeAgo(date: string): string {
 const CODE_SNIPPETS = [
     {
         lang: "cURL",
-        code: `curl -X POST https://clipmint.vikashbuilds.in/api/v1/jobs \\
+        code: `curl -X POST https://clipmint.novamintnetworks.in/api/v1/jobs \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"video_url": "https://youtube.com/watch?v=...", "caption_style": "hormozi", "max_clips": 5}'`,
     },
     {
         lang: "JavaScript",
-        code: `const response = await fetch("https://clipmint.vikashbuilds.in/api/v1/jobs", {
+        code: `const response = await fetch("https://clipmint.novamintnetworks.in/api/v1/jobs", {
   method: "POST",
   headers: {
     "Authorization": "Bearer YOUR_API_KEY",
@@ -59,7 +59,7 @@ const data = await response.json();`,
         code: `import requests
 
 response = requests.post(
-    "https://clipmint.vikashbuilds.in/api/v1/jobs",
+    "https://clipmint.novamintnetworks.in/api/v1/jobs",
     headers={"Authorization": "Bearer YOUR_API_KEY"},
     json={
         "video_url": "https://youtube.com/watch?v=...",
@@ -190,7 +190,7 @@ export default function ApiKeysPage() {
                 <div className="stat-card">
                     <div className="flex justify-between items-center mb-2.5">
                         <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">Total Keys</span>
-                        <div className="stat-icon-bg bg-mint-500/10 border border-mint-500/3010">
+                        <div className="stat-icon-bg bg-mint-500/10 border border-mint-500/15">
                             <Shield size={18} className="text-mint-400" />
                         </div>
                     </div>

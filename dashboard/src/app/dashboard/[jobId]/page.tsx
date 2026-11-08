@@ -268,7 +268,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     if (!job) {
         return (
             <div>
-                <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-ink-200 hover:text-white no-underline text-sm mb-5 transition-colors">
+                <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-ink-200 hover:text-ink-50 no-underline text-sm mb-5 transition-colors">
                     <ArrowLeft size={16} /> Back to Jobs
                 </Link>
                 <div className="glass-card p-10 text-center max-w-md mx-auto">
@@ -304,8 +304,8 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                     <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-ink-400 hover:text-ink-200 no-underline text-xs mb-3 transition-colors">
                         <ArrowLeft size={14} /> Back to Jobs
                     </Link>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-2">
-                        Job {jobId.slice(0, 8)}
+                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-2 truncate max-w-full">
+                        {job?.video_filename || job?.video_url || `Job ${jobId.slice(0, 8)}`}
                     </h1>
                     <div className="flex items-center gap-3 flex-wrap text-xs text-ink-400">
                         <span 
