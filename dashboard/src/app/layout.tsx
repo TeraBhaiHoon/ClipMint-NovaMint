@@ -1,24 +1,27 @@
 import type { Metadata } from "next";
-import { Syne, Inter, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 
-const display = Syne({
-  subsets: ["latin"],
-  weight: ["500", "600", "700", "800"],
+// Self-hosted variable fonts — next/font/google fetched these from Google at
+// BUILD time, and one flaky fetch killed the whole Vercel deploy (site kept
+// serving a stale build). Files live in src/fonts/, builds are now offline.
+const display = localFont({
+  src: "../fonts/syne-var.woff2",
+  weight: "400 800",
   variable: "--font-display",
   display: "swap",
 });
 
-const body = Inter({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const body = localFont({
+  src: "../fonts/inter-var.woff2",
+  weight: "100 900",
   variable: "--font-body",
   display: "swap",
 });
 
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
+const mono = localFont({
+  src: "../fonts/jetbrains-mono-var.woff2",
+  weight: "100 800",
   variable: "--font-mono",
   display: "swap",
 });
