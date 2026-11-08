@@ -108,7 +108,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 <div className="flex items-center justify-between px-2 mb-6">
                     <Link href="/" className="flex items-center gap-2.5 no-underline text-inherit">
                         <img src="/clipmint-logo.jpg" alt="ClipMint" className="h-7 w-7 rounded-md object-cover flex-shrink-0 border border-white/10" />
-                        {!collapsed && <span className="gradient-text sidebar-label text-lg font-extrabold tracking-tight from-signal-500 to-signal-700">ClipMint</span>}
+                        {!collapsed && <span className="gradient-text sidebar-label text-lg font-extrabold tracking-tight from-mint-500 to-mint-700">ClipMint</span>}
                     </Link>
                     <button
                         onClick={() => setCollapsed(!collapsed)}
@@ -123,7 +123,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {!collapsed && profile && (
                     <div className="p-3 mb-4 rounded-xl bg-[#0d0c12] border border-white/5">
                         <div className="flex items-center gap-2.5">
-                            <div className="w-9 h-9 rounded-full from-signal-500 to-signal-700 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
+                            <div className="w-9 h-9 rounded-full from-mint-500 to-mint-700 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
                                 {(profile.full_name || "U").charAt(0).toUpperCase()}
                             </div>
                             <div className="overflow-hidden">
@@ -146,7 +146,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         return (
                             <Link key={item.href} href={item.href} className={`sidebar-nav-item ${isActive ? "active" : ""}`}>
                                 <div className="sidebar-icon-bg">
-                                    <Icon size={18} className={isActive ? "text-signal-400" : "text-ink-400"} />
+                                    <Icon size={18} className={isActive ? "text-mint-400" : "text-ink-400"} />
                                 </div>
                                 {!collapsed && <span className="sidebar-label">{item.label}</span>}
                             </Link>
@@ -170,7 +170,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                             </div>
                             <div className="text-xs text-slate-400 font-medium">
                                 {loading ? (
-                                    <Loader2 size={14} className="animate-spin text-signal-400" />
+                                    <Loader2 size={14} className="animate-spin text-mint-400" />
                                 ) : (
                                     `${profile?.clips_used ?? 0} / ${planLimit.clips} clips`
                                 )}
@@ -182,7 +182,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {/* Upgrade CTA (only if free plan) */}
                 {!collapsed && planKey === "free" && (
                     <Link href="/pricing" className="upgrade-card sidebar-label block no-underline">
-                        <Sparkles size={16} className="text-signal-400 mx-auto mb-1.5" />
+                        <Sparkles size={16} className="text-mint-400 mx-auto mb-1.5" />
                         <div className="text-xs font-bold text-slate-200 mb-0.5">Upgrade to Pro</div>
                         <div className="text-[10px] text-[#64748b]">Unlock unlimited clips</div>
                     </Link>

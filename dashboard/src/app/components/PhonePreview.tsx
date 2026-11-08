@@ -66,7 +66,7 @@ export default function PhonePreview() {
           {/* Progress + timecode */}
           <div className="px-5 pb-5">
             <div className="h-1 w-full rounded-full bg-ink-800/80 overflow-hidden">
-              <div className="h-full w-[62%] rounded-full bg-signal-500" />
+              <div className="h-full w-[62%] rounded-full bg-mint-500" />
             </div>
             <div className="mt-2.5 flex justify-between font-[family-name:var(--font-mono)] text-[10px] text-ink-500">
               <span>0:07</span>

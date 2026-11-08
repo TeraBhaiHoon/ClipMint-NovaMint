@@ -254,9 +254,9 @@ export default function PricingPage() {
 
             <div className="max-w-6xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
                 <div className="text-center mb-16">
-                    <p className="cm-eyebrow text-signal-300 mb-4">Pricing</p>
+                    <p className="cm-eyebrow text-mint-300 mb-4">Pricing</p>
                     <h1 className="text-[clamp(32px,4.5vw,52px)] font-bold leading-[1.08] tracking-[-0.02em] mb-4">
-                        Simple, <span className="text-signal-400">Transparent</span> Pricing
+                        Simple, <span className="text-mint-400">Transparent</span> Pricing
                     </h1>
                     <p className="text-base sm:text-lg text-ink-300 max-w-lg mx-auto leading-[1.6] mb-8">
                         Start free. Scale as you grow. No hidden fees.
@@ -267,7 +267,7 @@ export default function PricingPage() {
                         <button
                             onClick={() => setAnnual(false)}
                             className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 ${
-                                !annual ? "bg-signal-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
+                                !annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
                             }`}
                         >
                             Monthly
@@ -275,7 +275,7 @@ export default function PricingPage() {
                         <button
                             onClick={() => setAnnual(true)}
                             className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 flex items-center gap-1.5 ${
-                                annual ? "bg-signal-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
+                                annual ? "bg-mint-500 text-ink-950" : "bg-transparent text-ink-300 hover:text-ink-50"
                             }`}
                         >
                             <span>Annual</span>
@@ -299,12 +299,12 @@ export default function PricingPage() {
                             <div
                                 key={plan.name}
                                 className={`cm-card p-8 flex flex-col justify-between ${
-                                    plan.highlighted ? "border-signal-500/60 shadow-[var(--shadow-accent)]" : ""
+                                    plan.highlighted ? "border-mint-500/60 shadow-[var(--shadow-accent)]" : ""
                                 }`}
                             >
                                 <div className="relative">
                                     {plan.highlighted && (
-                                        <div className="absolute -top-3.5 right-0 bg-signal-500 text-ink-950 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
+                                        <div className="absolute -top-3.5 right-0 bg-mint-500 text-ink-950 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
                                             Popular
                                         </div>
                                     )}
@@ -329,7 +329,7 @@ export default function PricingPage() {
                                     {/* Payment badge */}
                                     {!isFree && !isContactSales && (
                                         <div className="inline-flex flex-col items-start gap-1 mb-6">
-                                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold bg-signal-500/10 text-signal-400">
+                                            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold bg-mint-500/10 text-mint-400">
                                                 <Zap size={9} /> <span>One-time · no auto-renewal</span>
                                             </div>
                                             {annual && !isFree && (
@@ -353,7 +353,7 @@ export default function PricingPage() {
                                             >
                                                 <CheckCircle2
                                                     size={14}
-                                                    className="text-signal-400 flex-shrink-0"
+                                                    className="text-mint-400 flex-shrink-0"
                                                 />
                                                 <span>{f}</span>
                                             </li>
@@ -393,7 +393,7 @@ export default function PricingPage() {
                 {/* ─── Feature Comparison Table ─── */}
                 <div className="mb-24">
                     <h2 className="text-[clamp(26px,3.5vw,38px)] font-bold text-center mb-10 tracking-[-0.02em]">
-                        Compare <span className="text-signal-400">Plans</span>
+                        Compare <span className="text-mint-400">Plans</span>
                     </h2>
                     <div className="cm-card overflow-x-auto p-0">
                         <table className="w-full border-collapse text-sm min-w-[640px]">
@@ -406,7 +406,7 @@ export default function PricingPage() {
                                         <th
                                             key={p.name}
                                             className={`text-center py-4 px-3 font-bold text-xs uppercase tracking-wider ${
-                                                p.highlighted ? "text-signal-300 bg-signal-500/5" : "text-ink-300"
+                                                p.highlighted ? "text-mint-300 bg-mint-500/5" : "text-ink-300"
                                             }`}
                                         >
                                             {p.name}
@@ -439,10 +439,10 @@ export default function PricingPage() {
                                                 <td
                                                     key={j}
                                                     className={`text-center py-4 px-3 ${
-                                                        isHighlight ? "bg-signal-500/5" : ""
+                                                        isHighlight ? "bg-mint-500/5" : ""
                                                     } ${
                                                         val === "✓"
-                                                            ? "text-signal-400 font-bold"
+                                                            ? "text-mint-400 font-bold"
                                                             : val === "—"
                                                                 ? "text-ink-600"
                                                                 : "text-ink-50 font-medium"
@@ -474,16 +474,24 @@ export default function PricingPage() {
                 {/* ─── Billing FAQ ─── */}
                 <div className="max-w-2xl mx-auto w-full">
                     <h2 className="text-[clamp(26px,3.5vw,38px)] font-bold text-center mb-10 tracking-[-0.02em]">
-                        Billing <span className="text-signal-400">FAQ</span>
+                        Billing <span className="text-mint-400">FAQ</span>
                     </h2>
                     <div className="flex flex-col gap-3.5">
                         {BILLING_FAQ.map((faq, i) => (
                             <div key={i} className={`faq-item ${openFaq === i ? "open" : ""}`}>
-                                <button className="faq-question w-full flex justify-between items-center text-left py-5 px-6 font-semibold" onClick={() => setOpenFaq(openFaq === i ? null : i)}>
+                                <button className="faq-question w-full flex justify-between items-center text-left py-5 px-6 font-semibold" onClick={() => setOpenFaq(openFaq === i ? null : i)} aria-expanded={openFaq === i}>
                                     <span>{faq.q}</span>
                                     <ChevronDown size={18} className="faq-chevron" />
                                 </button>
-                                <div className="faq-answer px-6 pb-5 text-sm text-ink-300 leading-relaxed">{faq.a}</div>
+                                {/* Grid-rows animation (same pattern as the landing
+                                    accordion): animates to the REAL height, so long
+                                    answers can never clip the way the old 300px
+                                    max-height cap did on narrow screens. */}
+                                <div className="faq-a-grid">
+                                    <div className="faq-a-inner">
+                                        <div className="px-6 pb-5 text-sm text-ink-300 leading-relaxed">{faq.a}</div>
+                                    </div>
+                                </div>
                             </div>
                         ))}
                     </div>

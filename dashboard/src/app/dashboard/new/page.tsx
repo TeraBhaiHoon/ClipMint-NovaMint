@@ -264,7 +264,7 @@ export default function NewVideoPage() {
                         <div className="flex items-center gap-2.5 flex-shrink-0">
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
                                 currentStep >= step.num 
-                                    ? "bg-signal-500 text-ink-950 shadow-[0_0_12px_rgba(139,92,246,0.3)]" 
+                                    ? "bg-mint-500 text-ink-950 shadow-[0_0_12px_rgba(139,92,246,0.3)]" 
                                     : "bg-[#08080c] text-[#64748b] border border-white/5"
                             }`}>
                                 {currentStep > step.num ? <Check size={14} /> : step.num}
@@ -274,14 +274,14 @@ export default function NewVideoPage() {
                             </span>
                         </div>
                         {i < STEPS.length - 1 && (
-                            <div className={`flex-1 h-0.5 mx-3 rounded-full transition-all duration-300 ${currentStep > step.num ? "bg-signal-500" : "bg-white/5"}`} />
+                            <div className={`flex-1 h-0.5 mx-3 rounded-full transition-all duration-300 ${currentStep > step.num ? "bg-mint-500" : "bg-white/5"}`} />
                         )}
                     </div>
                 ))}
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-slate-100 flex items-center gap-2">
-                <Zap size={24} className="text-signal-400" />
+                <Zap size={24} className="text-mint-400" />
                 Create New Video
             </h1>
             <p className="text-sm text-[#64748b] mb-8">
@@ -330,7 +330,7 @@ export default function NewVideoPage() {
                         </label>
                         <label
                             className={`glass-card p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all text-center ${
-                                videoFile ? "border-signal-500/40 bg-signal-500/5" : "hover:border-white/20"
+                                videoFile ? "border-mint-500/40 bg-mint-500/5" : "hover:border-white/20"
                             }`}
                         >
                             <input
@@ -345,7 +345,7 @@ export default function NewVideoPage() {
                             />
                             {videoFile ? (
                                 <>
-                                    <Check size={22} className="text-signal-400" />
+                                    <Check size={22} className="text-mint-400" />
                                     <span className="text-sm font-bold text-slate-100">{videoFile.name}</span>
                                     <span className={`text-xs ${videoFile.size > MAX_UPLOAD_BYTES ? "text-red-400" : "text-[#64748b]"}`}>
                                         {(videoFile.size / 1024 / 1024).toFixed(1)} MB
@@ -355,7 +355,7 @@ export default function NewVideoPage() {
                                 </>
                             ) : (
                                 <>
-                                    <Upload size={22} className="text-signal-400" />
+                                    <Upload size={22} className="text-mint-400" />
                                     <span className="text-sm font-bold text-slate-200">Click to choose a video</span>
                                     <span className="text-xs text-[#64748b]">MP4, MOV, M4V or WebM · up to 2 GB</span>
                                     <span className="text-[10px] text-[#64748b]">Stored privately, deleted automatically once your clips are ready</span>
@@ -379,7 +379,7 @@ export default function NewVideoPage() {
                                     { n: 3, t: "Paste the link below", d: "Paste your Google Drive share link and we'll handle the rest" },
                                 ].map((s) => (
                                     <div key={s.n} className="flex items-start gap-3">
-                                        <div className="w-6 h-6 rounded-full bg-signal-500/10 border border-signal-500/20 flex items-center justify-center flex-shrink-0 text-xs font-bold text-signal-400">{s.n}</div>
+                                        <div className="w-6 h-6 rounded-full bg-mint-500/10 border border-mint-500/20 flex items-center justify-center flex-shrink-0 text-xs font-bold text-mint-400">{s.n}</div>
                                         <div>
                                             <div className="text-xs font-bold text-slate-200 mb-0.5">{s.t}</div>
                                             <div className="text-xs text-[#64748b] leading-relaxed">{s.d}</div>
@@ -421,15 +421,15 @@ export default function NewVideoPage() {
                                 onClick={() => { setJobMode(mode.value); setCurrentStep(3); }}
                                 className={`glass-card p-4 text-left cursor-pointer transition-all ${
                                     jobMode === mode.value
-                                        ? "border-signal-500 bg-signal-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
+                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
                                         : "hover:border-white/10"
                                 }`}
                             >
                                 <div className="flex items-center justify-between mb-1">
-                                    <span className={`text-xs font-bold flex items-center gap-1.5 ${jobMode === mode.value ? "text-signal-400" : "text-slate-300"}`}>
+                                    <span className={`text-xs font-bold flex items-center gap-1.5 ${jobMode === mode.value ? "text-mint-400" : "text-slate-300"}`}>
                                         {mode.icon} {mode.title}
                                     </span>
-                                    {jobMode === mode.value && <Check size={14} className="text-signal-400" />}
+                                    {jobMode === mode.value && <Check size={14} className="text-mint-400" />}
                                 </div>
                                 <span className="text-[10px] text-[#64748b] leading-tight block">{mode.hint}</span>
                             </button>
@@ -440,7 +440,7 @@ export default function NewVideoPage() {
                     {jobMode === "captions" && (
                         <div className="glass-card p-4 mt-3 space-y-3">
                             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                                <Wand2 size={12} className="text-signal-400" /> Auto-editing
+                                <Wand2 size={12} className="text-mint-400" /> Auto-editing
                             </div>
                             {([
                                 {
@@ -485,7 +485,7 @@ export default function NewVideoPage() {
                                 onClick={() => { setBgmChoice(c.value); if (c.value !== "custom") setBgmFile(null); }}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
                                     bgmChoice === c.value
-                                        ? "border-signal-500 bg-signal-500/10 text-signal-400"
+                                        ? "border-mint-500 bg-mint-500/10 text-mint-400"
                                         : "border-white/10 text-slate-400 hover:border-white/20"
                                 }`}
                             >
@@ -500,7 +500,7 @@ export default function NewVideoPage() {
                                 accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,.mp3,.wav,.ogg"
                                 onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
                                 className="input-field file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0
-                                           file:bg-signal-500/10 file:text-signal-400 file:text-xs file:font-bold
+                                           file:bg-mint-500/10 file:text-mint-400 file:text-xs file:font-bold
                                            text-slate-400 text-xs"
                             />
                             {bgmFile && (
@@ -525,15 +525,15 @@ export default function NewVideoPage() {
                                 onClick={() => { setCaptionStyle(style.value); setCurrentStep(3); }}
                                 className={`glass-card p-4 text-left cursor-pointer transition-all ${
                                     captionStyle === style.value 
-                                        ? "border-signal-500 bg-signal-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]" 
+                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]" 
                                         : "hover:border-white/10"
                                 }`}
                             >
                                 <div className="flex items-center justify-between mb-1">
-                                    <span className={`text-xs font-bold ${captionStyle === style.value ? "text-signal-400" : "text-slate-300"}`}>
+                                    <span className={`text-xs font-bold ${captionStyle === style.value ? "text-mint-400" : "text-slate-300"}`}>
                                         {style.label}
                                     </span>
-                                    {captionStyle === style.value && <Check size={14} className="text-signal-400" />}
+                                    {captionStyle === style.value && <Check size={14} className="text-mint-400" />}
                                 </div>
                                 <span className="text-[10px] text-[#64748b] leading-tight block">{style.description}</span>
                             </button>
@@ -551,11 +551,11 @@ export default function NewVideoPage() {
                                 onClick={() => setCaptionPace(pace.value)}
                                 className={`glass-card p-3 text-center cursor-pointer transition-all ${
                                     captionPace === pace.value
-                                        ? "border-signal-500 bg-signal-500/10"
+                                        ? "border-mint-500 bg-mint-500/10"
                                         : "hover:border-white/10"
                                 }`}
                             >
-                                <span className={`block text-xs font-bold ${captionPace === pace.value ? "text-signal-400" : "text-slate-300"}`}>
+                                <span className={`block text-xs font-bold ${captionPace === pace.value ? "text-mint-400" : "text-slate-300"}`}>
                                     {pace.label}
                                 </span>
                                 <span className="block text-[10px] text-[#64748b] mt-0.5">{pace.hint}</span>
@@ -569,7 +569,7 @@ export default function NewVideoPage() {
                     <div className="mb-8">
                         <label className="flex justify-between items-center text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
                             <span>Max Clips</span>
-                            <span className="text-signal-400 text-sm font-extrabold">{maxClips}</span>
+                            <span className="text-mint-400 text-sm font-extrabold">{maxClips}</span>
                         </label>
                         <input
                             type="range"
@@ -612,7 +612,7 @@ export default function NewVideoPage() {
 
                 {/* ─── Info ─── */}
                 <div className="glass-card p-4.5 mt-5 flex gap-3 bg-white/[0.01]">
-                    <Info size={18} className="text-signal-400 flex-shrink-0 mt-0.5" />
+                    <Info size={18} className="text-mint-400 flex-shrink-0 mt-0.5" />
                     <div>
                         <div className="text-xs font-bold text-slate-200 mb-1">How long does it take?</div>
                         <p className="text-xs text-[#64748b] leading-relaxed">

@@ -189,19 +189,15 @@ export default function HomePage() {
         <HeroGroup className="relative max-w-6xl mx-auto grid lg:grid-cols-[1.05fr_0.95fr] gap-14 lg:gap-10 items-center w-full">
           <div className="flex flex-col items-center lg:items-start text-center lg:text-left gap-6">
             <HeroItem index={0}>
-              <div className="inline-flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 rounded-full bg-signal-500/10 border border-signal-500/25 text-[11px] font-semibold font-[family-name:var(--font-mono)] uppercase tracking-[0.14em] text-signal-300">
-                <span className="inline-flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-signal-400 animate-pulse" aria-hidden="true" />
-                  Open beta · Free plan, no card
-                </span>
-                <span className="text-signal-500/60" aria-hidden="true">|</span>
-                <span className="text-ink-300">1080×1920 · −14 LUFS · 30 fps</span>
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-mint-500/10 border border-mint-500/25 text-xs font-semibold text-mint-300">
+                <IconSpark className="w-3.5 h-3.5" />
+                Now in open beta · Free plan, no card
               </div>
             </HeroItem>
 
             <HeroItem index={1}>
               <h1 className="text-[var(--fs-hero)] font-bold leading-[0.98] tracking-[-0.03em] text-ink-50">
-                Ek video. <span className="grad-signal-text">Das clips.</span>
+                Ek video. <span className="grad-mint-text">Das clips.</span>
               </h1>
               <p className="mt-5 text-[clamp(21px,2.8vw,34px)] font-semibold tracking-[-0.02em] text-ink-300 leading-snug">
                 Cut, captioned, <span className="text-ink-50">platform-ready.</span>
@@ -246,7 +242,7 @@ export default function HomePage() {
           <div className="flex flex-wrap justify-center items-center gap-x-8 gap-y-3">
             {["Instagram Reels", "YouTube Shorts", "TikTok"].map((platform, i) => (
               <div key={platform} className="flex items-center gap-8">
-                {i > 0 && <span className="hidden sm:block w-1 h-1 rounded-full bg-signal-500 shrink-0" aria-hidden="true" />}
+                {i > 0 && <span className="hidden sm:block w-1 h-1 rounded-full bg-mint-500 shrink-0" aria-hidden="true" />}
                 <span className="text-lg md:text-2xl font-[family-name:var(--font-display)] font-bold tracking-tight text-ink-200">
                   {platform}
                 </span>
@@ -266,7 +262,7 @@ export default function HomePage() {
         <div id="showcase" className="relative max-w-[1180px] mx-auto scroll-mt-28">
           <SectionHeading
             kicker="The showcase"
-            title={<>Finished clips. <span className="grad-signal-text">Straight out of rendering.</span></>}
+            title={<>Finished clips. <span className="grad-mint-text">Straight out of rendering.</span></>}
             subtitle="Reserved slots hold generated poster art until your clips land. Drag to browse, hover to play — every card is a real 9:16 master."
           />
           <ShowcaseCarousel />
@@ -278,7 +274,7 @@ export default function HomePage() {
         <div id="pipeline" className="max-w-4xl mx-auto scroll-mt-28">
           <SectionHeading
             kicker="Under the hood"
-            title={<>The spec, <span className="grad-signal-text">in the open.</span></>}
+            title={<>The spec, <span className="grad-mint-text">in the open.</span></>}
             subtitle="Everything the render engine actually does — numbers, not adjectives."
           />
           <div className="cm-card">
@@ -291,7 +287,7 @@ export default function HomePage() {
                     className="grid grid-cols-1 sm:grid-cols-[210px_1fr] gap-y-1.5 sm:gap-x-8 sm:items-baseline py-5"
                   >
                     <dt className="flex items-center gap-2.5 font-[family-name:var(--font-mono)] text-xs uppercase tracking-[0.12em] text-ink-400 pt-0.5">
-                      <Icon className="w-4 h-4 text-signal-400 shrink-0" />
+                      <Icon className="w-4 h-4 text-mint-400 shrink-0" />
                       {spec.label}
                     </dt>
                     <dd className="text-[15px] text-ink-200 leading-relaxed">{spec.value}</dd>
@@ -311,7 +307,7 @@ export default function HomePage() {
         <div id="styles" className="max-w-6xl mx-auto scroll-mt-28">
           <SectionHeading
             kicker="Caption engine"
-            title={<>Captions that <span className="grad-signal-text">do the talking.</span></>}
+            title={<>Captions that <span className="grad-mint-text">do the talking.</span></>}
             subtitle="Nine animated styles rendered with Remotion — the same engine that paints your clips, mint highlights included."
           />
 
@@ -328,7 +324,7 @@ export default function HomePage() {
               <div className="cm-eyebrow text-ink-500 mt-2">Face-tracked output</div>
             </div>
             <div>
-              <CountUp value="−14 LUFS" className="stat-num text-2xl sm:text-3xl grad-signal-text" />
+              <CountUp value="−14 LUFS" className="stat-num text-2xl sm:text-3xl grad-mint-text" />
               <div className="cm-eyebrow text-ink-500 mt-2">Loudness target</div>
             </div>
           </div>
@@ -340,7 +336,7 @@ export default function HomePage() {
                 <div className="cm-card px-6 py-5">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-sm font-semibold text-ink-50">{style.label}</span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-signal-500 shrink-0" aria-hidden="true" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-mint-500 shrink-0" aria-hidden="true" />
                   </div>
                   <p className="mt-2 text-[13px] leading-snug text-ink-400">{style.description}</p>
                 </div>
@@ -358,7 +354,7 @@ export default function HomePage() {
         <div id="pricing" className="max-w-6xl mx-auto scroll-mt-28">
           <SectionHeading
             kicker="Pricing"
-            title={<>Simple pricing. <span className="grad-signal-text">Stated up front.</span></>}
+            title={<>Simple pricing. <span className="grad-mint-text">Stated up front.</span></>}
             subtitle="Start free. Every limit, the watermark policy and the 7-day refund window are listed right here — nothing hidden below the fold."
           />
 
@@ -374,7 +370,7 @@ export default function HomePage() {
                   }
                 >
                   {plan.highlighted && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-signal-500 text-ink-950 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.12em]">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-mint-500 text-ink-950 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.12em]">
                       Popular
                     </span>
                   )}
@@ -389,7 +385,7 @@ export default function HomePage() {
                   <ul className="list-none flex flex-col gap-2.5 mb-8 flex-1">
                     {plan.features.map((feature) => (
                       <li key={feature} className="flex items-start gap-2.5 text-sm text-ink-300">
-                        <IconCheck className="w-4 h-4 text-signal-400 mt-0.5 shrink-0" />
+                        <IconCheck className="w-4 h-4 text-mint-400 mt-0.5 shrink-0" />
                         <span>{feature}</span>
                       </li>
                     ))}
@@ -408,7 +404,7 @@ export default function HomePage() {
 
           <p className="text-center text-[13px] text-ink-500 mt-8">
             Prices in INR, billed monthly. Annual billing and the full comparison table live on the{" "}
-            <Link href="/pricing" className="text-signal-300 underline decoration-signal-500/40 underline-offset-4 hover:text-signal-200">
+            <Link href="/pricing" className="text-mint-300 underline decoration-mint-500/40 underline-offset-4 hover:text-mint-200">
               pricing page
             </Link>
             .
@@ -421,7 +417,7 @@ export default function HomePage() {
         <div id="faq" className="max-w-2xl mx-auto scroll-mt-28">
           <SectionHeading
             kicker="FAQ"
-            title={<>Straight <span className="grad-signal-text">answers.</span></>}
+            title={<>Straight <span className="grad-mint-text">answers.</span></>}
             subtitle="We won't invent testimonials — the product has no users yet. So the answers below are the whole pitch: formats, limits, watermark policy and the refund window, in the open."
           />
           <FaqAccordion items={FAQS} />
@@ -431,9 +427,9 @@ export default function HomePage() {
       {/* ═══ 10 · FINAL CTA ═══ */}
       <SectionReveal className="py-16 sm:py-24 px-6">
         <div className="cta-panel max-w-4xl mx-auto px-8 py-14 md:px-14 md:py-16 text-center flex flex-col items-center gap-5">
-          <IconSpark className="w-7 h-7 text-signal-400" />
+          <IconSpark className="w-7 h-7 text-mint-400" />
           <h2 className="text-[clamp(28px,4vw,44px)] font-bold tracking-[-0.02em] leading-[1.08] text-ink-50">
-            Shuru karo. <span className="grad-signal-text">Free hai.</span>
+            Shuru karo. <span className="grad-mint-text">Free hai.</span>
           </h2>
           <p className="text-ink-300 text-base leading-[1.6] max-w-md">
             5 clips a month, free forever. Upgrade when it earns its keep.

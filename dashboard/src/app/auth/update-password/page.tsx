@@ -85,7 +85,7 @@ export default function UpdatePasswordPage() {
     if (checking) {
         return (
             <div className="min-h-screen bg-[#030305] text-[#f8fafc] flex flex-col justify-center items-center p-6 relative">
-                <Loader2 size={20} className="animate-spin text-signal-400" />
+                <Loader2 size={20} className="animate-spin text-mint-400" />
             </div>
         );
     }
@@ -93,7 +93,7 @@ export default function UpdatePasswordPage() {
     return (
         <div className="min-h-screen bg-[#030305] text-[#f8fafc] flex flex-col justify-center items-center p-6 relative">
             {/* Ambient Background Glow */}
-            <div className="absolute w-[350px] h-[350px] rounded-full bg-signal-500/10 blur-[100px] pointer-events-none -top-12" />
+            <div className="absolute w-[350px] h-[350px] rounded-full bg-mint-500/10 blur-[100px] pointer-events-none -top-12" />
             <div className="absolute w-[350px] h-[350px] rounded-full bg-[#06b6d4]/5 blur-[120px] pointer-events-none -bottom-12" />
 
             <Link href="/login" className="absolute top-8 left-8 flex items-center gap-2 text-sm text-slate-400 no-underline hover:text-slate-200 transition-colors">
@@ -107,7 +107,7 @@ export default function UpdatePasswordPage() {
                     <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 shadow-md">
                         <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
                     </div>
-                    <span className="gradient-text font-black text-2xl tracking-tight bg-text-signal-400">
+                    <span className="gradient-text font-black text-2xl tracking-tight bg-text-mint-400">
                         ClipMint
                     </span>
                 </div>
@@ -177,7 +177,7 @@ export default function UpdatePasswordPage() {
                     <button
                         type="submit"
                         disabled={loading}
-                        className="btn-primary w-full py-3.5 mt-2 flex items-center justify-center gap-2 text-sm font-semibold shadow-lg shadow-signal-500/20 transition-all duration-300"
+                        className="btn-primary w-full py-3.5 mt-2 flex items-center justify-center gap-2 text-sm font-semibold shadow-lg shadow-mint-500/20 transition-all duration-300"
                     >
                         {loading ? (
                             <Loader2 size={16} className="animate-spin" />

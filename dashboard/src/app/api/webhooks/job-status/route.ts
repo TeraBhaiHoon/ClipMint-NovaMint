@@ -383,7 +383,7 @@ async function sendDiscordNotification(opts: {
     description: isSuccess
       ? `ClipMint generated **${opts.clipCount} clip${opts.clipCount !== 1 ? "s" : ""}** from your video.`
       : `ClipMint encountered an error while processing your video.\n\n**Error:** ${safeError}`,
-    color: isSuccess ? 0xFFB224 : 0xEF4444,
+    color: isSuccess ? 0x39E508 : 0xEF4444,
     fields: [
       {
         name: "📹 Source",
@@ -425,25 +425,25 @@ function buildSuccessEmail(opts: { jobUrl: string; clipCount: number; videoUrl: 
 <head><meta charset="utf-8"></head>
 <body style="margin:0;padding:0;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
   <div style="max-width:560px;margin:40px auto;background:#111;border-radius:16px;border:1px solid #222;overflow:hidden;">
-    <div style="background:linear-gradient(135deg,#FFB224 0%,#D98708 100%);padding:32px 40px;">
+    <div style="background:linear-gradient(135deg,#39E508 0%,#00C853 100%);padding:32px 40px;">
       <h1 style="margin:0;color:#000;font-size:24px;font-weight:800;">🎬 Your clips are ready!</h1>
     </div>
     <div style="padding:32px 40px;">
       <p style="color:#ccc;font-size:15px;line-height:1.6;margin:0 0 20px;">
         Great news! ClipMint has finished processing your video and generated
-        <strong style="color:#FFB224;">${opts.clipCount} clip${opts.clipCount !== 1 ? "s" : ""}</strong>.
+        <strong style="color:#39E508;">${opts.clipCount} clip${opts.clipCount !== 1 ? "s" : ""}</strong>.
       </p>
       <p style="color:#888;font-size:13px;margin:0 0 24px;word-break:break-all;">
         Source: ${safeVideoUrl.length > 80 ? safeVideoUrl.slice(0, 80) + "..." : safeVideoUrl}
       </p>
       <a href="${safeJobUrl}"
-         style="display:inline-block;background:linear-gradient(135deg,#FFB224,#D98708);color:#000;padding:14px 32px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;">
+         style="display:inline-block;background:linear-gradient(135deg,#39E508,#00C853);color:#000;padding:14px 32px;border-radius:10px;font-weight:700;font-size:15px;text-decoration:none;">
         View & Download Clips →
       </a>
     </div>
     <div style="padding:20px 40px;border-top:1px solid #222;">
       <p style="color:#555;font-size:12px;margin:0;">
-        ClipMint by NovaMint Networks · <a href="${safeJobUrl}" style="color:#FFB224;text-decoration:none;">Dashboard</a>
+        ClipMint by NovaMint Networks · <a href="${safeJobUrl}" style="color:#39E508;text-decoration:none;">Dashboard</a>
       </p>
     </div>
   </div>
@@ -483,7 +483,7 @@ function buildFailureEmail(opts: { jobUrl: string; errorMessage: string; videoUr
     </div>
     <div style="padding:20px 40px;border-top:1px solid #222;">
       <p style="color:#555;font-size:12px;margin:0;">
-        ClipMint by NovaMint Networks · <a href="${safeJobUrl}" style="color:#FFB224;text-decoration:none;">Dashboard</a>
+        ClipMint by NovaMint Networks · <a href="${safeJobUrl}" style="color:#39E508;text-decoration:none;">Dashboard</a>
       </p>
     </div>
   </div>
