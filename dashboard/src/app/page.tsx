@@ -370,7 +370,10 @@ export default function HomePage() {
                   }
                 >
                   {plan.highlighted && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-mint-500 text-ink-950 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.12em]">
+                    // In flow (self-center), not absolute: .cm-card has
+                    // overflow:hidden, which clipped the old -top-3 badge in
+                    // half. text-ink-50 = dark on the bright mint fill.
+                    <span className="self-center mb-3 bg-mint-500 text-ink-50 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.12em] leading-none">
                       Popular
                     </span>
                   )}
