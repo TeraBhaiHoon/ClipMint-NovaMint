@@ -369,16 +369,19 @@ export default function HomePage() {
                       : undefined
                   }
                 >
-                  {plan.highlighted && (
-                    // In flow (self-center), not absolute: .cm-card has
-                    // overflow:hidden, which clipped the old -top-3 badge in
-                    // half. text-ink-50 = dark on the bright mint fill.
-                    <span className="self-center mb-3 bg-mint-500 text-ink-50 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.12em] leading-none">
-                      Popular
-                    </span>
-                  )}
                   <div className="flex flex-col gap-1 mb-6">
-                    <h3 className="text-lg font-semibold text-ink-50">{plan.name}</h3>
+                    {/* Badge inline next to the plan name (in flow — .cm-card
+                        has overflow:hidden, which clipped the old absolute
+                        -top-3 badge in half), so every card's title sits at
+                        the same height. text-ink-50 = dark on the bright mint. */}
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-semibold text-ink-50">{plan.name}</h3>
+                      {plan.highlighted && (
+                        <span className="bg-mint-500 text-ink-50 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-[0.12em] leading-none">
+                          Popular
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[13px] text-ink-500">{plan.tagline}</p>
                   </div>
                   <div className="flex items-baseline gap-1.5 mb-6">

@@ -303,20 +303,21 @@ export default function PricingPage() {
                                 }`}
                             >
                                 <div className="relative">
-                                    {plan.highlighted && (
-                                        // In normal flow (not -top-absolute): .cm-card
-                                        // has overflow:hidden, which clipped the old
-                                        // -top-3.5 badge in half. text-ink-50 = dark
-                                        // on the bright mint fill in light theme.
-                                        <div className="flex justify-end mb-2">
-                                            <span className="bg-mint-500 text-ink-50 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider leading-none">
+                                    {/* Badge inline next to the plan name (in flow —
+                                        .cm-card has overflow:hidden, which clipped the
+                                        old absolute badge in half) so every card's
+                                        title sits at the same height. text-ink-50 =
+                                        dark on the bright mint fill. */}
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <h3 className="text-lg font-semibold text-ink-50">
+                                            {plan.name}
+                                        </h3>
+                                        {plan.highlighted && (
+                                            <span className="bg-mint-500 text-ink-50 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-[0.12em] leading-none">
                                                 Popular
                                             </span>
-                                        </div>
-                                    )}
-                                    <h3 className="text-lg font-semibold text-ink-50 mb-3">
-                                        {plan.name}
-                                    </h3>
+                                        )}
+                                    </div>
                                     <div className="flex items-baseline gap-1 mb-2">
                                         <span className="font-[family-name:var(--font-display)] font-bold text-[34px] leading-none tracking-[-0.02em] text-ink-50">
                                             {annual && !isFree
