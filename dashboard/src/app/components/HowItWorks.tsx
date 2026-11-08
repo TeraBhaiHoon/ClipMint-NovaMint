@@ -16,7 +16,7 @@ const STEPS = [
     icon: IconUpload,
     step: "01",
     title: "Paste or drop your video",
-    desc: "Bring an MP4, MOV or WebM file up to 500MB, or paste a YouTube, Instagram or Google Drive link. The pipeline transcribes your audio first.",
+    desc: "Bring an MP4, MOV or WebM file up to 2 GB, or paste a YouTube, Instagram or Google Drive link. The pipeline transcribes your audio first.",
   },
   {
     icon: IconSpark,
@@ -36,6 +36,12 @@ export default function HowItWorks() {
   const railRef = useRef<HTMLDivElement>(null);
   const reduced = useReducedMotion();
   const [measured, setMeasured] = useState(0);
+  // The rail is POSITION-MEASURED, not hardcoded: the track and its mint fill
+  // are placed exactly on the badge centers (first badge center → last badge
+  // center), so the line connects the steps at every breakpoint. The old
+  // hardcoded left:25px put the fill at x=0 and the track at x=25px — two
+  // separate lines, neither aligned with the 56px badges (center: 28px).
+  const [railGeom, setRailGeom] = useState<{ left: number; top: number; height: number } | null>(null);
   // Derive: reduced motion renders the rail fully drawn without syncing
   // state from the effect body.
   const progress = reduced ? 1 : measured;
@@ -46,6 +52,17 @@ export default function HowItWorks() {
     const measure = () => {
       const rail = railRef.current;
       if (!rail) return;
+      const container = rail.parentElement;
+      const badges = container?.querySelectorAll("[data-step-badge]");
+      if (container && badges && badges.length >= 2) {
+        const cRect = container.getBoundingClientRect();
+        const first = badges[0].getBoundingClientRect();
+        const last = badges[badges.length - 1].getBoundingClientRect();
+        const left = first.left - cRect.left + first.width / 2;
+        const top = first.top - cRect.top + first.height / 2 + 2;
+        const lastCenter = last.top - cRect.top + last.height / 2 + 2;
+        setRailGeom({ left, top, height: Math.max(0, lastCenter - top) });
+      }
       const rect = rail.getBoundingClientRect();
       const vh = window.innerHeight;
       const start = vh * 0.82; // rail head enters view
@@ -86,12 +103,17 @@ export default function HowItWorks() {
         </div>
 
         <div className="relative max-w-2xl mx-auto mt-16">
-          {/* Rail */}
-          <div className="step-rail" aria-hidden="true" ref={railRef} />
+          {/* Rail — measured onto the badge centers */}
           <div
-            className="step-rail-fill"
             aria-hidden="true"
-            style={{ transform: `scaleY(${progress})` }}
+            ref={railRef}
+            className="step-rail"
+            style={railGeom ? { left: railGeom.left, top: railGeom.top, height: railGeom.height } : { opacity: 0 }}
+          />
+          <div
+            aria-hidden="true"
+            className="step-rail-fill"
+            style={railGeom ? { left: railGeom.left, top: railGeom.top, height: railGeom.height, transform: `scaleY(${progress})` } : { opacity: 0 }}
           />
 
           <StaggerGroup className="flex flex-col gap-12">
@@ -100,7 +122,7 @@ export default function HowItWorks() {
               return (
                 <StaggerItem key={item.step}>
                   <div className="relative flex items-start gap-6">
-                    <div className="relative z-10 shrink-0 w-14 h-14 rounded-2xl bg-[var(--surface-card)] border border-mint-500/25 flex items-center justify-center text-mint-400 shadow-[var(--shadow-rest)]">
+                    <div data-step-badge className="relative z-10 shrink-0 w-14 h-14 rounded-2xl bg-[var(--surface-card)] border border-mint-500/25 flex items-center justify-center text-mint-400 shadow-[var(--shadow-rest)]">
                       <Icon className="w-[22px] h-[22px]" />
                     </div>
                     <div className="pt-1">

@@ -7,7 +7,7 @@ import {
     Upload, Link2, ArrowRight, Sparkles, Info, Loader2,
     Check, Zap, AlertCircle, Scissors, Captions, Wand2,
 } from "lucide-react";
-import { CAPTION_STYLES, type CaptionStyle } from "@/lib/types";
+import { CAPTION_STYLES, effectiveLimits, type CaptionStyle } from "@/lib/types";
 import { validateVideoUrl } from "@/lib/validateUrl";
 
 const STEPS = [
@@ -119,15 +119,16 @@ export default function NewVideoPage() {
             setIsSubmitting(false); return;
         }
 
-        if (profile.videos_used >= profile.videos_limit) {
-            setError(`You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`);
+        const limits = effectiveLimits(profile);
+        if (profile.videos_used >= limits.videos) {
+            setError(`You've reached your limit of ${limits.videos} video(s). Please upgrade.`);
             setIsSubmitting(false); return;
         }
-        if (profile.clips_used >= profile.clips_limit) {
-            setError(`You've reached your limit of ${profile.clips_limit} clip(s). Please upgrade.`);
+        if (profile.clips_used >= limits.clips) {
+            setError(`You've reached your limit of ${limits.clips} clip(s). Please upgrade.`);
             setIsSubmitting(false); return;
         }
-        const remaining = Math.max(0, profile.clips_limit - profile.clips_used);
+        const remaining = Math.max(0, limits.clips - profile.clips_used);
         if (remaining <= 0) { setError("No clips remaining. Please upgrade."); setIsSubmitting(false); return; }
 
         // Clamp *and use* the clamped value below — setting state alone was dead code.
@@ -183,7 +184,7 @@ export default function NewVideoPage() {
             // and continue — the trigger route still enforces the clip quota.
             console.error("increment_videos_used RPC failed:", reserveError.message);
         } else if (reserved === false) {
-            setError(`You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`);
+            setError(`You've reached your limit of ${limits.videos} video(s). Please upgrade.`);
             setIsSubmitting(false); return;
         } else {
             reservedSlot = true;
@@ -265,11 +266,11 @@ export default function NewVideoPage() {
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
                                 currentStep >= step.num 
                                     ? "bg-mint-500 text-ink-950 shadow-[0_0_12px_rgba(139,92,246,0.3)]" 
-                                    : "bg-[#08080c] text-[#64748b] border border-white/5"
+                                    : "bg-[var(--bg-inset)] text-ink-400 border border-[var(--border-subtle)]"
                             }`}>
                                 {currentStep > step.num ? <Check size={14} /> : step.num}
                             </div>
-                            <span className={`text-xs font-semibold ${currentStep >= step.num ? "text-slate-100" : "text-[#64748b]"}`}>
+                            <span className={`text-xs font-semibold ${currentStep >= step.num ? "text-ink-50" : "text-ink-400"}`}>
                                 {step.label}
                             </span>
                         </div>
@@ -280,11 +281,11 @@ export default function NewVideoPage() {
                 ))}
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-slate-100 flex items-center gap-2">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-ink-50 flex items-center gap-2">
                 <Zap size={24} className="text-mint-400" />
                 Create New Video
             </h1>
-            <p className="text-sm text-[#64748b] mb-8">
+            <p className="text-sm text-ink-400 mb-8">
                 Upload a video and get viral clips, or caption the whole thing with pro auto-editing
             </p>
 
@@ -309,14 +310,14 @@ export default function NewVideoPage() {
                 {/* ─── URL Input ─── */}
                 {sourceType === "url" && (
                     <div className="mb-6">
-                        <label className="block text-xs font-bold text-slate-300 mb-2 uppercase tracking-wider">Video URL</label>
+                        <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">Video URL</label>
                         <input
                             type="url" value={videoUrl}
                             onChange={(e) => { setVideoUrl(e.target.value); if (e.target.value.trim()) setCurrentStep(2); }}
                             placeholder="https://youtube.com/watch?v=... or Instagram/Facebook URL"
                             className="input-field" required
                         />
-                        <div className="flex items-center gap-1.5 mt-2.5 text-xs text-[#64748b]">
+                        <div className="flex items-center gap-1.5 mt-2.5 text-xs text-ink-400">
                             <Info size={12} /> Supports YouTube, Instagram, Facebook, and direct MP4 links
                         </div>
                     </div>
@@ -325,7 +326,7 @@ export default function NewVideoPage() {
                 {/* ─── Direct file upload ─── */}
                 {sourceType === "file" && (
                     <div className="mb-6">
-                        <label className="block text-xs font-bold text-slate-300 mb-2 uppercase tracking-wider">
+                        <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">
                             Upload your video
                         </label>
                         <label
@@ -346,19 +347,19 @@ export default function NewVideoPage() {
                             {videoFile ? (
                                 <>
                                     <Check size={22} className="text-mint-400" />
-                                    <span className="text-sm font-bold text-slate-100">{videoFile.name}</span>
-                                    <span className={`text-xs ${videoFile.size > MAX_UPLOAD_BYTES ? "text-red-400" : "text-[#64748b]"}`}>
+                                    <span className="text-sm font-bold text-ink-50">{videoFile.name}</span>
+                                    <span className={`text-xs ${videoFile.size > MAX_UPLOAD_BYTES ? "text-red-400" : "text-ink-400"}`}>
                                         {(videoFile.size / 1024 / 1024).toFixed(1)} MB
                                         {videoFile.size > MAX_UPLOAD_BYTES && " — over the 2 GB limit"}
                                     </span>
-                                    <span className="text-[10px] text-[#64748b]">Click to choose a different file</span>
+                                    <span className="text-[10px] text-ink-400">Click to choose a different file</span>
                                 </>
                             ) : (
                                 <>
                                     <Upload size={22} className="text-mint-400" />
-                                    <span className="text-sm font-bold text-slate-200">Click to choose a video</span>
-                                    <span className="text-xs text-[#64748b]">MP4, MOV, M4V or WebM · up to 2 GB</span>
-                                    <span className="text-[10px] text-[#64748b]">Stored privately, deleted automatically once your clips are ready</span>
+                                    <span className="text-sm font-bold text-ink-100">Click to choose a video</span>
+                                    <span className="text-xs text-ink-400">MP4, MOV, M4V or WebM · up to 2 GB</span>
+                                    <span className="text-[10px] text-ink-400">Stored privately, deleted automatically once your clips are ready</span>
                                 </>
                             )}
                         </label>
@@ -368,7 +369,7 @@ export default function NewVideoPage() {
                 {/* ─── Upload via Drive ─── */}
                 {sourceType === "drive" && (
                     <div className="mb-6">
-                        <label className="block text-xs font-bold text-slate-300 mb-2 uppercase tracking-wider">
+                        <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">
                             Upload via Google Drive
                         </label>
                         <div className="glass-card p-5 mb-4">
@@ -381,8 +382,8 @@ export default function NewVideoPage() {
                                     <div key={s.n} className="flex items-start gap-3">
                                         <div className="w-6 h-6 rounded-full bg-mint-500/10 border border-mint-500/20 flex items-center justify-center flex-shrink-0 text-xs font-bold text-mint-400">{s.n}</div>
                                         <div>
-                                            <div className="text-xs font-bold text-slate-200 mb-0.5">{s.t}</div>
-                                            <div className="text-xs text-[#64748b] leading-relaxed">{s.d}</div>
+                                            <div className="text-xs font-bold text-ink-100 mb-0.5">{s.t}</div>
+                                            <div className="text-xs text-ink-400 leading-relaxed">{s.d}</div>
                                         </div>
                                     </div>
                                 ))}
@@ -398,7 +399,7 @@ export default function NewVideoPage() {
 
                 {/* ─── What to produce ─── */}
                 <div className="mb-6">
-                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
+                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">
                         What should ClipMint make?
                     </label>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -422,16 +423,16 @@ export default function NewVideoPage() {
                                 className={`glass-card p-4 text-left cursor-pointer transition-all ${
                                     jobMode === mode.value
                                         ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]"
-                                        : "hover:border-white/10"
+                                        : "hover:border-[var(--border-subtle)]"
                                 }`}
                             >
                                 <div className="flex items-center justify-between mb-1">
-                                    <span className={`text-xs font-bold flex items-center gap-1.5 ${jobMode === mode.value ? "text-mint-400" : "text-slate-300"}`}>
+                                    <span className={`text-xs font-bold flex items-center gap-1.5 ${jobMode === mode.value ? "text-mint-400" : "text-ink-200"}`}>
                                         {mode.icon} {mode.title}
                                     </span>
                                     {jobMode === mode.value && <Check size={14} className="text-mint-400" />}
                                 </div>
-                                <span className="text-[10px] text-[#64748b] leading-tight block">{mode.hint}</span>
+                                <span className="text-[10px] text-ink-400 leading-tight block">{mode.hint}</span>
                             </button>
                         ))}
                     </div>
@@ -439,7 +440,7 @@ export default function NewVideoPage() {
                     {/* Auto-editing — whole-video captions mode only */}
                     {jobMode === "captions" && (
                         <div className="glass-card p-4 mt-3 space-y-3">
-                            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <div className="text-[10px] font-bold text-ink-300 uppercase tracking-wider flex items-center gap-1.5">
                                 <Wand2 size={12} className="text-mint-400" /> Auto-editing
                             </div>
                             {([
@@ -464,8 +465,8 @@ export default function NewVideoPage() {
                                         className="mt-0.5 w-4 h-4 accent-[#39E508] cursor-pointer"
                                     />
                                     <span>
-                                        <span className="block text-xs font-bold text-slate-200">{opt.title}</span>
-                                        <span className="block text-[10px] text-[#64748b] leading-relaxed">{opt.hint}</span>
+                                        <span className="block text-xs font-bold text-ink-100">{opt.title}</span>
+                                        <span className="block text-[10px] text-ink-400 leading-relaxed">{opt.hint}</span>
                                     </span>
                                 </label>
                             ))}
@@ -475,8 +476,8 @@ export default function NewVideoPage() {
 
                 {/* ─── Background Music Picker ─── */}
                 <div className="mb-6">
-                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
-                        Background Music <span className="text-slate-500 normal-case font-medium">(SFX always on)</span>
+                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">
+                        Background Music <span className="text-ink-400 normal-case font-medium">(SFX always on)</span>
                     </label>
                     <div className="flex flex-wrap gap-2">
                         {BGM_CHOICES.map((c) => (
@@ -486,7 +487,7 @@ export default function NewVideoPage() {
                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
                                     bgmChoice === c.value
                                         ? "border-mint-500 bg-mint-500/10 text-mint-400"
-                                        : "border-white/10 text-slate-400 hover:border-white/20"
+                                        : "border-[var(--border-subtle)] text-ink-300 hover:border-white/20"
                                 }`}
                             >
                                 {c.label}
@@ -501,10 +502,10 @@ export default function NewVideoPage() {
                                 onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
                                 className="input-field file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0
                                            file:bg-mint-500/10 file:text-mint-400 file:text-xs file:font-bold
-                                           text-slate-400 text-xs"
+                                           text-ink-300 text-xs"
                             />
                             {bgmFile && (
-                                <p className="text-xs text-slate-500 mt-1.5">
+                                <p className="text-xs text-ink-400 mt-1.5">
                                     {bgmFile.name} · {(bgmFile.size / 1024 / 1024).toFixed(1)} MB
                                     {bgmFile.size > 25 * 1024 * 1024 && (
                                         <span className="text-red-400"> — over the 25 MB limit</span>
@@ -517,7 +518,7 @@ export default function NewVideoPage() {
 
                 {/* ─── Caption Style Picker ─── */}
                 <div className="mb-6">
-                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">Caption Style</label>
+                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">Caption Style</label>
                     <div className="dash-grid-3">
                         {CAPTION_STYLES.map((style) => (
                             <button
@@ -526,16 +527,16 @@ export default function NewVideoPage() {
                                 className={`glass-card p-4 text-left cursor-pointer transition-all ${
                                     captionStyle === style.value 
                                         ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(139,92,246,0.1)]" 
-                                        : "hover:border-white/10"
+                                        : "hover:border-[var(--border-subtle)]"
                                 }`}
                             >
                                 <div className="flex items-center justify-between mb-1">
-                                    <span className={`text-xs font-bold ${captionStyle === style.value ? "text-mint-400" : "text-slate-300"}`}>
+                                    <span className={`text-xs font-bold ${captionStyle === style.value ? "text-mint-400" : "text-ink-200"}`}>
                                         {style.label}
                                     </span>
                                     {captionStyle === style.value && <Check size={14} className="text-mint-400" />}
                                 </div>
-                                <span className="text-[10px] text-[#64748b] leading-tight block">{style.description}</span>
+                                <span className="text-[10px] text-ink-400 leading-tight block">{style.description}</span>
                             </button>
                         ))}
                     </div>
@@ -543,7 +544,7 @@ export default function NewVideoPage() {
 
                 {/* ─── Caption Pace ─── */}
                 <div className="mb-6">
-                    <label className="block text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">Caption Pace</label>
+                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">Caption Pace</label>
                     <div className="grid grid-cols-3 gap-2.5">
                         {CAPTION_PACES.map((pace) => (
                             <button
@@ -552,13 +553,13 @@ export default function NewVideoPage() {
                                 className={`glass-card p-3 text-center cursor-pointer transition-all ${
                                     captionPace === pace.value
                                         ? "border-mint-500 bg-mint-500/10"
-                                        : "hover:border-white/10"
+                                        : "hover:border-[var(--border-subtle)]"
                                 }`}
                             >
-                                <span className={`block text-xs font-bold ${captionPace === pace.value ? "text-mint-400" : "text-slate-300"}`}>
+                                <span className={`block text-xs font-bold ${captionPace === pace.value ? "text-mint-400" : "text-ink-200"}`}>
                                     {pace.label}
                                 </span>
-                                <span className="block text-[10px] text-[#64748b] mt-0.5">{pace.hint}</span>
+                                <span className="block text-[10px] text-ink-400 mt-0.5">{pace.hint}</span>
                             </button>
                         ))}
                     </div>
@@ -567,7 +568,7 @@ export default function NewVideoPage() {
                 {/* ─── Max Clips (viral-clips mode only) ─── */}
                 {jobMode === "clips" && (
                     <div className="mb-8">
-                        <label className="flex justify-between items-center text-xs font-bold text-slate-300 mb-2.5 uppercase tracking-wider">
+                        <label className="flex justify-between items-center text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">
                             <span>Max Clips</span>
                             <span className="text-mint-400 text-sm font-extrabold">{maxClips}</span>
                         </label>
@@ -581,7 +582,7 @@ export default function NewVideoPage() {
                             }}
                             className="custom-range"
                         />
-                        <div className="flex justify-between text-[10px] text-[#64748b] mt-1.5 font-medium">
+                        <div className="flex justify-between text-[10px] text-ink-400 mt-1.5 font-medium">
                             <span>1 clip</span><span>20 clips</span>
                         </div>
                     </div>
@@ -614,8 +615,8 @@ export default function NewVideoPage() {
                 <div className="glass-card p-4.5 mt-5 flex gap-3 bg-white/[0.01]">
                     <Info size={18} className="text-mint-400 flex-shrink-0 mt-0.5" />
                     <div>
-                        <div className="text-xs font-bold text-slate-200 mb-1">How long does it take?</div>
-                        <p className="text-xs text-[#64748b] leading-relaxed">
+                        <div className="text-xs font-bold text-ink-100 mb-1">How long does it take?</div>
+                        <p className="text-xs text-ink-400 leading-relaxed">
                             Processing typically takes 5-15 minutes. ClipMint transcribes your audio, writes the captions,
                             auto-edits the pacing, and renders the finished video.
                         </p>

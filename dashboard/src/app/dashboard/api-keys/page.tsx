@@ -157,8 +157,8 @@ export default function ApiKeysPage() {
             {/* ─── Header ─── */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-100 mb-1">API Keys</h1>
-                    <p className="text-sm text-[#64748b]">
+                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-1">API Keys</h1>
+                    <p className="text-sm text-ink-400">
                         Manage API keys for programmatic access to ClipMint
                     </p>
                 </div>
@@ -171,30 +171,30 @@ export default function ApiKeysPage() {
             <div className="dash-grid-3 mb-6">
                 <div className="stat-card">
                     <div className="flex justify-between items-center mb-2.5">
-                        <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">Active Keys</span>
+                        <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">Active Keys</span>
                         <div className="stat-icon-bg bg-mint-500/10 border border-mint-500/10">
                             <Key size={18} className="text-mint-400" />
                         </div>
                     </div>
-                    <div className="text-3xl font-bold tracking-tight text-slate-100">{loading ? <div className="skeleton h-8 w-10" /> : activeKeys}</div>
+                    <div className="text-3xl font-bold tracking-tight text-ink-50">{loading ? <div className="skeleton h-8 w-10" /> : activeKeys}</div>
                 </div>
                 <div className="stat-card">
                     <div className="flex justify-between items-center mb-2.5">
-                        <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">Requests Today</span>
+                        <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">Requests Today</span>
                         <div className="stat-icon-bg bg-[#10b981]/10 border border-[#10b981]/10">
                             <Activity size={18} className="text-[#10b981]" />
                         </div>
                     </div>
-                    <div className="text-3xl font-bold tracking-tight text-slate-100">{loading ? <div className="skeleton h-8 w-10" /> : totalRequests}</div>
+                    <div className="text-3xl font-bold tracking-tight text-ink-50">{loading ? <div className="skeleton h-8 w-10" /> : totalRequests}</div>
                 </div>
                 <div className="stat-card">
                     <div className="flex justify-between items-center mb-2.5">
-                        <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">Total Keys</span>
+                        <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">Total Keys</span>
                         <div className="stat-icon-bg bg-mint-500/10 border border-mint-500/3010">
                             <Shield size={18} className="text-mint-400" />
                         </div>
                     </div>
-                    <div className="text-3xl font-bold tracking-tight text-slate-100">{loading ? <div className="skeleton h-8 w-10" /> : keys.length}</div>
+                    <div className="text-3xl font-bold tracking-tight text-ink-50">{loading ? <div className="skeleton h-8 w-10" /> : keys.length}</div>
                 </div>
             </div>
 
@@ -204,9 +204,9 @@ export default function ApiKeysPage() {
                     <div className="flex items-start gap-3">
                         <Code2 size={20} className="text-mint-400 flex-shrink-0 mt-0.5" />
                         <div>
-                            <div className="text-sm font-semibold text-slate-200 mb-1">API Documentation</div>
-                            <p className="text-xs text-slate-400 leading-relaxed">
-                                Use your API key in the <code className="bg-[#08080c] border border-white/5 px-1.5 py-0.5 rounded font-mono text-[11px] text-slate-300">Authorization: Bearer cm_****</code> header.
+                            <div className="text-sm font-semibold text-ink-100 mb-1">API Documentation</div>
+                            <p className="text-xs text-ink-300 leading-relaxed">
+                                Use your API key in the <code className="bg-[var(--bg-inset)] border border-[var(--border-subtle)] px-1.5 py-0.5 rounded font-mono text-[11px] text-ink-200">Authorization: Bearer cm_****</code> header.
                             </p>
                         </div>
                     </div>
@@ -245,7 +245,7 @@ export default function ApiKeysPage() {
                                     setCopiedPrefix("snippet");
                                     setTimeout(() => setCopiedPrefix(null), 2000);
                                 }}
-                                className="absolute top-2 right-12 bg-[#0d0c12] border border-white/5 hover:border-mint-500/35 rounded-lg px-2.5 py-1.5 cursor-pointer text-[#64748b] hover:text-slate-200 text-[10px] flex items-center gap-1 transition-all"
+                                className="absolute top-2 right-12 bg-[var(--bg-inset)] border border-[var(--border-subtle)] hover:border-mint-500/35 rounded-lg px-2.5 py-1.5 cursor-pointer text-ink-400 hover:text-ink-100 text-[10px] flex items-center gap-1 transition-all"
                             >
                                 {copiedPrefix === "snippet" ? <><Check size={11} className="text-[#10b981]" /> Copied</> : <><Copy size={11} /> Copy</>}
                             </button>
@@ -261,9 +261,9 @@ export default function ApiKeysPage() {
                 </div>
             ) : keys.length === 0 ? (
                 <div className="glass-card p-12 text-center max-w-md mx-auto">
-                    <Key size={40} className="text-[#64748b] opacity-40 mb-4 mx-auto" />
-                    <h3 className="text-base font-bold text-slate-200 mb-2">No API Keys Yet</h3>
-                    <p className="text-sm text-[#64748b] mb-5 leading-relaxed">
+                    <Key size={40} className="text-ink-400 opacity-40 mb-4 mx-auto" />
+                    <h3 className="text-base font-bold text-ink-100 mb-2">No API Keys Yet</h3>
+                    <p className="text-sm text-ink-400 mb-5 leading-relaxed">
                         Create your first API key to start using ClipMint programmatically
                     </p>
                     <button className="btn-primary py-2.5 px-5 text-sm font-semibold flex items-center gap-2 shadow-lg" onClick={() => setShowCreateModal(true)}>
@@ -285,13 +285,13 @@ export default function ApiKeysPage() {
                                         className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                                             key.is_active 
                                                 ? "bg-[#10b981] shadow-[0_0_8px_rgba(16,185,129,0.4)]" 
-                                                : "bg-[#64748b]"
+                                                : "bg-ink-400"
                                         }`} 
                                     />
                                     <div className="min-w-0">
-                                        <div className="text-sm font-bold text-slate-200 mb-1">{key.name}</div>
+                                        <div className="text-sm font-bold text-ink-100 mb-1">{key.name}</div>
                                         <div className="flex items-center gap-2 flex-wrap">
-                                            <code className="text-xs text-[#64748b] bg-[#08080c] px-2.5 py-1 rounded-md border border-white/5 font-mono">
+                                            <code className="text-xs text-ink-400 bg-[var(--bg-inset)] px-2.5 py-1 rounded-md border border-[var(--border-subtle)] font-mono">
                                                 {key.key_prefix}••••••••••••
                                             </code>
                                             <button
@@ -300,7 +300,7 @@ export default function ApiKeysPage() {
                                                     setCopiedPrefix(key.id);
                                                     setTimeout(() => setCopiedPrefix(null), 2000);
                                                 }}
-                                                className="bg-transparent border-none cursor-pointer p-1 text-[#64748b] hover:text-[#10b981] flex items-center gap-1 text-[10px] font-semibold transition-colors"
+                                                className="bg-transparent border-none cursor-pointer p-1 text-ink-400 hover:text-[#10b981] flex items-center gap-1 text-[10px] font-semibold transition-colors"
                                             >
                                                 {copiedPrefix === key.id ? <><Check size={12} /> Copied</> : <Copy size={12} />}
                                             </button>
@@ -310,10 +310,10 @@ export default function ApiKeysPage() {
 
                                 <div className="flex items-center gap-4 flex-shrink-0 ml-auto sm:ml-0">
                                     <div className="text-left sm:text-right">
-                                        <div className="text-xs text-slate-300 font-semibold">
+                                        <div className="text-xs text-ink-200 font-semibold">
                                             {key.requests_today} requests today
                                         </div>
-                                        <div className="text-[10px] text-[#64748b]">
+                                        <div className="text-[10px] text-ink-400">
                                             {key.last_used_at ? `Last used ${timeAgo(key.last_used_at)}` : "Never used"}
                                         </div>
                                     </div>
@@ -338,7 +338,7 @@ export default function ApiKeysPage() {
                     onClick={() => setDeleteConfirm(null)}
                 >
                     <div
-                        className="glass-card animate-scale-in p-6 w-full max-w-sm mx-4 shadow-2xl border-white/5"
+                        className="glass-card animate-scale-in p-6 w-full max-w-sm mx-4 shadow-2xl border-[var(--border-subtle)]"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-center gap-3 mb-4">
@@ -346,14 +346,14 @@ export default function ApiKeysPage() {
                                 <AlertTriangle size={20} />
                             </div>
                             <div>
-                                <h3 className="text-base font-bold text-slate-100">Delete API Key</h3>
-                                <p className="text-xs text-[#64748b] font-medium">
+                                <h3 className="text-base font-bold text-ink-50">Delete API Key</h3>
+                                <p className="text-xs text-ink-400 font-medium">
                                     {keys.find(k => k.id === deleteConfirm)?.name}
                                 </p>
                             </div>
                         </div>
                         <div className="p-3.5 rounded-xl bg-red-500/5 border border-red-500/15 mb-5">
-                            <p className="text-xs text-slate-300 leading-relaxed">
+                            <p className="text-xs text-ink-200 leading-relaxed">
                                 This action <strong className="text-[#ef4444] font-bold">cannot be undone</strong>. Any applications using this key will immediately lose access. Make sure to update your integrations before deleting.
                             </p>
                         </div>
@@ -379,7 +379,7 @@ export default function ApiKeysPage() {
                     onClick={closeModal}
                 >
                     <div
-                        className="glass-card animate-scale-in p-8 w-full max-w-md mx-4 shadow-2xl border-white/5"
+                        className="glass-card animate-scale-in p-8 w-full max-w-md mx-4 shadow-2xl border-[var(--border-subtle)]"
                         onClick={(e) => e.stopPropagation()}
                     >
                         {newRawKey ? (
@@ -389,11 +389,11 @@ export default function ApiKeysPage() {
                                         <Check size={18} />
                                     </div>
                                     <div>
-                                        <h3 className="text-base font-bold text-slate-100">Key Created!</h3>
-                                        <p className="text-xs text-[#64748b]">Copy this key now — you won&apos;t see it again</p>
+                                        <h3 className="text-base font-bold text-ink-50">Key Created!</h3>
+                                        <p className="text-xs text-ink-400">Copy this key now — you won&apos;t see it again</p>
                                     </div>
                                 </div>
-                                <div className="bg-[#030305] border border-white/5 p-4 rounded-xl font-mono text-xs break-all mb-5 text-slate-200">
+                                <div className="bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-4 rounded-xl font-mono text-xs break-all mb-5 text-ink-100">
                                     {newRawKey}
                                 </div>
                                 <div className="flex gap-3">
@@ -410,11 +410,11 @@ export default function ApiKeysPage() {
                             </>
                         ) : (
                             <>
-                                <h3 className="text-lg font-bold text-slate-100 mb-1.5">Create API Key</h3>
-                                <p className="text-xs text-[#64748b] mb-5">
+                                <h3 className="text-lg font-bold text-ink-50 mb-1.5">Create API Key</h3>
+                                <p className="text-xs text-ink-400 mb-5">
                                     Give your key a descriptive name to easily identify it later
                                 </p>
-                                <label className="block text-xs font-bold text-slate-300 mb-2 uppercase tracking-wider">
+                                <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">
                                     Key Name
                                 </label>
                                 <input

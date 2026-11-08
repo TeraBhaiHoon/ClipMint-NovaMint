@@ -40,7 +40,7 @@ export default function PhonePreview() {
 
           {/* Output spec — real number, not a claim */}
           <div className="flex justify-center pt-5">
-            <span className="rounded-full border border-white/10 bg-ink-900/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
+            <span className="rounded-full border border-[var(--border-subtle)] bg-ink-900/80 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink-400">
               9:16 · 1080×1920
             </span>
           </div>

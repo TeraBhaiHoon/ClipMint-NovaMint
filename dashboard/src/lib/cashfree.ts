@@ -74,14 +74,9 @@ export function planPeriodAmountRupees(plan: Plan, period: PlanPeriod): number {
  * treated as Free everywhere (quota reads gate on this). Legacy paid rows
  * without an expiry stay active rather than locking existing payers out.
  */
-export function isPlanExpired(profile: {
-    plan?: string | null;
-    current_period_end?: string | null;
-}): boolean {
-    if (!profile?.plan || profile.plan === "free") return false;
-    if (!profile.current_period_end) return false;
-    return new Date(profile.current_period_end).getTime() < Date.now();
-}
+// Single source of truth lives in lib/types.ts (the settings card, the
+// new-video page and the dashboard read the same helpers).
+export { isPlanExpired } from "@/lib/types";
 
 /** Period end for a fresh purchase/renewal, computed identically everywhere. */
 export function computePeriodEnd(period: PlanPeriod, from: Date = new Date()): Date {

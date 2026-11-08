@@ -2,11 +2,13 @@
   "_readme": "HOW TO ADD YOUR REAL CLIPS TO THE HOMEPAGE CAROUSEL. The carousel at src/app/components/ShowcaseCarousel.tsx fetches THIS file at runtime. Schema: { clips: [ { src, poster, title, duration } ] }. - src: string | null — relative path from the site root, e.g. \"/showcase/clips/episode-04-hook.mp4\" (put the file in public/showcase/clips/). Set to null to keep a generated-poster placeholder slot. - poster: string | null — optional poster frame path, e.g. \"/showcase/posters/episode-04-hook.jpg\" (put the image in public/showcase/posters/). Omit it and the carousel generates layered gradient art as the poster instead. - title: string — shown overlaid on the card. - duration: string — shown overlaid on the card, e.g. \"0:42\". Optional extras per entry: \"style\" (caption-style label shown on generated posters) and \"hue\" (\"mint\" | \"marigold\" | \"emerald\" | \"slate\"). Tips: keep files small (H.264/AAC, ~10-15s clips render fine); the video autoplays muted on hover/enter-viewport; a missing file simply falls back to the generated poster, so nothing ever looks broken.",
   "clips": [
     {
-      "src": null,
-      "title": "Your clip lands here",
+      "src": "/showcase/clips/sintel-demo.mp4",
+      "poster": "/showcase/posters/sintel-demo.jpg",
+      "title": "Demo render — Sintel (CC-BY)",
       "duration": "0:12",
       "style": "Hormozi",
-      "hue": "mint"
+      "hue": "mint",
+      "attribution": "Sintel © Blender Foundation — durian.blender.org (CC-BY 3.0)"
     },
     {
       "src": null,

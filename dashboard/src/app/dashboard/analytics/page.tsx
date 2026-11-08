@@ -76,7 +76,7 @@ function StyleDonut({ data }: { data: Record<string, number> }) {
                         />
                     ))}
                 </svg>
-                <span className="absolute text-lg font-extrabold text-slate-100">
+                <span className="absolute text-lg font-extrabold text-ink-50">
                     {total}
                 </span>
             </div>
@@ -84,8 +84,8 @@ function StyleDonut({ data }: { data: Record<string, number> }) {
                 {entries.slice(0, 6).map(([style, count], i) => (
                     <div key={style} className="flex items-center gap-2 text-xs">
                         <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                        <span className="text-slate-300 font-medium capitalize">{style}</span>
-                        <span className="text-[#64748b] ml-auto font-mono">
+                        <span className="text-ink-200 font-medium capitalize">{style}</span>
+                        <span className="text-ink-400 ml-auto font-mono">
                             {count} ({Math.round((count / total) * 100)}%)
                         </span>
                     </div>
@@ -131,7 +131,7 @@ function ActivityHeatmap({ data }: { data: Record<string, number> }) {
                     );
                 })}
             </div>
-            <div className="flex justify-between text-[10px] text-[#64748b] mt-1.5 font-medium">
+            <div className="flex justify-between text-[10px] text-ink-400 mt-1.5 font-medium">
                 <span>30 days ago</span>
                 <div className="flex items-center gap-1.5">
                     <span>Less</span>
@@ -263,7 +263,7 @@ export default function AnalyticsPage() {
                         );
                     })}
                 </div>
-                <div className="flex justify-between text-[10px] text-[#64748b] mt-1.5 font-medium">
+                <div className="flex justify-between text-[10px] text-ink-400 mt-1.5 font-medium">
                     <span>{bars[0]?.label}</span>
                     <span>{bars[Math.floor(bars.length / 2)]?.label}</span>
                     <span>{bars[bars.length - 1]?.label}</span>
@@ -286,10 +286,10 @@ export default function AnalyticsPage() {
             {/* ─── Header + Time Range ─── */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-100 mb-1">
+                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-1">
                         Analytics
                     </h1>
-                    <p className="text-sm text-[#64748b]">
+                    <p className="text-sm text-ink-400">
                         Track your content performance and usage
                     </p>
                 </div>
@@ -324,24 +324,24 @@ export default function AnalyticsPage() {
                         {statCards.map((stat) => (
                             <div key={stat.label} className="stat-card">
                                 <div className="flex justify-between items-center mb-3">
-                                    <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">{stat.label}</span>
-                                    <div className="stat-icon-bg border border-white/5" style={{ backgroundColor: stat.bg }}>
+                                    <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">{stat.label}</span>
+                                    <div className="stat-icon-bg border border-[var(--border-subtle)]" style={{ backgroundColor: stat.bg }}>
                                         <stat.icon size={18} style={{ color: stat.color }} />
                                     </div>
                                 </div>
-                                <div className="text-3xl font-bold tracking-tight text-slate-100">{stat.value}</div>
+                                <div className="text-3xl font-bold tracking-tight text-ink-50">{stat.value}</div>
                             </div>
                         ))}
                     </div>
 
                     {/* ─── Activity Chart ─── */}
                     <div className="glass-card p-6 md:p-8 mb-6">
-                        <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
+                        <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
                             <BarChart3 size={18} className="text-mint-400" />
                             Clips Activity
                         </h3>
                         {s && s.totalClips === 0 ? (
-                            <div className="text-center py-10 text-[#64748b]">
+                            <div className="text-center py-10 text-ink-400">
                                 <BarChart3 size={36} className="mx-auto mb-3 opacity-40" />
                                 <p className="text-sm">No data yet. Submit your first video to see analytics.</p>
                             </div>
@@ -354,12 +354,12 @@ export default function AnalyticsPage() {
                     <div className="dash-grid-2 mb-6">
                         {/* Caption Style Distribution */}
                         <div className="glass-card p-6 md:p-8">
-                            <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
+                            <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
                                 <Hash size={18} className="text-mint-400" />
                                 Style Distribution
                             </h3>
                             {s && Object.keys(s.clipsByStyle).length === 0 ? (
-                                <div className="text-center py-6 text-[#64748b] text-xs">
+                                <div className="text-center py-6 text-ink-400 text-xs">
                                     No data yet
                                 </div>
                             ) : (
@@ -369,7 +369,7 @@ export default function AnalyticsPage() {
 
                         {/* 30-Day Heatmap */}
                         <div className="glass-card p-6 md:p-8">
-                            <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
+                            <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
                                 <Calendar size={18} className="text-mint-400" />
                                 Activity Calendar
                             </h3>
@@ -379,12 +379,12 @@ export default function AnalyticsPage() {
 
                     {/* ─── Top Viral Clips Leaderboard ─── */}
                     <div className="glass-card p-6 md:p-8">
-                        <h3 className="text-base font-bold text-slate-200 mb-5 flex items-center gap-2.5">
+                        <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
                             <Sparkles size={18} className="text-mint-400" />
                             Top Performing Clips
                         </h3>
                         {s && s.topClips.length === 0 ? (
-                            <div className="text-center py-6 text-[#64748b]">
+                            <div className="text-center py-6 text-ink-400">
                                 <p className="text-sm">No clips yet. Your top performers will appear here.</p>
                             </div>
                         ) : (
@@ -392,7 +392,7 @@ export default function AnalyticsPage() {
                                 {s?.topClips.map((clip, i) => (
                                     <div
                                         key={clip.id}
-                                        className="flex items-center gap-3.5 px-4.5 py-3.5 rounded-xl bg-[#08080c] border border-white/5 transition-all duration-300 hover:border-mint-500/35 hover:translate-x-1 animate-fade-in-up"
+                                        className="flex items-center gap-3.5 px-4.5 py-3.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] transition-all duration-300 hover:border-mint-500/35 hover:translate-x-1 animate-fade-in-up"
                                         style={{ animationDelay: `${i * 0.06}s` }}
                                     >
                                         {/* Rank */}
@@ -407,20 +407,20 @@ export default function AnalyticsPage() {
                                         </div>
 
                                         {/* Thumbnail */}
-                                        <div className="w-11 h-11 rounded-lg flex-shrink-0 overflow-hidden bg-[#0d0c12] border border-white/5 flex items-center justify-center">
+                                        <div className="w-11 h-11 rounded-lg flex-shrink-0 overflow-hidden bg-[var(--bg-inset)] border border-[var(--border-subtle)] flex items-center justify-center">
                                             {clip.thumbnail_url ? (
                                                 <img src={clip.thumbnail_url} alt="" className="w-full h-full object-cover" />
                                             ) : (
-                                                <Film size={18} className="text-[#64748b]/40" />
+                                                <Film size={18} className="text-ink-400/40" />
                                             )}
                                         </div>
 
                                         {/* Info */}
                                         <div className="flex-1 min-w-0">
-                                            <div className="text-sm font-semibold text-slate-200 mb-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
+                                            <div className="text-sm font-semibold text-ink-100 mb-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
                                                 {clip.title || `Clip ${clip.clip_index + 1}`}
                                             </div>
-                                            <div className="flex items-center gap-2 text-xs text-[#64748b]">
+                                            <div className="flex items-center gap-2 text-xs text-ink-400">
                                                 {clip.duration_seconds && <span>{Math.round(clip.duration_seconds)}s</span>}
                                             </div>
                                         </div>
@@ -428,7 +428,7 @@ export default function AnalyticsPage() {
                                         {/* Score bar */}
                                         {clip.viral_score != null && (
                                             <div className="flex items-center gap-2.5 flex-shrink-0">
-                                                <div className="w-20 h-1.5 rounded-full bg-[#030305] overflow-hidden">
+                                                <div className="w-20 h-1.5 rounded-full bg-[var(--bg-inset)] overflow-hidden">
                                                     <div 
                                                         className="h-full rounded-full transition-[width] duration-700 ease-out"
                                                         style={{

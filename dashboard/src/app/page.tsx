@@ -39,7 +39,7 @@ const FAQS: FaqItem[] = [
   },
   {
     q: "How long can my video be?",
-    a: "Files up to 500MB are supported — MP4, MOV or WebM. You can also paste a YouTube, Instagram or Google Drive link instead of uploading. Most videos finish processing in 5–15 minutes.",
+    a: "Files up to 2 GB are supported — MP4, MOV or WebM. You can also paste a YouTube, Instagram or Google Drive link instead of uploading. Most videos finish processing in 5–15 minutes.",
   },
   {
     q: "Which languages are supported? What about Hindi?",
@@ -144,7 +144,7 @@ const SPECS = [
   {
     icon: IconUpload,
     label: "Input",
-    value: "MP4 · MOV · WebM, up to 500MB — or paste a YouTube, Instagram or Google Drive link.",
+    value: "MP4 · MOV · WebM, up to 2 GB — or paste a YouTube, Instagram or Google Drive link.",
   },
   {
     icon: IconMaximize,
@@ -224,7 +224,7 @@ export default function HomePage() {
 
             <HeroItem index={4}>
               <p className="text-[13px] font-medium text-ink-500">
-                MP4 · MOV · WebM · up to 500MB · YouTube / Instagram / Drive links
+                MP4 · MOV · WebM · up to 2 GB · YouTube / Instagram / Drive links
               </p>
             </HeroItem>
           </div>
@@ -263,7 +263,7 @@ export default function HomePage() {
           <SectionHeading
             kicker="The showcase"
             title={<>Finished clips. <span className="grad-mint-text">Straight out of rendering.</span></>}
-            subtitle="Reserved slots hold generated poster art until your clips land. Drag to browse, hover to play — every card is a real 9:16 master."
+            subtitle="First card: a real ClipMint render — Sintel © Blender Foundation (CC-BY). Drag to browse, hover to play. Add your own clips in public/showcase/ — see the README there."
           />
           <ShowcaseCarousel />
         </div>

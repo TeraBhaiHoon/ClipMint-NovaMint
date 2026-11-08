@@ -143,6 +143,40 @@ export interface Clip {
     created_at: string;
 }
 
+/** A plan row as the app reads it (profile or a subset of it). */
+export interface PlanState {
+    plan?: string | null;
+    current_period_end?: string | null;
+    clips_used?: number | null;
+    videos_used?: number | null;
+}
+
+/**
+ * One-time plans expire: a paid plan whose `current_period_end` has passed is
+ * treated as Free everywhere. Legacy paid rows without an expiry stay active
+ * rather than locking existing payers out. Single source of truth — the
+ * trigger route, the settings card, the new-video page and the webhook all
+ * derive limits through here so the UI can never disagree with the quota gate.
+ */
+export function isPlanExpired(profile?: PlanState | null): boolean {
+    if (!profile?.plan || profile.plan === "free") return false;
+    if (!profile.current_period_end) return false;
+    return new Date(profile.current_period_end).getTime() < Date.now();
+}
+
+/** The plan that ACTUALLY applies right now (expired paid plans read as free). */
+export function effectivePlanKey(profile?: PlanState | null): Plan {
+    if (!profile?.plan || profile.plan === "free" || isPlanExpired(profile)) return "free";
+    return (profile.plan === "creator" || profile.plan === "pro" || profile.plan === "agency"
+        ? profile.plan
+        : "free") as Plan;
+}
+
+/** The limits that ACTUALLY apply right now, from the effective plan. */
+export function effectiveLimits(profile?: PlanState | null): { clips: number; videos: number; label: string } {
+    return PLAN_LIMITS[effectivePlanKey(profile)];
+}
+
 export const PLAN_LIMITS: Record<Plan, { clips: number; videos: number; monthlyPrice: number; annualPrice: number; label: string }> = {
     free: { clips: 5, videos: 2, monthlyPrice: 0, annualPrice: 0, label: "Free" },
     creator: { clips: 150, videos: 30, monthlyPrice: 49900, annualPrice: 39900, label: "Creator" },

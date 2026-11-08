@@ -268,13 +268,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
     if (!job) {
         return (
             <div>
-                <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-slate-300 hover:text-white no-underline text-sm mb-5 transition-colors">
+                <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-ink-200 hover:text-white no-underline text-sm mb-5 transition-colors">
                     <ArrowLeft size={16} /> Back to Jobs
                 </Link>
                 <div className="glass-card p-10 text-center max-w-md mx-auto">
-                    <Film size={40} className="text-[#64748b] mb-4 mx-auto" />
-                    <h2 className="text-lg font-bold text-slate-200 mb-2">Job Not Found</h2>
-                    <p className="text-sm text-[#64748b]">This job doesn&apos;t exist or you don&apos;t have access.</p>
+                    <Film size={40} className="text-ink-400 mb-4 mx-auto" />
+                    <h2 className="text-lg font-bold text-ink-100 mb-2">Job Not Found</h2>
+                    <p className="text-sm text-ink-400">This job doesn&apos;t exist or you don&apos;t have access.</p>
                 </div>
             </div>
         );
@@ -301,13 +301,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             {/* ─── Header ─── */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
                 <div>
-                    <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-[#64748b] hover:text-slate-300 no-underline text-xs mb-3 transition-colors">
+                    <Link href="/dashboard" className="inline-flex items-center gap-1.5 text-ink-400 hover:text-ink-200 no-underline text-xs mb-3 transition-colors">
                         <ArrowLeft size={14} /> Back to Jobs
                     </Link>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-100 mb-2">
+                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-2">
                         Job {jobId.slice(0, 8)}
                     </h1>
-                    <div className="flex items-center gap-3 flex-wrap text-xs text-[#64748b]">
+                    <div className="flex items-center gap-3 flex-wrap text-xs text-ink-400">
                         <span 
                             className="plan-badge font-bold px-2.5 py-1 rounded-md border text-[10px] tracking-wider uppercase flex items-center gap-1"
                             style={{ 
@@ -337,19 +337,19 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             <div className="glass-card p-5 mb-6">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div>
-                        <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-1">SOURCE</div>
-                        <div className="text-xs text-slate-300 font-semibold whitespace-nowrap overflow-hidden text-ellipsis">{job.source_title || job.video_url || job.video_filename || "—"}</div>
+                        <div className="text-[10px] text-ink-400 font-bold uppercase tracking-wider mb-1">SOURCE</div>
+                        <div className="text-xs text-ink-200 font-semibold whitespace-nowrap overflow-hidden text-ellipsis">{job.source_title || job.video_url || job.video_filename || "—"}</div>
                     </div>
                     <div>
-                        <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-1">CAPTION STYLE</div>
-                        <div className="text-xs text-slate-300 font-semibold">{job.caption_style}</div>
+                        <div className="text-[10px] text-ink-400 font-bold uppercase tracking-wider mb-1">CAPTION STYLE</div>
+                        <div className="text-xs text-ink-200 font-semibold">{job.caption_style}</div>
                     </div>
                     <div>
-                        <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-1">MAX CLIPS</div>
-                        <div className="text-xs text-slate-300 font-semibold">{job.max_clips}</div>
+                        <div className="text-[10px] text-ink-400 font-bold uppercase tracking-wider mb-1">MAX CLIPS</div>
+                        <div className="text-xs text-ink-200 font-semibold">{job.max_clips}</div>
                     </div>
                     <div>
-                        <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-1">CLIPS GENERATED</div>
+                        <div className="text-[10px] text-ink-400 font-bold uppercase tracking-wider mb-1">CLIPS GENERATED</div>
                         <div className="text-xs text-[#10b981] font-bold">{clips.length}</div>
                     </div>
                 </div>
@@ -358,7 +358,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             {/* ─── Step Progress Indicator ─── */}
             {(isProcessing || job.status === "done") && (
                 <div className="glass-card p-6 mb-6">
-                    <div className="text-xs font-bold text-[#64748b] uppercase tracking-wider mb-4">PROCESSING PIPELINE</div>
+                    <div className="text-xs font-bold text-ink-400 uppercase tracking-wider mb-4">PROCESSING PIPELINE</div>
                     <div className="step-progress">
                         {PIPELINE_STEPS.map((step, i) => {
                             const state = job.status === "done" ? "completed" : getStepState(step.key, job.status);
@@ -368,7 +368,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     <div className={`step-circle ${state}`}>
                                         {state === "completed" ? <Check size={14} /> : i + 1}
                                     </div>
-                                    <span className={`text-[10px] font-semibold mt-1.5 ${state === "active" ? "text-mint-400" : state === "completed" ? "text-[#10b981]" : "text-[#64748b]"}`}>
+                                    <span className={`text-[10px] font-semibold mt-1.5 ${state === "active" ? "text-mint-400" : state === "completed" ? "text-[#10b981]" : "text-ink-400"}`}>
                                         {step.label}
                                     </span>
                                 </div>
@@ -385,7 +385,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                         <AlertTriangle size={20} className="text-[#ef4444] flex-shrink-0 mt-0.5" />
                         <div className="flex-1">
                             <div className="text-sm font-bold text-[#ef4444] mb-1.5">Processing failed</div>
-                            <div className="text-xs text-slate-300 bg-black/30 border border-white/5 p-3 rounded-lg mb-3.5 leading-relaxed font-mono">
+                            <div className="text-xs text-ink-200 bg-black/30 border border-[var(--border-subtle)] p-3 rounded-lg mb-3.5 leading-relaxed font-mono">
                                 {job.error_message || "Something went wrong. Please try again or contact support."}
                             </div>
                             <button 
@@ -406,7 +406,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                         <AlertTriangle size={20} className="text-[#f59e0b] flex-shrink-0 mt-0.5" />
                         <div className="flex-1">
                             <div className="text-sm font-bold text-[#f59e0b] mb-1.5">Processing cancelled</div>
-                            <div className="text-xs text-slate-300 mb-3.5">This job was cancelled. You can retry to reprocess your video.</div>
+                            <div className="text-xs text-ink-200 mb-3.5">This job was cancelled. You can retry to reprocess your video.</div>
                             <button 
                                 className="btn-primary px-4 py-2 text-xs font-semibold flex items-center gap-1.5" 
                                 onClick={handleRetry} 
@@ -426,7 +426,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                         <AlertTriangle size={20} className="text-[#f59e0b] flex-shrink-0 mt-0.5" />
                         <div className="flex-1">
                             <div className="text-sm font-bold text-[#f59e0b] mb-1.5">This job looks stuck</div>
-                            <div className="text-xs text-slate-300 mb-3.5">
+                            <div className="text-xs text-ink-200 mb-3.5">
                                 It has been in &quot;{statusInfo.label}&quot; for more than 45 minutes with no progress.
                                 Retry to send it through the pipeline again.
                             </div>
@@ -443,15 +443,15 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             )}
 
             {/* ─── Clips Gallery ─── */}
-            <h2 className="text-lg font-bold text-slate-100 mb-4 flex items-center gap-2">
+            <h2 className="text-lg font-bold text-ink-50 mb-4 flex items-center gap-2">
                 <Film size={18} className="text-mint-400" />
                 {clips.length} Clip{clips.length !== 1 ? "s" : ""} Generated
             </h2>
 
             {clips.length === 0 ? (
                 <div className="glass-card p-12 text-center max-w-md mx-auto">
-                    <Film size={36} className="text-[#64748b] opacity-40 mb-3 mx-auto" />
-                    <p className="text-sm text-[#64748b]">
+                    <Film size={36} className="text-ink-400 opacity-40 mb-3 mx-auto" />
+                    <p className="text-sm text-ink-400">
                         {job.status === "done" ? "No clips were generated for this job." : "Clips will appear here once processing is complete."}
                     </p>
                 </div>
@@ -467,7 +467,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                             style={{ animationDelay: `${i * 0.06}s` }}
                         >
                             {/* Preview area */}
-                            <div className="h-44 bg-gradient-to-br from-[#0d0c12] to-[#12101b] flex items-center justify-center relative overflow-hidden border-b border-white/5">
+                            <div className="h-44 bg-gradient-to-br from-[#0d0c12] to-[#12101b] flex items-center justify-center relative overflow-hidden border-b border-[var(--border-subtle)]">
                                 {(clip.thumbnail_url || mediaLinks[clip.id]?.thumbnailUrl) ? (
                                     <button
                                         type="button"
@@ -488,7 +488,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     </button>
                                 ) : (
                                     <div className="flex flex-col items-center gap-2">
-                                        <Film size={36} className="text-[#64748b]/20" />
+                                        <Film size={36} className="text-ink-400/20" />
                                         {driveId && (
                                             <button
                                                 type="button"
@@ -528,7 +528,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     </button>
                                 )}
                                 {duration != null && (
-                                    <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-bold text-slate-200 backdrop-blur-sm">
+                                    <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded bg-black/70 text-[10px] font-bold text-ink-100 backdrop-blur-sm">
                                         {Math.round(duration)}s
                                     </div>
                                 )}
@@ -537,11 +537,11 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                             {/* Info */}
                             <div className="p-4 flex-1 flex flex-col justify-between">
                                 <div>
-                                    <h3 className="text-sm font-bold text-slate-100 mb-1 leading-snug">
+                                    <h3 className="text-sm font-bold text-ink-50 mb-1 leading-snug">
                                         {clip.title || `Clip ${clip.clip_index + 1}`}
                                     </h3>
                                     {clip.hook_caption && (
-                                        <p className="text-xs text-[#64748b] mb-3 leading-relaxed line-clamp-2 italic">
+                                        <p className="text-xs text-ink-400 mb-3 leading-relaxed line-clamp-2 italic">
                                             &ldquo;{clip.hook_caption}&rdquo;
                                         </p>
                                     )}
@@ -563,8 +563,8 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                                         c.status === "fail" ? "text-[#f87171]" :
                                                         c.status === "warn" ? "text-[#f59e0b]" : "text-[#10b981]"
                                                     }>{c.status === "fail" ? "✕" : c.status === "warn" ? "!" : "✓"}</span>
-                                                    <span className="text-slate-300 font-medium shrink-0">{c.label}</span>
-                                                    <span className="text-[#64748b] ml-auto text-right">
+                                                    <span className="text-ink-200 font-medium shrink-0">{c.label}</span>
+                                                    <span className="text-ink-400 ml-auto text-right">
                                                         {c.value}{c.detail ? ` — ${c.detail}` : ""}
                                                     </span>
                                                 </div>
@@ -633,13 +633,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                         <button
                             type="button"
                             onClick={() => setPreviewClip(null)}
-                            className="absolute -top-10 right-0 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center text-slate-200 cursor-pointer transition-colors"
+                            className="absolute -top-10 right-0 w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 border border-[var(--border-subtle)] flex items-center justify-center text-ink-100 cursor-pointer transition-colors"
                             aria-label="Close preview"
                         >
                             <X size={16} />
                         </button>
                         <div
-                            className="relative w-full rounded-2xl overflow-hidden border border-white/10 bg-black shadow-2xl"
+                            className="relative w-full rounded-2xl overflow-hidden border border-[var(--border-subtle)] bg-black shadow-2xl"
                             style={{ aspectRatio: "9 / 16" }}
                         >
                             {previewStreamUrl ? (
@@ -659,13 +659,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
                                     title={previewClip.title || `Clip ${previewClip.clip_index + 1}`}
                                 />
                             ) : (
-                                <div className="absolute inset-0 flex items-center justify-center text-xs text-[#64748b] px-6 text-center">
+                                <div className="absolute inset-0 flex items-center justify-center text-xs text-ink-400 px-6 text-center">
                                     Preview isn&apos;t available for this clip yet.
                                 </div>
                             )}
                         </div>
                         <div className="mt-3 flex items-center justify-between gap-2">
-                            <span className="text-xs font-semibold text-slate-200 truncate">
+                            <span className="text-xs font-semibold text-ink-100 truncate">
                                 {previewClip.title || `Clip ${previewClip.clip_index + 1}`}
                             </span>
                             <div className="flex gap-1.5 flex-shrink-0">

@@ -40,7 +40,7 @@ export default function ContactPage() {
     }
 
     return (
-        <main className="overflow-hidden min-h-screen bg-[#030305] text-[#f8fafc]">
+        <main className="overflow-hidden min-h-screen bg-[var(--bg-inset)] text-ink-50">
             <Navbar />
 
             <div className="max-w-5xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
@@ -51,7 +51,7 @@ export default function ContactPage() {
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
                         Get In <span className="gradient-text bg-text-mint-400">Touch</span>
                     </h1>
-                    <p className="text-base sm:text-lg text-slate-400 max-w-md mx-auto leading-relaxed">
+                    <p className="text-base sm:text-lg text-ink-300 max-w-md mx-auto leading-relaxed">
                         Have a question, suggestion, or need help? We&apos;d love to hear from you.
                     </p>
                 </div>
@@ -96,12 +96,12 @@ export default function ContactPage() {
                                     {info.href ? (
                                         <a
                                             href={info.href}
-                                            className="text-slate-200 hover:text-mint-300 no-underline text-base font-semibold transition-colors"
+                                            className="text-ink-100 hover:text-mint-300 no-underline text-base font-semibold transition-colors"
                                         >
                                             {info.value}
                                         </a>
                                     ) : (
-                                        <div className="text-slate-200 text-base font-semibold">
+                                        <div className="text-ink-100 text-base font-semibold">
                                             {info.value}
                                         </div>
                                     )}
@@ -110,7 +110,7 @@ export default function ContactPage() {
                         ))}
 
                         <div className="glass-card p-6 bg-mint-500/5">
-                            <div className="text-sm font-bold text-slate-300 mb-2">
+                            <div className="text-sm font-bold text-ink-200 mb-2">
                                 Follow us
                             </div>
                             <a
@@ -129,10 +129,10 @@ export default function ContactPage() {
                         {sent ? (
                             <div className="text-center py-12 px-4 flex flex-col items-center gap-4 animate-scale-in">
                                 <div className="text-5xl">✉️</div>
-                                <h3 className="text-2xl font-bold text-slate-200">
+                                <h3 className="text-2xl font-bold text-ink-100">
                                     Message Sent!
                                 </h3>
-                                <p className="text-sm text-slate-400 max-w-xs mx-auto leading-relaxed">
+                                <p className="text-sm text-ink-300 max-w-xs mx-auto leading-relaxed">
                                     We&apos;d love to help you. We will get back to you within 24 hours.
                                 </p>
                                 <button
@@ -144,12 +144,12 @@ export default function ContactPage() {
                             </div>
                         ) : (
                             <form onSubmit={handleSubmit} className="flex flex-col gap-5">
-                                <h3 className="text-xl font-bold text-slate-200 mb-2 border-b border-white/5 pb-2">
+                                <h3 className="text-xl font-bold text-ink-100 mb-2 border-b border-[var(--border-subtle)] pb-2">
                                     Send us a message
                                 </h3>
 
                                 <div className="flex flex-col gap-1.5">
-                                    <label className="text-xs font-semibold text-slate-400">
+                                    <label className="text-xs font-semibold text-ink-300">
                                         Your Name
                                     </label>
                                     <input
@@ -164,7 +164,7 @@ export default function ContactPage() {
                                 </div>
 
                                 <div className="flex flex-col gap-1.5">
-                                    <label className="text-xs font-semibold text-slate-400">
+                                    <label className="text-xs font-semibold text-ink-300">
                                         Email Address
                                     </label>
                                     <input
@@ -180,7 +180,7 @@ export default function ContactPage() {
                                 </div>
 
                                 <div className="flex flex-col gap-1.5">
-                                    <label className="text-xs font-semibold text-slate-400">
+                                    <label className="text-xs font-semibold text-ink-300">
                                         Subject
                                     </label>
                                     <input
@@ -195,7 +195,7 @@ export default function ContactPage() {
                                 </div>
 
                                 <div className="flex flex-col gap-1.5">
-                                    <label className="text-xs font-semibold text-slate-400">
+                                    <label className="text-xs font-semibold text-ink-300">
                                         Message
                                     </label>
                                     <textarea

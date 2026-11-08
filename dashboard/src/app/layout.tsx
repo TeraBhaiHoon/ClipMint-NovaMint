@@ -24,6 +24,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
+  icons: { icon: "/logo-cm-128.png" },
   title: "ClipMint — Turn long videos into vertical clips with animated captions",
   description:
     "Upload one long video and get platform-ready 9:16 clips with professional animated captions. AI finds the moments worth posting, cuts them, and renders studio-made captions. Free to start, no card needed.",

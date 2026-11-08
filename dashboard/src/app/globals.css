@@ -19,35 +19,42 @@
    TOKENS
    ────────────────────────────────────────────── */
 :root {
-  /* ── Surfaces — layered depth, ink with a green undertone ── */
-  --bg-void: #040705;            /* deepest backdrop (above the fold)  */
-  --bg-primary: #060B07;         /* ink-950 — page base                */
-  --bg-raised: #0B120D;          /* cards                              */
-  --bg-inset: #050806;           /* frames / phone / insets            */
-  --bg-sunken: #030503;          /* wells                              */
-  --glass-bg: rgba(11, 18, 13, 0.55);
-  --surface-card: #0B120D;
-  --surface-inset: #050806;
+  /* ── LIGHT THEME — white surfaces, dark ink text, mint as the accent ──
+     The ink- ramp is INVERTED relative to the old dark theme: ink-50 is now
+     the darkest (headings/body), ink-950 the lightest (page base). Class
+     names keep their roles — text-ink-50 is still "primary text",
+     bg-ink-950 is still "page base" — so every existing usage flips
+     correctly without a rename sweep. */
+  --bg-void: #F4F8F3;            /* deepest backdrop (above the fold)  */
+  --bg-primary: #FBFDF9;         /* ink-950 — page base                */
+  --bg-raised: #FFFFFF;          /* cards                              */
+  --bg-inset: #F1F6F0;           /* frames / phone / insets            */
+  --bg-sunken: #EDF3EC;          /* wells                              */
+  --glass-bg: rgba(255, 255, 255, 0.72);
+  --surface-card: #FFFFFF;
+  --surface-inset: #F1F6F0;
 
   /* ── Hairlines & rings ── */
-  --border-subtle: rgba(227, 234, 226, 0.07);
-  --border-faint: rgba(227, 234, 226, 0.04);
-  --border-strong: rgba(227, 234, 226, 0.16);
-  --border-active: #39E508;
-  --ring-focus: rgba(57, 229, 8, 0.45);
+  --border-subtle: rgba(11, 18, 13, 0.09);
+  --border-faint: rgba(11, 18, 13, 0.055);
+  --border-strong: rgba(11, 18, 13, 0.18);
+  --border-active: #22C55E;
+  --ring-focus: rgba(45, 194, 4, 0.35);
 
-  /* ── Text — ink ramp, primary is never pure white ── */
-  --text-primary: #F2F7F1;       /* ink-50  */
-  --text-secondary: #A3B2A5;     /* ink-300 */
-  --text-muted: #5C6E61;         /* ink-500 */
-  --ink-50:#F2F7F1; --ink-100:#E2EBE1; --ink-200:#C6D4C7; --ink-300:#A3B2A5;
-  --ink-400:#7B8D80; --ink-500:#5B6D61; --ink-600:#46574B; --ink-700:#333F36;
-  --ink-800:#1F2A22; --ink-850:#131C15; --ink-900:#0B120D; --ink-950:#060B07;
+  /* ── Text — primary is near-black, never pure black ── */
+  --text-primary: #0B120D;       /* ink-50  */
+  --text-secondary: #46574B;     /* ink-300 */
+  --text-muted: #6B7D6F;         /* ink-500 */
+  --ink-50:#0B120D; --ink-100:#1A251C; --ink-200:#33413A; --ink-300:#46574B;
+  --ink-400:#5F7164; --ink-500:#6B7D6F; --ink-600:#93A295; --ink-700:#B4C0B5;
+  --ink-800:#D3DED4; --ink-850:#E4EDE4; --ink-900:#F3F8F2; --ink-950:#FBFDF9;
 
-  /* ── Accent — the render engine's own mint ── */
-  --mint-50:#F4FEE9; --mint-100:#E6FDCB; --mint-200:#CDFB9F; --mint-300:#ADF368;
-  --mint-400:#7BEC2D; --mint-500:#39E508; --mint-600:#2DC204; --mint-700:#259D07;
-  --mint-800:#217D0C; --mint-900:#1D6610; --mint-950:#0A3706;
+  /* ── Accent — the render engine's mint, re-tuned for white ──
+     Bright mint (#39E508) stays for FILLS and glows (dark text sits on it);
+     the text-carrying shades darken so accent text stays ≥ 4.5:1 on white. */
+  --mint-50:#F0FDF0; --mint-100:#DCFCE7; --mint-200:#BBF7D0; --mint-300:#15803D;
+  --mint-400:#16A34A; --mint-500:#39E508; --mint-600:#22C55E; --mint-700:#1B9239;
+  --mint-800:#15803D; --mint-900:#166534; --mint-950:#0A3706;
 
   /* ── Warm counterpoint (honesty + warning slots only) ── */
   --marigold-50:#FFF9EB; --marigold-100:#FFF0C9; --marigold-200:#FFE08F;
@@ -59,21 +66,21 @@
   --accent-red: #ef4444;
 
   /* ── Depth: layered gradients, glass shine, glows ── */
-  --grad-mint: linear-gradient(135deg, #7BEC2D 0%, #39E508 52%, #2DC204 100%);
-  --grad-text-mint: linear-gradient(120deg, #CDFB9F 0%, #39E508 58%, #7BEC2D 100%);
-  --grad-card: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, transparent 40%);
-  --grad-hero: linear-gradient(180deg, #040705 0%, #060B07 100%);
-  --radial-hero-a: radial-gradient(42% 46% at 84% 6%, rgba(57,229,8,0.17), transparent 68%);
-  --radial-hero-b: radial-gradient(40% 42% at 8% 92%, rgba(245,163,0,0.06), transparent 70%);
-  --radial-card: radial-gradient(130% 110% at 0% 0%, rgba(57,229,8,0.07), transparent 55%);
-  --pattern-dots: radial-gradient(rgba(227,234,226,0.045) 1px, transparent 1px);
+  --grad-mint: linear-gradient(135deg, #4ADE80 0%, #22C55E 52%, #16A34A 100%);
+  --grad-text-mint: linear-gradient(120deg, #15803D 0%, #16A34A 58%, #22C55E 100%);
+  --grad-card: linear-gradient(180deg, rgba(11,18,13,0.015) 0%, transparent 40%);
+  --grad-hero: linear-gradient(180deg, #FBFDF9 0%, #F4F8F3 100%);
+  --radial-hero-a: radial-gradient(42% 46% at 84% 6%, rgba(57,229,8,0.10), transparent 68%);
+  --radial-hero-b: radial-gradient(40% 42% at 8% 92%, rgba(245,163,0,0.07), transparent 70%);
+  --radial-card: radial-gradient(130% 110% at 0% 0%, rgba(57,229,8,0.05), transparent 55%);
+  --pattern-dots: radial-gradient(rgba(11,18,13,0.07) 1px, transparent 1px);
 
-  /* ── Shadows — sculpted, never neon-heavy ── */
-  --shadow-rest: 0 1px 2px rgba(0,0,0,.5), 0 12px 32px -12px rgba(0,0,0,.6);
-  --shadow-card: inset 0 1px 0 rgba(255,255,255,0.035), 0 20px 50px -22px rgba(0,0,0,.55);
-  --shadow-lift: 0 24px 60px -24px rgba(0,0,0,.65), 0 0 0 1px rgba(57,229,8,.10);
-  --shadow-accent: 0 8px 36px -8px rgba(57,229,8,.22);
-  --glow-mint: 0 0 90px -24px rgba(57,229,8,.4);
+  /* ── Shadows — soft, ambient (light themes need wider, quieter shadows) ── */
+  --shadow-rest: 0 1px 2px rgba(16,24,16,.05), 0 12px 32px -12px rgba(16,24,16,.10);
+  --shadow-card: inset 0 1px 0 rgba(255,255,255,0.85), 0 20px 50px -22px rgba(16,24,16,.12);
+  --shadow-lift: 0 24px 60px -24px rgba(16,24,16,.16), 0 0 0 1px rgba(45,194,4,.08);
+  --shadow-accent: 0 8px 36px -8px rgba(57,229,8,.30);
+  --glow-mint: 0 0 90px -24px rgba(57,229,8,.25);
 
   /* ── Radius & easing ── */
   --radius-card: 20px;
@@ -182,7 +189,7 @@
 /* ── Buttons — pill CTAs, mint on ink ── */
 .cm-btn-primary {
   background: var(--mint-500);
-  color: var(--ink-950);
+  color: #0B120D; /* dark on bright mint */
   border: none;
   padding: 12px 28px;
   border-radius: var(--radius-pill);
@@ -215,7 +222,7 @@
 
 /* Legacy alias kept for any non-marketing surface */
 .btn-primary {
-  background: var(--mint-500); color: var(--ink-950);
+  background: var(--mint-500); color: #0B120D; /* dark text on the bright-mint fill */
   border: none; padding: 12px 28px; border-radius: var(--radius-pill);
   font-weight: 600; font-size: 15px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -237,8 +244,8 @@
 .cm-card {
   position: relative;
   background:
-    radial-gradient(130% 110% at 0% 0%, rgba(57,229,8,0.055), transparent 55%),
-    linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 42%),
+    radial-gradient(130% 110% at 0% 0%, rgba(57,229,8,0.04), transparent 55%),
+    linear-gradient(180deg, rgba(11,18,13,0.012) 0%, transparent 42%),
     var(--surface-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-card);
@@ -340,8 +347,8 @@
   text-transform: uppercase;
   animation: chipPop .5s var(--ease-spring) both;
 }
-.phone-chip.mint { background: var(--mint-400); color: var(--ink-950); }
-.phone-chip.plain { background: rgba(10,14,11,.92); color: var(--ink-50); border: 1px solid var(--border-subtle); }
+.phone-chip.mint { background: var(--mint-400); color: #0B120D; }
+.phone-chip.plain { background: rgba(10,14,11,.92); color: #F2F7F1; border: 1px solid rgba(255,255,255,0.08); }
 
 /* ── Style marquee — the ONE loop on the page ── */
 .cm-marquee { position: relative; width: 100%; overflow: hidden; }
@@ -429,14 +436,15 @@
   backdrop-filter: blur(8px);
   transition: background .2s ease, transform .2s var(--ease-out-expo), color .2s ease;
 }
-.showcase-play:hover { background: var(--mint-500); color: var(--ink-950); transform: scale(1.06); }
-.showcase-play.is-playing { color: var(--ink-50); border-color: rgba(57,229,8,0.5); }
+.showcase-play:hover { background: var(--mint-500); color: #0B120D; transform: scale(1.06); }
+.showcase-play.is-playing { color: #F2F7F1; border-color: rgba(57,229,8,0.5); }
 .showcase-arrow {
   width: 44px; height: 44px; border-radius: var(--radius-pill);
   display: flex; align-items: center; justify-content: center;
-  background: rgba(11,18,13,0.85);
+  background: var(--surface-card);
   border: 1px solid var(--border-strong);
-  color: var(--ink-200);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-rest);
   cursor: pointer;
   backdrop-filter: blur(8px);
   transition: border-color .2s ease, color .2s ease, transform .2s var(--ease-out-expo), background .2s ease;
@@ -502,8 +510,8 @@
 }
 
 /* ── How it works rail ── */
-.step-rail { position: absolute; left: 25px; top: 22px; bottom: 22px; width: 1px; background: var(--border-subtle); }
-.step-rail-fill { position: absolute; left: 0; top: 0; width: 1px; height: 100%; background: linear-gradient(180deg, transparent, var(--mint-500)); transform-origin: top; }
+.step-rail { position: absolute; width: 2px; border-radius: 1px; background: var(--border-subtle); }
+.step-rail-fill { position: absolute; width: 2px; border-radius: 1px; background: linear-gradient(180deg, var(--mint-400), var(--mint-500)); transform-origin: top; }
 
 /* ── FAQ accordion (CSS grid-rows animation) ── */
 .faq-wrap { border-radius: var(--radius-card); border: 1px solid var(--border-subtle); background: rgba(255,255,255,0.012); transition: border-color .25s ease, background .25s ease; overflow: hidden; }
@@ -564,7 +572,7 @@
 
 /* ── Nav pill ── */
 .nav-shell { transition: border-color .3s ease, background .3s ease, box-shadow .3s ease; }
-.nav-shell.scrolled { border-color: var(--border-subtle); background: rgba(6,11,7,0.74); box-shadow: var(--shadow-rest); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+.nav-shell.scrolled { border-color: var(--border-subtle); background: var(--glass-bg); box-shadow: var(--shadow-rest); backdrop-filter: blur(18px) saturate(140%); -webkit-backdrop-filter: blur(18px) saturate(140%); }
 .nav-link { position: relative; color: var(--ink-300); transition: color .2s ease; }
 .nav-link:hover { color: var(--ink-50); }
 .nav-link::after {
@@ -579,10 +587,10 @@
 .cta-panel {
   position: relative;
   background:
-    radial-gradient(90% 120% at 50% 0%, rgba(57,229,8,0.13), transparent 60%),
+    radial-gradient(90% 120% at 50% 0%, rgba(57,229,8,0.10), transparent 60%),
     radial-gradient(60% 80% at 90% 100%, rgba(245,163,0,0.06), transparent 60%),
-    linear-gradient(180deg, #0A130B 0%, #050806 100%);
-  border: 1px solid rgba(57,229,8,0.28);
+    linear-gradient(180deg, #FFFFFF 0%, #F0FDF0 100%);
+  border: 1px solid rgba(45,194,4,0.30);
   border-radius: 28px;
   box-shadow: var(--shadow-lift), var(--glow-mint);
 }
@@ -708,10 +716,10 @@ input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .step-progress { display: flex; align-items: center; gap: 0; width: 100%; }
 .step-item { display: flex; flex-direction: column; align-items: center; gap: 8px; flex: 1; position: relative; }
 .step-circle { width: 34px; height: 34px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; z-index: 1; transition: all .3s ease; }
-.step-circle.completed { background: var(--mint-600); color: #030503; }
-.step-circle.active { background: var(--mint-500); color: var(--ink-950); }
+.step-circle.completed { background: var(--mint-600); color: #0B120D; }
+.step-circle.active { background: var(--mint-500); color: #0B120D; }
 .step-circle.pending { background: var(--ink-900); color: var(--text-muted); border: 1px solid var(--border-subtle); }
-.step-connector { position: absolute; top: 17px; left: calc(50% + 17px); right: calc(-50% + 17px); height: 2px; background: rgba(255,255,255,0.05); }
+.step-connector { position: absolute; top: 17px; left: calc(50% + 17px); right: calc(-50% + 17px); height: 2px; background: var(--border-faint); }
 .step-connector.completed { background: var(--mint-600); }
 .step-connector.active { background: var(--mint-500); }
 

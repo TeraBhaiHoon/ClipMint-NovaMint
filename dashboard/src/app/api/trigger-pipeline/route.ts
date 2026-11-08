@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/server";
 import { validateVideoUrl } from "@/lib/validateUrl";
 import { r2Configured, r2PresignGet } from "@/lib/r2";
-import { isPlanExpired } from "@/lib/cashfree";
+import { effectiveLimits } from "@/lib/types";
 
 /**
  * POST /api/trigger-pipeline
@@ -137,17 +137,19 @@ export async function POST(request: NextRequest) {
     // The dashboard reserves a video slot (increment_videos_used) *before* it
     // creates the job, so videos_used already includes this job. Only a value
     // above the limit means someone slipped past the reservation RPC.
-    if (profile.videos_used > profile.videos_limit) {
-        const message = `You've reached your limit of ${profile.videos_limit} video(s). Please upgrade.`;
+    // One-time plans expire: an expired paid plan is gated at FREE limits
+    // server-side, for BOTH resources (the stored profile limits still say
+    // Pro after expiry — they are restored on the next purchase).
+    const limits = effectiveLimits(profile);
+
+    const remainingVideos = Math.max(0, limits.videos - (profile.videos_used ?? 0));
+    if (remainingVideos < 1) {
+        const message = `You've reached your limit of ${limits.videos} video(s). Please upgrade.`;
         await failJob(quotaClient, job.id, message);
         return NextResponse.json({ error: message }, { status: 402 });
     }
 
-    // One-time plans expire: an expired paid plan is gated at Free limits server-side.
-    const expired = isPlanExpired(profile);
-    const effectiveClipsLimit = expired ? 5 : (profile.clips_limit ?? 0);
-
-    const remainingClips = Math.max(0, effectiveClipsLimit - (profile.clips_used ?? 0));
+    const remainingClips = Math.max(0, limits.clips - (profile.clips_used ?? 0));
     if (remainingClips < 1) {
         const message = "You've run out of clips. Please upgrade your plan to keep creating.";
         await failJob(quotaClient, job.id, message);

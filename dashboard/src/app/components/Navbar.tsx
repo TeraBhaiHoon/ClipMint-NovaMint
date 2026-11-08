@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { IconMenu, IconClose, IconMark, IconArrowRight } from "./Icons";
+import { IconMenu, IconClose, IconArrowRight } from "./Icons";
 
 /**
- * Sticky glass-pill nav. Wordmark = IconMark + Syne "ClipMint." with a
+ * Sticky glass-pill nav. Wordmark = the CM logo + Syne "ClipMint." with a
  * mint period. Anchors scroll to landing sections; the auth-aware CTA
  * resolves a Supabase session → "Dashboard" or "Start free". Mobile gets
  * a full-screen drawer with the same links.
@@ -67,7 +67,7 @@ export default function Navbar() {
             className="flex items-center gap-2.5 no-underline shrink-0"
             aria-label="ClipMint home"
           >
-            <IconMark className="w-[22px] h-[22px] text-mint-400" />
+            <img src="/logo-cm-128.png" alt="" className="w-[26px] h-[26px] object-contain [filter:drop-shadow(0_0_6px_rgba(57,229,8,0.45))] brightness-125" />
             <span className="font-[family-name:var(--font-display)] font-bold text-[21px] leading-none tracking-[-0.02em] text-ink-50">
               ClipMint<span className="text-mint-400">.</span>
             </span>

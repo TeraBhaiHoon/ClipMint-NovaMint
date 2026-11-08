@@ -84,19 +84,19 @@ export default function UpdatePasswordPage() {
 
     if (checking) {
         return (
-            <div className="min-h-screen bg-[#030305] text-[#f8fafc] flex flex-col justify-center items-center p-6 relative">
+            <div className="min-h-screen bg-[var(--bg-inset)] text-ink-50 flex flex-col justify-center items-center p-6 relative">
                 <Loader2 size={20} className="animate-spin text-mint-400" />
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-[#030305] text-[#f8fafc] flex flex-col justify-center items-center p-6 relative">
+        <div className="min-h-screen bg-[var(--bg-inset)] text-ink-50 flex flex-col justify-center items-center p-6 relative">
             {/* Ambient Background Glow */}
             <div className="absolute w-[350px] h-[350px] rounded-full bg-mint-500/10 blur-[100px] pointer-events-none -top-12" />
-            <div className="absolute w-[350px] h-[350px] rounded-full bg-[#06b6d4]/5 blur-[120px] pointer-events-none -bottom-12" />
+            <div className="absolute w-[350px] h-[350px] rounded-full bg-mint-500/5 blur-[120px] pointer-events-none -bottom-12" />
 
-            <Link href="/login" className="absolute top-8 left-8 flex items-center gap-2 text-sm text-slate-400 no-underline hover:text-slate-200 transition-colors">
+            <Link href="/login" className="absolute top-8 left-8 flex items-center gap-2 text-sm text-ink-300 no-underline hover:text-ink-100 transition-colors">
                 <ArrowLeft size={16} />
                 <span>Back to Sign In</span>
             </Link>
@@ -104,27 +104,27 @@ export default function UpdatePasswordPage() {
             <div className="glass-card w-full max-w-md p-8 md:p-10 shadow-2xl relative z-10">
                 {/* Logo */}
                 <div className="flex items-center justify-center gap-2.5 mb-2">
-                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 shadow-md">
-                        <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
+                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-[var(--border-subtle)] shadow-md">
+                        <img src="/logo-cm-128.png" alt="ClipMint" className="w-full h-full object-cover" />
                     </div>
                     <span className="gradient-text font-black text-2xl tracking-tight bg-text-mint-400">
                         ClipMint
                     </span>
                 </div>
 
-                <p className="text-center text-slate-400 text-xs sm:text-sm mb-8 font-medium">
+                <p className="text-center text-ink-300 text-xs sm:text-sm mb-8 font-medium">
                     Set a new password for your account
                 </p>
 
                 <form onSubmit={handleSubmit} className="flex flex-col gap-4">
                     <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-semibold text-slate-400">
+                        <label className="text-xs font-semibold text-ink-300">
                             New Password
                         </label>
                         <div className="relative">
                             <KeyRound
                                 size={15}
-                                className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
+                                className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400"
                             />
                             <input
                                 className="input-field pl-11!"
@@ -140,13 +140,13 @@ export default function UpdatePasswordPage() {
                     </div>
 
                     <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-semibold text-slate-400">
+                        <label className="text-xs font-semibold text-ink-300">
                             Confirm New Password
                         </label>
                         <div className="relative">
                             <Lock
                                 size={15}
-                                className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
+                                className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400"
                             />
                             <input
                                 className="input-field pl-11!"

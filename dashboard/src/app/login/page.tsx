@@ -187,12 +187,12 @@ export default function LoginPage() {
     };
 
     return (
-        <div className="min-h-screen bg-[#030305] text-[#f8fafc] flex flex-col justify-center items-center p-6 relative">
+        <div className="min-h-screen bg-[var(--bg-inset)] text-ink-50 flex flex-col justify-center items-center p-6 relative">
             {/* Ambient Background Glow */}
             <div className="absolute w-[350px] h-[350px] rounded-full bg-mint-500/10 blur-[100px] pointer-events-none -top-12" />
-            <div className="absolute w-[350px] h-[350px] rounded-full bg-[#06b6d4]/5 blur-[120px] pointer-events-none -bottom-12" />
+            <div className="absolute w-[350px] h-[350px] rounded-full bg-mint-500/5 blur-[120px] pointer-events-none -bottom-12" />
 
-            <Link href="/" className="absolute top-8 left-8 flex items-center gap-2 text-sm text-slate-400 no-underline hover:text-slate-200 transition-colors">
+            <Link href="/" className="absolute top-8 left-8 flex items-center gap-2 text-sm text-ink-300 no-underline hover:text-ink-100 transition-colors">
                 <ArrowLeft size={16} />
                 <span>Back to Home</span>
             </Link>
@@ -200,15 +200,15 @@ export default function LoginPage() {
             <div className="glass-card w-full max-w-md p-8 md:p-10 shadow-2xl relative z-10">
                 {/* Logo */}
                 <div className="flex items-center justify-center gap-2.5 mb-2">
-                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-white/10 shadow-md">
-                        <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
+                    <div className="w-8 h-8 rounded-lg overflow-hidden border border-[var(--border-subtle)] shadow-md">
+                        <img src="/logo-cm-128.png" alt="ClipMint" className="w-full h-full object-cover" />
                     </div>
                     <span className="gradient-text font-black text-2xl tracking-tight bg-text-mint-400">
                         ClipMint
                     </span>
                 </div>
 
-                <p className="text-center text-slate-400 text-xs sm:text-sm mb-8 font-medium">
+                <p className="text-center text-ink-300 text-xs sm:text-sm mb-8 font-medium">
                     {isForgotPassword
                         ? "Enter your email to reset your password"
                         : isSignUp
@@ -248,7 +248,7 @@ export default function LoginPage() {
                         {/* Divider */}
                         <div className="flex items-center gap-4 mb-6">
                             <div className="flex-1 h-px bg-white/5" />
-                            <span className="text-slate-500 text-xs font-semibold uppercase tracking-wider">or</span>
+                            <span className="text-ink-400 text-xs font-semibold uppercase tracking-wider">or</span>
                             <div className="flex-1 h-px bg-white/5" />
                         </div>
                     </>
@@ -257,13 +257,13 @@ export default function LoginPage() {
                 {/* Email/Password Form */}
                 <form onSubmit={handleEmailAuth} className="flex flex-col gap-4">
                     <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-semibold text-slate-400">
+                        <label className="text-xs font-semibold text-ink-300">
                             Email
                         </label>
                         <div className="relative">
                             <Mail
                                 size={15}
-                                className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
+                                className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400"
                             />
                             <input
                                 className="input-field pl-11!"
@@ -280,7 +280,7 @@ export default function LoginPage() {
                     {!isForgotPassword && (
                         <div className="flex flex-col gap-1.5">
                             <div className="flex justify-between items-center">
-                                <label className="text-xs font-semibold text-slate-400">
+                                <label className="text-xs font-semibold text-ink-300">
                                     Password
                                 </label>
                                 {!isSignUp && (
@@ -296,7 +296,7 @@ export default function LoginPage() {
                             <div className="relative">
                                 <Lock
                                     size={15}
-                                    className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500"
+                                    className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400"
                                 />
                                 <input
                                     className="input-field pl-11!"
@@ -354,7 +354,7 @@ export default function LoginPage() {
                 </form>
 
                 {/* Toggle sign up / sign in / forgot password */}
-                <p className="text-center mt-6 text-sm text-slate-500 font-medium">
+                <p className="text-center mt-6 text-sm text-ink-400 font-medium">
                     {isForgotPassword ? (
                         <button
                             onClick={switchToLogin}

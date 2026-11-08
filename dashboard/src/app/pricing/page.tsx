@@ -263,7 +263,7 @@ export default function PricingPage() {
                     </p>
 
                     {/* ─── Billing Period Toggle (one-time payments) ─── */}
-                    <div className="inline-flex items-center gap-1.5 p-1.5 rounded-xl bg-white/2.5 border border-white/5 shadow-inner mb-6">
+                    <div className="inline-flex items-center gap-1.5 p-1.5 rounded-xl bg-white/2.5 border border-[var(--border-subtle)] shadow-inner mb-6">
                         <button
                             onClick={() => setAnnual(false)}
                             className={`px-5 py-2 rounded-lg border-none font-semibold text-sm cursor-pointer transition-all duration-300 ${
@@ -398,7 +398,7 @@ export default function PricingPage() {
                     <div className="cm-card overflow-x-auto p-0">
                         <table className="w-full border-collapse text-sm min-w-[640px]">
                             <thead>
-                                <tr className="border-b border-white/5">
+                                <tr className="border-b border-[var(--border-subtle)]">
                                     <th className="cm-eyebrow text-left py-4 px-6 text-ink-500">
                                         Feature
                                     </th>
@@ -428,7 +428,7 @@ export default function PricingPage() {
                                 ].map((row) => (
                                     <tr
                                         key={row[0]}
-                                        className="border-b border-white/5 last:border-0 hover:bg-white/5"
+                                        className="border-b border-[var(--border-subtle)] last:border-0 hover:bg-white/5"
                                     >
                                         <td className="py-4 px-6 text-ink-300 font-medium">
                                             {row[0]}

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import type { Profile, Payment } from "@/lib/types";
-import { CAPTION_STYLES, PLAN_LIMITS, type CaptionStyle } from "@/lib/types";
+import { CAPTION_STYLES, PLAN_LIMITS, effectivePlanKey, type CaptionStyle } from "@/lib/types";
 import {
     User, Bell, CreditCard, ShieldAlert, Save, Loader2,
     ExternalLink, Check, Crown, Sparkles, AlertTriangle,
@@ -147,7 +147,8 @@ export default function SettingsPage() {
         );
     }
 
-    const planKey = profile?.plan ?? "free";
+    // Expired paid plans display — and gate — as Free everywhere.
+    const planKey = effectivePlanKey(profile);
     const planInfo = PLAN_LIMITS[planKey];
     const initial = (profile?.full_name || "U").charAt(0).toUpperCase();
     // One-time payments only — there is no subscription to cancel. The plan is
@@ -156,9 +157,10 @@ export default function SettingsPage() {
     const isExpired =
         !!periodEndDate && profile?.plan !== "free" && periodEndDate.getTime() < nowMs;
 
-    // Use Math.max to guarantee minimum free limits display of 2 videos / 5 clips
-    const clipsLimit = profile ? Math.max(planInfo.clips, profile.clips_limit) : planInfo.clips;
-    const videosLimit = profile ? Math.max(planInfo.videos, profile.videos_limit) : planInfo.videos;
+    // Effective limits (expired paid plans show the FREE limits they are
+    // actually gated at — not the stored Pro numbers).
+    const clipsLimit = planInfo.clips;
+    const videosLimit = planInfo.videos;
     const clipsUsed = profile?.clips_used ?? 0;
     const videosUsed = profile?.videos_used ?? 0;
     const usagePercent = Math.min(100, Math.round((clipsUsed / clipsLimit) * 100));
@@ -179,8 +181,8 @@ export default function SettingsPage() {
 
             {/* ─── Header ─── */}
             <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-100 mb-1">Settings</h1>
-                <p className="text-sm text-[#64748b]">
+                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-1">Settings</h1>
+                <p className="text-sm text-ink-400">
                     Manage your account, preferences, and plan
                 </p>
             </div>
@@ -209,8 +211,8 @@ export default function SettingsPage() {
                             {initial}
                         </div>
                         <div>
-                            <h2 className="text-xl font-bold text-slate-100">{fullName || "User"}</h2>
-                            <p className="text-sm text-[#64748b] mt-0.5">{email}</p>
+                            <h2 className="text-xl font-bold text-ink-50">{fullName || "User"}</h2>
+                            <p className="text-sm text-ink-400 mt-0.5">{email}</p>
                             <div className="mt-2.5">
                                 <span className={`plan-badge ${planKey}`}>
                                     {planKey} plan
@@ -221,7 +223,7 @@ export default function SettingsPage() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-8">
                         <div>
-                            <label className="block text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-2">Full Name</label>
+                            <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">Full Name</label>
                             <input
                                 type="text"
                                 value={fullName}
@@ -230,7 +232,7 @@ export default function SettingsPage() {
                             />
                         </div>
                         <div>
-                            <label className="block text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-2">Email Address</label>
+                            <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">Email Address</label>
                             <input
                                 type="email"
                                 value={email}
@@ -241,7 +243,7 @@ export default function SettingsPage() {
                     </div>
 
                     <div>
-                        <label className="block text-sm font-bold text-slate-200 mb-4">Default Caption Style</label>
+                        <label className="block text-sm font-bold text-ink-100 mb-4">Default Caption Style</label>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                             {CAPTION_STYLES.map((style) => (
                                 <button
@@ -249,8 +251,8 @@ export default function SettingsPage() {
                                     onClick={() => setDefaultStyle(style.value)}
                                     className={`p-3.5 rounded-xl text-left transition-all duration-200 flex items-center justify-between border ${
                                         defaultStyle === style.value
-                                            ? "border-mint-500 bg-mint-500/10 text-slate-100"
-                                            : "border-white/5 bg-[#08080c]/30 hover:border-white/10 text-[#94a3b8] hover:text-slate-200"
+                                            ? "border-mint-500 bg-mint-500/10 text-ink-50"
+                                            : "border-[var(--border-subtle)] bg-[var(--bg-inset)]/30 hover:border-[var(--border-subtle)] text-ink-300 hover:text-ink-100"
                                     }`}
                                 >
                                     <span className="text-sm font-semibold">
@@ -267,7 +269,7 @@ export default function SettingsPage() {
             {/* ═══════════ Notifications Tab ═══════════ */}
             {activeTab === "notifications" && (
                 <div className="glass-card p-6 sm:p-8">
-                    <h3 className="text-lg font-bold text-slate-100 mb-6 flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-ink-50 mb-6 flex items-center gap-2">
                         <Bell size={18} className="text-mint-400" />
                         Notification Preferences
                     </h3>
@@ -279,11 +281,11 @@ export default function SettingsPage() {
                             { key: "jobFailed" as const, label: "Job Failed", desc: "Alert when processing encounters errors" },
                             { key: "weeklyReport" as const, label: "Weekly Report", desc: "Summary of clips, performance, and usage" },
                         ].map((item) => (
-                            <div key={item.key} className="border-b border-white/5 last:border-0 pb-6 last:pb-0">
+                            <div key={item.key} className="border-b border-[var(--border-subtle)] last:border-0 pb-6 last:pb-0">
                                 <div className="flex justify-between items-center">
                                     <div>
-                                        <div className="text-sm font-semibold text-slate-200">{item.label}</div>
-                                        <div className="text-xs text-[#64748b] mt-1">{item.desc}</div>
+                                        <div className="text-sm font-semibold text-ink-100">{item.label}</div>
+                                        <div className="text-xs text-ink-400 mt-1">{item.desc}</div>
                                     </div>
                                     <button
                                         className={`toggle-switch ${notifications[item.key] ? "active" : ""}`}
@@ -292,8 +294,8 @@ export default function SettingsPage() {
                                 </div>
 
                                 {item.key === "discord" && notifications.discord && (
-                                    <div className="mt-4 pt-4 border-t border-white/5">
-                                        <label className="block text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-2">
+                                    <div className="mt-4 pt-4 border-t border-[var(--border-subtle)]">
+                                        <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">
                                             Discord Webhook URL
                                         </label>
                                         <input
@@ -328,12 +330,12 @@ export default function SettingsPage() {
                         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-6">
                             <div>
                                 <div className="flex items-center gap-2 mb-2">
-                                    <Crown size={20} className={planKey === "free" ? "text-[#64748b]" : "text-mint-400"} />
+                                    <Crown size={20} className={planKey === "free" ? "text-ink-400" : "text-mint-400"} />
                                     <span className="gradient-text bg-text-mint-400 text-xl font-extrabold">
                                         {planInfo.label} Plan
                                     </span>
                                 </div>
-                                <div className="text-sm text-[#64748b] leading-relaxed">
+                                <div className="text-sm text-ink-400 leading-relaxed">
                                     {clipsUsed} / {clipsLimit} clips used
                                     <br />
                                     {videosUsed} / {videosLimit} videos used
@@ -345,12 +347,12 @@ export default function SettingsPage() {
                         </div>
 
                         {/* Usage progress */}
-                        <div className="mt-6 pt-6 border-t border-white/5">
-                            <div className="flex justify-between text-xs text-[#64748b] font-semibold mb-2">
+                        <div className="mt-6 pt-6 border-t border-[var(--border-subtle)]">
+                            <div className="flex justify-between text-xs text-ink-400 font-semibold mb-2">
                                 <span>CLIPS USAGE</span>
                                 <span>{usagePercent}%</span>
                             </div>
-                            <div className="h-2 w-full rounded-full bg-[#08080c] overflow-hidden">
+                            <div className="h-2 w-full rounded-full bg-[var(--bg-inset)] overflow-hidden">
                                 <div className="h-full rounded-full bg-text-mint-400 transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
                             </div>
                         </div>
@@ -359,15 +361,15 @@ export default function SettingsPage() {
                     {/* ─── Plan Details Card (for paid users) ─── */}
                     {planKey !== "free" && (
                         <div className="glass-card p-6 sm:p-8">
-                            <h3 className="text-base font-bold text-slate-100 mb-6 flex items-center gap-2.5">
+                            <h3 className="text-base font-bold text-ink-50 mb-6 flex items-center gap-2.5">
                                 <CreditCard size={16} className="text-mint-400" />
                                 Subscription Details
                             </h3>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                                 {/* Status */}
-                                <div className="p-4 rounded-xl bg-[#08080c]/50 border border-white/5">
-                                    <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-wider mb-1.5">
+                                <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
+                                    <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
                                         Status
                                     </div>
                                     <div className="flex items-center gap-2">
@@ -375,7 +377,7 @@ export default function SettingsPage() {
                                             isExpired ? "bg-[#f59e0b]" : "bg-[#10b981]"
                                         }`} />
                                         <span className={`text-sm font-bold ${
-                                            isExpired ? "text-[#f59e0b]" : "text-slate-300"
+                                            isExpired ? "text-[#f59e0b]" : "text-ink-200"
                                         }`}>
                                             {isExpired ? "Expired — revert to Free" : "Active"}
                                         </span>
@@ -383,11 +385,11 @@ export default function SettingsPage() {
                                 </div>
 
                                 {/* Billing Period */}
-                                <div className="p-4 rounded-xl bg-[#08080c]/50 border border-white/5">
-                                    <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-wider mb-1.5">
+                                <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
+                                    <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
                                         Billing Period
                                     </div>
-                                    <div className="flex items-center gap-2 text-sm font-bold text-slate-200">
+                                    <div className="flex items-center gap-2 text-sm font-bold text-ink-100">
                                         {profile?.plan_period === "annual" ? (
                                             <><Calendar size={14} className="text-mint-400" /> <span>Annual (one-time)</span></>
                                         ) : (
@@ -397,24 +399,24 @@ export default function SettingsPage() {
                                 </div>
 
                                 {/* Amount */}
-                                <div className="p-4 rounded-xl bg-[#08080c]/50 border border-white/5">
-                                    <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-wider mb-1.5">
+                                <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
+                                    <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
                                         Amount
                                     </div>
-                                    <div className="text-sm font-bold text-slate-200">
+                                    <div className="text-sm font-bold text-ink-100">
                                         ₹{((profile?.plan_period === "annual" ? planInfo.annualPrice * 12 : planInfo.monthlyPrice) / 100).toLocaleString("en-IN")}
-                                        <span className="text-xs text-[#64748b] font-medium ml-1">paid once</span>
+                                        <span className="text-xs text-ink-400 font-medium ml-1">paid once</span>
                                     </div>
                                 </div>
 
                                 {/* Next Billing / Expiry */}
                                 {periodEndDate && (
-                                    <div className="p-4 rounded-xl bg-[#08080c]/50 border border-white/5">
-                                        <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-wider mb-1.5">
+                                    <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
+                                        <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
                                             {isExpired ? "Expired On" : "Active Until"}
                                         </div>
-                                        <div className="flex items-center gap-2 text-sm font-bold text-slate-200">
-                                            <Calendar size={14} className="text-[#64748b]" />
+                                        <div className="flex items-center gap-2 text-sm font-bold text-ink-100">
+                                            <Calendar size={14} className="text-ink-400" />
                                             <span>{periodEndDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
                                         </div>
                                     </div>
@@ -425,9 +427,9 @@ export default function SettingsPage() {
                             {isExpired && (
                                 <div className="p-4 rounded-xl bg-[#f59e0b]/5 border border-[#f59e0b]/15 mb-6 flex items-start gap-3">
                                     <AlertTriangle size={16} className="text-[#f59e0b] flex-shrink-0 mt-0.5" />
-                                    <span className="text-xs text-slate-300 leading-relaxed">
+                                    <span className="text-xs text-ink-200 leading-relaxed">
                                         Your plan expired on{" "}
-                                        <strong className="text-slate-100">{periodEndDate?.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong>{" "}
+                                        <strong className="text-ink-50">{periodEndDate?.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong>{" "}
                                         and has reverted to Free limits. Buy a plan again anytime to restore them — your clips stay in your dashboard.
                                     </span>
                                 </div>
@@ -438,7 +440,7 @@ export default function SettingsPage() {
                     {/* ─── Upgrade CTA (for free users) ─── */}
                     {planKey === "free" && (
                         <div className="glass-card p-6 sm:p-8">
-                            <h3 className="text-base font-bold text-slate-100 mb-5 flex items-center gap-2">
+                            <h3 className="text-base font-bold text-ink-50 mb-5 flex items-center gap-2">
                                 <Sparkles size={16} className="text-mint-400" />
                                 What you get with Creator Plan
                             </h3>
@@ -451,7 +453,7 @@ export default function SettingsPage() {
                                     "API access",
                                     "Email support",
                                 ].map((feature) => (
-                                    <div key={feature} className="flex items-center gap-2.5 text-sm text-[#94a3b8]">
+                                    <div key={feature} className="flex items-center gap-2.5 text-sm text-ink-300">
                                         <Check size={16} className="text-[#10b981] flex-shrink-0" />
                                         <span>{feature}</span>
                                     </div>
@@ -469,7 +471,7 @@ export default function SettingsPage() {
                     {/* ─── Payment History ─── */}
                     {payments.length > 0 && (
                         <div className="glass-card p-6 sm:p-8">
-                            <h3 className="text-base font-bold text-slate-100 mb-6 flex items-center gap-2.5">
+                            <h3 className="text-base font-bold text-ink-50 mb-6 flex items-center gap-2.5">
                                 <Receipt size={16} className="text-mint-400" />
                                 Payment History
                             </h3>
@@ -478,11 +480,11 @@ export default function SettingsPage() {
                                     <div
                                         key={payment.id}
                                         className={`flex justify-between items-center py-4 ${
-                                            i < payments.length - 1 ? "border-b border-white/5" : ""
+                                            i < payments.length - 1 ? "border-b border-[var(--border-subtle)]" : ""
                                         }`}
                                     >
                                         <div>
-                                            <div className="text-sm font-semibold text-slate-200">
+                                            <div className="text-sm font-semibold text-ink-100">
                                                 {payment.plan.charAt(0).toUpperCase() + payment.plan.slice(1)} Plan
                                                 <span className={`text-[10px] font-bold ml-2.5 px-2 py-0.5 rounded-md ${
                                                     payment.status === "captured"
@@ -492,7 +494,7 @@ export default function SettingsPage() {
                                                     {payment.status === "captured" ? "Paid" : payment.status}
                                                 </span>
                                             </div>
-                                            <div className="text-xs text-[#64748b] mt-1">
+                                            <div className="text-xs text-ink-400 mt-1">
                                                 {new Date(payment.created_at).toLocaleDateString("en-IN", {
                                                     day: "numeric", month: "short", year: "numeric",
                                                 })}
@@ -500,7 +502,7 @@ export default function SettingsPage() {
                                                 {payment.plan_period === "one_time" ? "One-time" : payment.plan_period === "annual" ? "Annual" : "Monthly"}
                                             </div>
                                         </div>
-                                        <div className="text-base font-bold text-slate-200">
+                                        <div className="text-base font-bold text-ink-100">
                                             ₹{(payment.amount / 100).toLocaleString("en-IN")}
                                         </div>
                                     </div>
@@ -515,10 +517,10 @@ export default function SettingsPage() {
             {activeTab === "security" && (
                 <div className="flex flex-col gap-6">
                     <div className="glass-card p-6 sm:p-8">
-                        <h3 className="text-base font-bold text-slate-100 mb-2 flex items-center gap-2">
+                        <h3 className="text-base font-bold text-ink-50 mb-2 flex items-center gap-2">
                             <Lock size={16} className="text-mint-400" /> Password
                         </h3>
-                        <p className="text-sm text-[#64748b] mb-6">
+                        <p className="text-sm text-ink-400 mb-6">
                             Change your password or set one if you signed up with Google OAuth
                         </p>
                         <button
@@ -546,7 +548,7 @@ export default function SettingsPage() {
                         <h3 className="text-base font-bold text-[#ef4444] mb-2 flex items-center gap-2">
                             <AlertTriangle size={16} /> Danger Zone
                         </h3>
-                        <p className="text-sm text-[#64748b] mb-6 leading-relaxed">
+                        <p className="text-sm text-ink-400 mb-6 leading-relaxed">
                             Permanently delete your account and all associated data. This action is irreversible — all your jobs, clips, API keys, and settings will be permanently removed.
                         </p>
                         <button
@@ -586,17 +588,17 @@ export default function SettingsPage() {
                             </div>
                             <div>
                                 <h3 className="text-lg font-bold text-[#ef4444]">Delete Account</h3>
-                                <p className="text-xs text-[#64748b] mt-1">This cannot be undone</p>
+                                <p className="text-xs text-ink-400 mt-1">This cannot be undone</p>
                             </div>
                         </div>
 
                         <div className="p-4 rounded-xl bg-[#ef4444]/5 border border-[#ef4444]/15 mb-5">
-                            <p className="text-sm text-slate-300 leading-relaxed">
+                            <p className="text-sm text-ink-200 leading-relaxed">
                                 All your data will be permanently deleted including jobs, clips, API keys, and settings.
                             </p>
                         </div>
 
-                        <label className="block text-xs font-semibold text-[#64748b] uppercase tracking-wider mb-2">
+                        <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">
                             Type <strong className="text-[#ef4444]">DELETE</strong> to confirm
                         </label>
                         <input

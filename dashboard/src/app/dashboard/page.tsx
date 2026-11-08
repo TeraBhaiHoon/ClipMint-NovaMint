@@ -170,10 +170,10 @@ export default function JobsPage() {
             {/* ─── Welcome Header ─── */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-slate-100">
+                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-ink-50">
                         {getGreeting()}{userName ? `, ${userName}` : ""} 👋
                     </h1>
-                    <p className="text-sm text-[#64748b]">
+                    <p className="text-sm text-ink-400">
                         Here&apos;s what&apos;s happening with your content today
                     </p>
                 </div>
@@ -187,12 +187,12 @@ export default function JobsPage() {
                 {statCards.map((stat) => (
                     <div key={stat.label} className="stat-card">
                         <div className="flex justify-between items-center mb-3">
-                            <span className="text-xs text-[#64748b] font-semibold uppercase tracking-wider">{stat.label}</span>
-                            <div className="stat-icon-bg border border-white/5" style={{ backgroundColor: stat.bg }}>
+                            <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">{stat.label}</span>
+                            <div className="stat-icon-bg border border-[var(--border-subtle)]" style={{ backgroundColor: stat.bg }}>
                                 <stat.icon size={18} style={{ color: stat.color }} />
                             </div>
                         </div>
-                        <div className="text-3xl font-bold tracking-tight text-slate-100 mb-1">
+                        <div className="text-3xl font-bold tracking-tight text-ink-50 mb-1">
                             {loading ? <div className="skeleton h-8 w-16" /> : stat.value}
                         </div>
                         {!loading && stat.label === "Completed" && totalJobs > 0 && (
@@ -207,7 +207,7 @@ export default function JobsPage() {
             {/* ─── Search + Filter ─── */}
             <div className="flex flex-col sm:flex-row gap-3 mb-6">
                 <div className="flex-1 relative">
-                    <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#64748b]" />
+                    <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400" />
                     <input 
                         className="input-field pl-11! py-3" 
                         placeholder="Search jobs..." 
@@ -223,16 +223,16 @@ export default function JobsPage() {
                         <Filter size={14} />
                         {statusFilter === "all" ? "Filter" : activeFilterLabel?.label}
                         {statusFilter !== "all" ? (
-                            <X size={12} className="cursor-pointer ml-1 text-[#64748b] hover:text-[#f8fafc] transition-colors" onClick={(e) => { e.stopPropagation(); setStatusFilter("all"); setShowFilterDropdown(false); }} />
+                            <X size={12} className="cursor-pointer ml-1 text-ink-400 hover:text-ink-50 transition-colors" onClick={(e) => { e.stopPropagation(); setStatusFilter("all"); setShowFilterDropdown(false); }} />
                         ) : <ChevronDown size={12} />}
                     </button>
                     {showFilterDropdown && (
-                        <div className="absolute top-[calc(100%+6px)] right-0 min-w-[180px] bg-[#0d0c12] border border-white/5 rounded-xl p-1.5 z-50 shadow-2xl animate-scale-in">
+                        <div className="absolute top-[calc(100%+6px)] right-0 min-w-[180px] bg-[var(--bg-inset)] border border-[var(--border-subtle)] rounded-xl p-1.5 z-50 shadow-2xl animate-scale-in">
                             {FILTER_OPTIONS.map((opt) => (
                                 <button
                                     key={opt.value}
                                     onClick={() => { setStatusFilter(opt.value); setShowFilterDropdown(false); }}
-                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-mint-500/15 text-[#f8fafc]" : "bg-transparent text-slate-400 hover:bg-white/5 hover:text-slate-200"}`}
+                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-mint-500/15 text-ink-50" : "bg-transparent text-ink-300 hover:bg-white/5 hover:text-ink-100"}`}
                                 >
                                     <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: opt.color }} />
                                     {opt.label}
@@ -255,10 +255,10 @@ export default function JobsPage() {
                     <div className="w-20 h-20 rounded-2xl bg-mint-500/10 border border-mint-500/20 flex items-center justify-center mb-6 shadow-inner mx-auto">
                         <Film size={44} className="text-mint-400 animate-pulse-glow" />
                     </div>
-                    <h3 className="text-lg font-bold text-slate-200 mb-2">
+                    <h3 className="text-lg font-bold text-ink-100 mb-2">
                         {statusFilter !== "all" ? "No matching jobs" : "No jobs yet"}
                     </h3>
-                    <p className="text-sm text-slate-400 max-w-xs mb-6 leading-relaxed">
+                    <p className="text-sm text-ink-300 max-w-xs mb-6 leading-relaxed">
                         {statusFilter !== "all" ? "Try a different filter or clear your search" : "Upload your first video to get started"}
                     </p>
                     {statusFilter === "all" && (
@@ -282,16 +282,16 @@ export default function JobsPage() {
                                 }}
                             >
                                 {/* Thumbnail placeholder */}
-                                <div className="w-12 h-12 rounded-xl flex-shrink-0 bg-mint-500/5 flex items-center justify-center border border-white/5">
-                                    <Film size={20} className="text-[#64748b]/60" />
+                                <div className="w-12 h-12 rounded-xl flex-shrink-0 bg-mint-500/5 flex items-center justify-center border border-[var(--border-subtle)]">
+                                    <Film size={20} className="text-ink-400/60" />
                                 </div>
 
                                 {/* Info */}
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-semibold text-slate-200 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
+                                    <div className="text-sm font-semibold text-ink-100 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
                                         {job.video_url || job.video_filename || "Untitled"}
                                     </div>
-                                    <div className="flex items-center gap-2 text-xs text-[#64748b]">
+                                    <div className="flex items-center gap-2 text-xs text-ink-400">
                                         <span>{job.caption_style}</span>
                                         <span className="opacity-30">•</span>
                                         <span>{timeAgo(job.created_at)}</span>
@@ -316,7 +316,7 @@ export default function JobsPage() {
                                                     strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.5s ease" }}
                                                 />
                                             </svg>
-                                            <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-slate-200">
+                                            <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-ink-100">
                                                 {job.progress}%
                                             </span>
                                         </div>

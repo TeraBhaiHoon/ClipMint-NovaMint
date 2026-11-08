@@ -7,7 +7,7 @@ import { Calendar, ArrowLeft, Mail, AlertTriangle, BadgePercent } from "lucide-r
 
 export default function RefundPolicyPage() {
     return (
-        <main className="overflow-hidden min-h-screen bg-[#030305] text-[#f8fafc]">
+        <main className="overflow-hidden min-h-screen bg-[var(--bg-inset)] text-ink-50">
             <Navbar />
 
             {/* Ambient Background Glow */}
@@ -32,7 +32,7 @@ export default function RefundPolicyPage() {
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 tracking-tight">
                         Refund <span className="gradient-text bg-text-mint-400">Policy</span>
                     </h1>
-                    <p className="text-slate-400 text-sm flex items-center justify-center gap-2">
+                    <p className="text-ink-300 text-sm flex items-center justify-center gap-2">
                         <Calendar size={13} />
                         <span>Last updated: March 9, 2026</span>
                     </p>
@@ -40,8 +40,8 @@ export default function RefundPolicyPage() {
 
                 {/* Main Legal Content Container */}
                 <div className="glass-card p-8 md:p-12 flex flex-col gap-8 shadow-xl shadow-mint-500/3">
-                    <section className="border-b border-white/5 pb-6">
-                        <p className="text-slate-300 leading-relaxed">
+                    <section className="border-b border-[var(--border-subtle)] pb-6">
+                        <p className="text-ink-200 leading-relaxed">
                             At NovaMint Networks, customer satisfaction is our top priority. We want you to be
                             completely confident using ClipMint. This Refund Policy outlines the terms under which
                             refunds may be requested and issued for our one-time plans.
@@ -49,23 +49,23 @@ export default function RefundPolicyPage() {
                     </section>
 
                     <section className="flex flex-col gap-4">
-                        <h2 className="text-xl sm:text-2xl font-bold text-slate-200">
+                        <h2 className="text-xl sm:text-2xl font-bold text-ink-100">
                             1. Refund Eligibility Window
                         </h2>
-                        <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
-                            We offer a <strong className="text-slate-200">7-day refund window</strong> from the date of
+                        <p className="text-ink-300 text-sm sm:text-base leading-relaxed">
+                            We offer a <strong className="text-ink-100">7-day refund window</strong> from the date of
                             your initial purchase. To qualify for a complete refund:
                         </p>
                         <ul className="list-none flex flex-col gap-3.5 pl-2 mt-2">
-                            <li className="text-sm text-slate-400 flex items-start gap-3">
+                            <li className="text-sm text-ink-300 flex items-start gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>The refund request must be made within 7 calendar days of your initial payment.</span>
                             </li>
-                            <li className="text-sm text-slate-400 flex items-start gap-3">
+                            <li className="text-sm text-ink-300 flex items-start gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>The request should state clearly why the AI clipping or captions did not meet your creative expectations.</span>
                             </li>
-                            <li className="text-sm text-slate-400 flex items-start gap-3">
+                            <li className="text-sm text-ink-300 flex items-start gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-mint-500 mt-2 flex-shrink-0" />
                                 <span>The account should have genuine usage (at least one video processed) rather than single sign-up with immediate cancellation.</span>
                             </li>
@@ -73,76 +73,76 @@ export default function RefundPolicyPage() {
                     </section>
 
                     <section className="flex flex-col gap-4">
-                        <h2 className="text-xl sm:text-2xl font-bold text-slate-200">
+                        <h2 className="text-xl sm:text-2xl font-bold text-ink-100">
                             2. Requesting a Refund
                         </h2>
-                        <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
+                        <p className="text-ink-300 text-sm sm:text-base leading-relaxed">
                             To initiate a refund request, simply email our billing support team:
                         </p>
-                        <div className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-white/5 text-sm text-slate-300 max-w-md">
+                        <div className="flex items-center gap-3 p-4 rounded-xl bg-white/1.5 border border-[var(--border-subtle)] text-sm text-ink-200 max-w-md">
                             <Mail size={16} className="text-mint-400 flex-shrink-0" />
                             <a href="mailto:ClipMint.Billing@gmail.com" className="hover:text-white transition-colors font-bold text-mint-300">
                                 ClipMint.Billing@gmail.com
                             </a>
                         </div>
-                        <p className="text-slate-400 text-xs mt-1">
+                        <p className="text-ink-300 text-xs mt-1">
                             Please specify your registered account email, date of purchase, plan type, and order ID if available.
                         </p>
                     </section>
 
                     <section className="flex flex-col gap-4">
-                        <h2 className="text-xl sm:text-2xl font-bold text-slate-200">
+                        <h2 className="text-xl sm:text-2xl font-bold text-ink-100">
                             3. Processing Timelines
                         </h2>
                         <ul className="list-none flex flex-col gap-3 pl-2">
-                            <li className="text-sm text-slate-400 flex items-center gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#06b6d4] flex-shrink-0" />
+                            <li className="text-sm text-ink-300 flex items-center gap-3">
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-600 flex-shrink-0" />
                                 <span>Acknowledgement & status verification of your ticket within 24 hours.</span>
                             </li>
-                            <li className="text-sm text-slate-400 flex items-center gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#06b6d4] flex-shrink-0" />
+                            <li className="text-sm text-ink-300 flex items-center gap-3">
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-600 flex-shrink-0" />
                                 <span>Processed refunds appear in your source bank/account within 5-7 business days.</span>
                             </li>
-                            <li className="text-sm text-slate-400 flex items-center gap-3">
-                                <span className="w-1.5 h-1.5 rounded-full bg-[#06b6d4] flex-shrink-0" />
+                            <li className="text-sm text-ink-300 flex items-center gap-3">
+                                <span className="w-1.5 h-1.5 rounded-full bg-mint-600 flex-shrink-0" />
                                 <span>All credits are automatically returned directly to the payment instrument used during order checkout.</span>
                             </li>
                         </ul>
                     </section>
 
                     <section className="flex flex-col gap-4">
-                        <h2 className="text-xl sm:text-2xl font-bold text-slate-200 flex items-center gap-2">
+                        <h2 className="text-xl sm:text-2xl font-bold text-ink-100 flex items-center gap-2">
                             <AlertTriangle size={18} className="text-[#ef4444]" />
                             <span>Non-Refundable Circumstances</span>
                         </h2>
-                        <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
+                        <p className="text-ink-300 text-sm sm:text-base leading-relaxed">
                             Refunds will not be issued under the following conditions:
                         </p>
                         <ul className="list-none flex flex-col gap-3 pl-2">
-                            <li className="text-sm text-slate-500 flex items-center gap-3">
+                            <li className="text-sm text-ink-400 flex items-center gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500/40 flex-shrink-0" />
                                 <span>Requests submitted after the 7-day initial window has expired.</span>
                             </li>
-                            <li className="text-sm text-slate-500 flex items-center gap-3">
+                            <li className="text-sm text-ink-400 flex items-center gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500/40 flex-shrink-0" />
                                 <span>Significant plan utilization (greater than 50% of the clips or videos processed).</span>
                             </li>
-                            <li className="text-sm text-slate-500 flex items-center gap-3">
+                            <li className="text-sm text-ink-400 flex items-center gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500/40 flex-shrink-0" />
                                 <span>Payments made after your first purchase (refunds apply strictly to the first charge).</span>
                             </li>
-                            <li className="text-sm text-slate-500 flex items-center gap-3">
+                            <li className="text-sm text-ink-400 flex items-center gap-3">
                                 <span className="w-1.5 h-1.5 rounded-full bg-red-500/40 flex-shrink-0" />
                                 <span>Suspension of service due to clear violations of our platform Acceptable Use policies.</span>
                             </li>
                         </ul>
                     </section>
 
-                    <section className="flex flex-col gap-4 border-t border-white/5 pt-8">
-                        <h2 className="text-xl sm:text-2xl font-bold text-slate-200">
+                    <section className="flex flex-col gap-4 border-t border-[var(--border-subtle)] pt-8">
+                        <h2 className="text-xl sm:text-2xl font-bold text-ink-100">
                             5. Plan Expiry
                         </h2>
-                        <p className="text-slate-400 text-sm sm:text-base leading-relaxed">
+                        <p className="text-ink-300 text-sm sm:text-base leading-relaxed">
                             Please note that cancelling your recurring billing and requesting a refund are separate actions.
                             You can cancel auto-billing at any time directly on your Settings page to stop future renewals, which
                             keeps your current plan active until the final day of the cycle.

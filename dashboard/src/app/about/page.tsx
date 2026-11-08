@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function AboutPage() {
     return (
-        <main className="overflow-hidden min-h-screen bg-[#030305] text-[#f8fafc]">
+        <main className="overflow-hidden min-h-screen bg-[var(--bg-inset)] text-ink-50">
             <Navbar />
 
             <div className="max-w-4xl mx-auto px-6 pt-36 pb-24 md:pt-44 md:pb-36 relative">
@@ -21,8 +21,8 @@ export default function AboutPage() {
                 {/* Hero */}
                 <div className="text-center mb-16">
                     <div className="inline-flex items-center gap-2.5 mb-6">
-                        <div className="w-9 h-9 rounded-lg overflow-hidden border border-white/10 shadow-md">
-                            <img src="/clipmint-logo.jpg" alt="ClipMint" className="w-full h-full object-cover" />
+                        <div className="w-9 h-9 rounded-lg overflow-hidden border border-[var(--border-subtle)] shadow-md">
+                            <img src="/logo-cm-128.png" alt="ClipMint" className="w-full h-full object-cover" />
                         </div>
                         <span className="gradient-text font-black text-3xl tracking-tight bg-text-mint-400">
                             ClipMint
@@ -31,7 +31,7 @@ export default function AboutPage() {
                     <h1 className="text-4xl sm:text-5xl font-extrabold mb-4 leading-tight">
                         Turning Long Videos Into <span className="gradient-text bg-text-mint-400">Viral Moments</span>
                     </h1>
-                    <p className="text-base sm:text-lg text-slate-400 max-w-xl mx-auto leading-relaxed">
+                    <p className="text-base sm:text-lg text-ink-300 max-w-xl mx-auto leading-relaxed">
                         ClipMint was built to solve a simple problem: content creators
                         spend hours editing long-form videos into short clips. We
                         automated the entire workflow with AI.
@@ -40,11 +40,11 @@ export default function AboutPage() {
 
                 {/* Story */}
                 <div className="glass-card p-8 md:p-10 mb-8">
-                    <h2 className="text-xl sm:text-2xl font-bold text-slate-200 mb-4 flex items-center gap-2.5">
+                    <h2 className="text-xl sm:text-2xl font-bold text-ink-100 mb-4 flex items-center gap-2.5">
                         <Lightbulb size={22} className="text-[#f59e0b]" />
                         <span>Our Story</span>
                     </h2>
-                    <p className="text-slate-400 leading-relaxed text-sm sm:text-base">
+                    <p className="text-ink-300 leading-relaxed text-sm sm:text-base">
                         ClipMint started as a personal tool — a weekend project to help
                         podcast creators turn 1-hour episodes into scroll-stopping clips.
                         After seeing the quality of AI transcription and the
@@ -52,7 +52,7 @@ export default function AboutPage() {
                         become a product that saves creators thousands of hours every
                         month.
                     </p>
-                    <p className="text-slate-400 leading-relaxed text-sm sm:text-base mt-4">
+                    <p className="text-ink-300 leading-relaxed text-sm sm:text-base mt-4">
                         Today, ClipMint processes videos end-to-end: downloading,
                         transcribing, detecting viral moments using AI, clipping with
                         precision, and rendering studio-quality animated captions — all
@@ -81,10 +81,10 @@ export default function AboutPage() {
                             <div className="w-11 h-11 rounded-xl bg-mint-500/10 flex items-center justify-center text-mint-400 border border-mint-500/20">
                                 {item.icon}
                             </div>
-                            <h3 className="text-lg font-bold text-slate-200">
+                            <h3 className="text-lg font-bold text-ink-100">
                                 {item.title}
                             </h3>
-                            <p className="text-sm text-slate-400 leading-relaxed">
+                            <p className="text-sm text-ink-300 leading-relaxed">
                                 {item.desc}
                             </p>
                         </div>
@@ -92,8 +92,8 @@ export default function AboutPage() {
                 </div>
 
                 {/* Company info */}
-                <div className="text-center text-slate-500 text-sm leading-relaxed border-t border-white/5 pt-8">
-                    <p className="font-bold text-slate-300">NovaMint Networks</p>
+                <div className="text-center text-ink-400 text-sm leading-relaxed border-t border-[var(--border-subtle)] pt-8">
+                    <p className="font-bold text-ink-200">NovaMint Networks</p>
                     <p className="mt-0.5">Founder of ClipMint - VIKASH MEENA</p>
                     <p className="mt-0.5">Jaipur, Rajasthan, India</p>
                     <p className="mt-2">

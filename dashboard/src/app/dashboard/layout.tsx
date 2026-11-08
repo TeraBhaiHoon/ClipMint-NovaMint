@@ -101,18 +101,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     const planKey = profile?.plan ?? "free";
 
     return (
-        <div className="flex min-h-screen bg-[#030305] text-[#f8fafc]">
+        <div className="flex min-h-screen bg-[var(--bg-inset)] text-ink-50">
             {/* ═══ Desktop Sidebar ═══ */}
             <aside className={`dash-sidebar ${collapsed ? "collapsed" : ""}`}>
                 {/* Logo + Collapse toggle */}
                 <div className="flex items-center justify-between px-2 mb-6">
                     <Link href="/" className="flex items-center gap-2.5 no-underline text-inherit">
-                        <img src="/clipmint-logo.jpg" alt="ClipMint" className="h-7 w-7 rounded-md object-cover flex-shrink-0 border border-white/10" />
+                        <img src="/logo-cm-128.png" alt="ClipMint" className="h-7 w-7 rounded-md object-cover flex-shrink-0 border border-[var(--border-subtle)]" />
                         {!collapsed && <span className="gradient-text sidebar-label text-lg font-extrabold tracking-tight from-mint-500 to-mint-700">ClipMint</span>}
                     </Link>
                     <button
                         onClick={() => setCollapsed(!collapsed)}
-                        className="bg-transparent border-none cursor-pointer text-[#64748b] hover:text-[#f8fafc] p-1 rounded-md transition-colors flex items-center justify-center"
+                        className="bg-transparent border-none cursor-pointer text-ink-400 hover:text-ink-50 p-1 rounded-md transition-colors flex items-center justify-center"
                         title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                     >
                         {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
@@ -121,13 +121,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
                 {/* User info */}
                 {!collapsed && profile && (
-                    <div className="p-3 mb-4 rounded-xl bg-[#0d0c12] border border-white/5">
+                    <div className="p-3 mb-4 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)]">
                         <div className="flex items-center gap-2.5">
                             <div className="w-9 h-9 rounded-full from-mint-500 to-mint-700 flex items-center justify-center text-sm font-bold text-white flex-shrink-0">
                                 {(profile.full_name || "U").charAt(0).toUpperCase()}
                             </div>
                             <div className="overflow-hidden">
-                                <div className="text-xs font-semibold whitespace-nowrap overflow-hidden text-ellipsis text-slate-200">
+                                <div className="text-xs font-semibold whitespace-nowrap overflow-hidden text-ellipsis text-ink-100">
                                     {profile.full_name || "User"}
                                 </div>
                                 <div className="flex items-center gap-1.5 mt-0.5">
@@ -155,7 +155,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 </nav>
 
                 {/* Usage meter — Donut */}
-                <div className="sidebar-usage-card p-4 rounded-xl bg-[#0d0c12] border border-white/5 mb-2">
+                <div className="sidebar-usage-card p-4 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] mb-2">
                     {collapsed ? (
                         <div className="flex justify-center">
                             <DonutMeter percent={usagePercent} size={40} strokeWidth={4} />
@@ -163,12 +163,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     ) : (
                         <div className="sidebar-label">
                             <div className="flex items-center justify-between mb-2.5">
-                                <span className="text-xs text-[#64748b] font-semibold tracking-wider">
+                                <span className="text-xs text-ink-400 font-semibold tracking-wider">
                                     USAGE
                                 </span>
                                 <DonutMeter percent={usagePercent} size={40} strokeWidth={4} />
                             </div>
-                            <div className="text-xs text-slate-400 font-medium">
+                            <div className="text-xs text-ink-300 font-medium">
                                 {loading ? (
                                     <Loader2 size={14} className="animate-spin text-mint-400" />
                                 ) : (
@@ -183,15 +183,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 {!collapsed && planKey === "free" && (
                     <Link href="/pricing" className="upgrade-card sidebar-label block no-underline">
                         <Sparkles size={16} className="text-mint-400 mx-auto mb-1.5" />
-                        <div className="text-xs font-bold text-slate-200 mb-0.5">Upgrade to Pro</div>
-                        <div className="text-[10px] text-[#64748b]">Unlock unlimited clips</div>
+                        <div className="text-xs font-bold text-ink-100 mb-0.5">Upgrade to Pro</div>
+                        <div className="text-[10px] text-ink-400">Unlock unlimited clips</div>
                     </Link>
                 )}
 
                 {/* Sign out */}
                 <button
                     onClick={handleSignOut}
-                    className={`flex items-center ${collapsed ? "justify-center" : "justify-start"} gap-2.5 px-3.5 py-2.5 mt-2 bg-transparent border border-white/5 hover:border-red-500/20 hover:bg-red-500/5 text-[#94a3b8] hover:text-red-400 rounded-xl cursor-pointer text-xs transition-all w-full font-medium`}
+                    className={`flex items-center ${collapsed ? "justify-center" : "justify-start"} gap-2.5 px-3.5 py-2.5 mt-2 bg-transparent border border-[var(--border-subtle)] hover:border-red-500/20 hover:bg-red-500/5 text-ink-300 hover:text-red-400 rounded-xl cursor-pointer text-xs transition-all w-full font-medium`}
                 >
                     <LogOut size={16} />
                     {!collapsed && <span className="sidebar-label">Sign Out</span>}

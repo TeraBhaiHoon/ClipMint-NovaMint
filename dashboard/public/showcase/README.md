@@ -1,56 +1,41 @@
-# ClipMint Showcase — drop real clips here
+# Showcase carousel — how to add your real clips
 
-This folder feeds the **showcase carousel** on the homepage. The carousel
-(`src/app/components/ShowcaseCarousel.tsx`) fetches
-`/showcase/manifest.json` at runtime and renders one 9:16 card per entry.
+The homepage carousel is fully manifest-driven: `ShowcaseCarousel.tsx` fetches
+`public/showcase/manifest.json` at runtime. A card with a `src` renders and
+autoplays the REAL video (muted, on hover/in-view); a card with `"src": null`
+renders a generated poster placeholder.
 
-## Folder layout
+## Add a clip (3 steps)
 
+1. **Drop the file** — put your finished 9:16 clip in `public/showcase/clips/`,
+   e.g. `clips/my-best-hook.mp4`. Keep it short (8–15s) and compressed
+   (`ffmpeg -i in.mp4 -vf scale=720:1280 -crf 25 out.mp4` lands around 2 MB).
+2. **Make the poster** — grab a frame ~70% in:
+   `ffmpeg -ss 11 -i clips/my-best-hook.mp4 -frames:v 1 -q:v 4 posters/my-best-hook.jpg`
+   (seek a couple of seconds BEFORE the clip ends — seeking to the exact
+   duration produces an empty file).
+3. **Register it** — put the entry FIRST in `public/showcase/manifest.json`
+   (the first card shows on the homepage above the fold):
+
+```json
+{
+  "src": "/showcase/clips/my-best-hook.mp4",
+  "poster": "/showcase/posters/my-best-hook.jpg",
+  "title": "The hook that stopped the scroll",
+  "duration": "0:12",
+  "style": "Hormozi",
+  "hue": "mint"
+}
 ```
-public/showcase/
-├── manifest.json   ← the source of truth for what the carousel shows
-├── clips/          ← put your finished MP4s here
-└── posters/        ← optional poster frames (JPG/WebP, 1080×1920-ish)
-```
 
-## How to add a real clip (2 minutes)
+Commit, push — sync-web mirrors it and the site redeploys automatically.
 
-1. Drop the finished clip into `public/showcase/clips/`
-   (e.g. `clips/episode-04-hook.mp4` — H.264/AAC, keep it to ~10–20 seconds
-   so the page stays fast).
-2. Optional but nice: drop a poster frame into `public/showcase/posters/`.
-   Without one, the carousel generates layered gradient art automatically.
-3. Edit `public/showcase/manifest.json`. Replace a placeholder entry like:
+## Rules of thumb
 
-   ```json
-   { "src": null, "title": "Your clip lands here", "duration": "0:12" }
-   ```
-
-   with a real entry:
-
-   ```json
-   {
-     "src": "/showcase/clips/episode-04-hook.mp4",
-     "poster": "/showcase/posters/episode-04-hook.jpg",
-     "title": "Episode 04 — the hook",
-     "duration": "0:42"
-   }
-   ```
-
-4. Push / redeploy. That's it — the card now plays the video (muted,
-   autoplay on hover or enter-viewport), shows the title + duration overlay,
-   and keeps the drag / arrow / snap controls.
-
-## Schema reference
-
-| field      | type            | required | meaning |
-|------------|-----------------|----------|---------|
-| `src`      | string \| null  | yes      | Site-root-relative path to the clip (`/showcase/clips/…`). `null` = keep the generated-poster placeholder. |
-| `poster`   | string \| null  | no       | Site-root-relative poster image path. Omit → generated gradient art. |
-| `title`    | string          | yes      | Shown overlaid on the card. |
-| `duration` | string          | yes      | Shown overlaid on the card (e.g. `"0:42"`). |
-| `style`    | string          | no       | Caption-style label drawn on generated posters. |
-| `hue`      | string          | no       | `"mint" \| "marigold" \| "emerald" \| "slate"` — generated-poster palette. |
-
-A missing or malformed manifest (or entries with a missing file) always
-falls back to the generated posters — the carousel never looks broken.
+- Real clips first; keep 1–2 `"src": null` placeholder slots at the end only
+  if you want the "your clip lands here" grid look.
+- Third-party footage needs a licence that allows it (the current demo clip is
+  Sintel © Blender Foundation, CC-BY 3.0 — attribution is shown in the
+  showcase subtitle; keep it there while the clip stays).
+- Trim the dead air — the card autoplays muted, so the first second must
+  already show the caption style doing its thing.
