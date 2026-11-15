@@ -107,6 +107,16 @@ on:
         required: false
         default: "false"
         type: string
+      source_language:
+        description: "Spoken-language hint for transcription: auto | hi | en. A hint is authoritative; auto requires two agreeing non-English chunks and never force-locks English."
+        required: false
+        default: "auto"
+        type: string
+      caption_language:
+        description: "Caption output language: original (default, no conversion) | hinglish (romanise Devanagari) | en (phrase-level translation)"
+        required: false
+        default: "original"
+        type: string
 
 concurrency:
   group: clipmint-${{ github.event.inputs.job_id }}
@@ -202,6 +212,8 @@ jobs:
           VIDEO_URL: ${{ inputs.video_url }}
           OUTPUT_FORMATS: ${{ inputs.output_formats }}
           JOB_MODE: ${{ inputs.job_mode }}
+          SOURCE_LANGUAGE: ${{ inputs.source_language }}
+          CAPTION_LANGUAGE: ${{ inputs.caption_language }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -210,6 +222,14 @@ jobs:
           job_mode = (os.environ.get("JOB_MODE") or "clips").strip()
           if job_mode not in ("clips", "captions"):
               print(f"INPUT_VALIDATION_FAILED: unsupported job_mode {job_mode!r}")
+              sys.exit(1)
+          source_language = (os.environ.get("SOURCE_LANGUAGE") or "auto").strip().lower() or "auto"
+          if source_language not in ("auto", "hi", "en"):
+              print(f"INPUT_VALIDATION_FAILED: source_language must be auto|hi|en, got {source_language!r}")
+              sys.exit(1)
+          caption_language = (os.environ.get("CAPTION_LANGUAGE") or "original").strip().lower() or "original"
+          if caption_language not in ("original", "hinglish", "en"):
+              print(f"INPUT_VALIDATION_FAILED: caption_language must be original|hinglish|en, got {caption_language!r}")
               sys.exit(1)
           url = os.environ["VIDEO_URL"].strip()
           formats = [f.strip() for f in os.environ.get("OUTPUT_FORMATS", "9x16").split(",") if f.strip()]
@@ -275,7 +295,7 @@ jobs:
             exit 0
           fi
 
-          for f in full_captions.json detected_language.txt silences.txt; do
+          for f in full_captions.json detected_language.txt transcription_meta.json silences.txt; do
             if [ -s "$CKPT_DIR/$f" ]; then cp "$CKPT_DIR/$f" "workspace/audio/$f"; fi
           done
           VIRAL_READY=false
@@ -434,164 +454,25 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          SOURCE_LANGUAGE: ${{ inputs.source_language }}
         run: |
           set -euo pipefail
           echo "transcribe" > workspace/.current_step
-          python3 - <<'PY'
-          import glob, json, math, os, re, subprocess, sys
-
-          sys.path.insert(0, "pipeline")
-          from transcribe_providers import transcribe
-
-          SEGMENT_SECONDS = 300
-          MAX_BYTES = 24_000_000
-
-          wav = "workspace/audio/audio.wav"
-          size = os.path.getsize(wav)
-          print(f"audio: {size} bytes")
-
-          for old in glob.glob("workspace/audio/chunk_*.wav"):
-              os.remove(old)
-
-          if size > MAX_BYTES:
-              print("splitting into 5-minute chunks")
-              split = subprocess.run(
-                  ["ffmpeg", "-i", wav, "-f", "segment",
-                   "-segment_time", str(SEGMENT_SECONDS), "-c", "copy",
-                   "workspace/audio/chunk_%03d.wav", "-y", "-loglevel", "error"],
-                  capture_output=True, text=True,
-              )
-              if split.returncode != 0:
-                  print("FATAL: audio split failed:",
-                        (split.stderr or split.stdout or "").strip()[-400:])
-                  sys.exit(1)
-          else:
-              copy = subprocess.run(["cp", wav, "workspace/audio/chunk_000.wav"],
-                                    capture_output=True, text=True)
-              if copy.returncode != 0:
-                  print("FATAL: could not stage audio chunk:",
-                        (copy.stderr or copy.stdout or "").strip()[-400:])
-                  sys.exit(1)
-
-          chunks = sorted(glob.glob("workspace/audio/chunk_*.wav"))
-          if not chunks:
-              print("FATAL: no audio chunks produced"); sys.exit(1)
-
-          # A partial split (disk full, runner killed mid-encode, odd codec)
-          # silently drops the video's TAIL: the chunks that exist still
-          # transcribe, and the step reports TRANSCRIBE_OK with a transcript
-          # that is missing the last N minutes. Verify the chunks re-cover the
-          # whole audio before paying for transcription of a truncated file.
-          probe = subprocess.run(
-              ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-               "-of", "csv=p=0", wav],
-              capture_output=True, text=True,
-          )
-          src_dur = 0.0
-          try:
-              src_dur = float((probe.stdout or "").strip() or 0)
-          except ValueError:
-              src_dur = 0.0
-          if src_dur > 0:
-              expected = int(math.ceil(src_dur / SEGMENT_SECONDS))
-              if len(chunks) < expected:
-                  print(f"FATAL: audio split produced {len(chunks)}/{expected} "
-                        f"chunks — the transcript would be truncated; aborting")
-                  sys.exit(1)
-          print(f"chunks: {len(chunks)}")
-
-          HALLUCINATIONS = {
-              "thank you for watching", "thanks for watching",
-              "subscribe to my channel", "please like and share",
-              "please subscribe", "like share and subscribe",
-              "don't forget to subscribe", "hit the bell icon",
-              "see you in the next video", "subtitles by", "captions by",
-              "translated by", "music playing",
-          }
-
-          def clean(words):
-              """Remove Whisper's punctuation-only tokens, repetition loops and
-              known hallucinated sign-offs."""
-              kept = []
-              for w in words:
-                  text = (w.get("text") or "").strip()
-                  if not text:
-                      continue
-                  if re.fullmatch(r"[^\w\s]+", text):
-                      continue
-                  if len(text) == 1 and text.lower() not in ("i", "a", "o"):
-                      continue
-                  span = w["endMs"] - w["startMs"]
-                  if span <= 0 or span > 8000:
-                      continue
-                  kept.append(w)
-
-              deduped, run = [], 1
-              for i, w in enumerate(kept):
-                  if i > 0 and w["text"].lower() == kept[i - 1]["text"].lower():
-                      run += 1
-                      if run > 3:
-                          continue
-                  else:
-                      run = 1
-                  deduped.append(w)
-
-              final, skip_to = [], -1
-              for i, w in enumerate(deduped):
-                  if i < skip_to:
-                      continue
-                  escaped = False
-                  for phrase in HALLUCINATIONS:
-                      n = len(phrase.split())
-                      window = " ".join(d["text"].lower() for d in deduped[i:i + n])
-                      if window == phrase:
-                          print(f"    removed hallucination: {phrase!r}")
-                          skip_to = i + n
-                          escaped = True
-                          break
-                  if not escaped:
-                      final.append(w)
-              return final
-
-          all_words, detected = [], None
-          for idx, chunk in enumerate(chunks):
-              offset = idx * SEGMENT_SECONDS
-              print(f"chunk {idx + 1}/{len(chunks)} (offset {offset}s)")
-
-              # Once a chunk has locked the language, Hindi/Hinglish content
-              # prefers Deepgram nova-3 first (best code-switched accuracy).
-              prefer_hindi_first = detected == "hi"
-              # "multi" is not a valid Groq language hint; only pass real codes.
-              forced = detected if (detected and detected != "multi") else None
-              try:
-                  result = transcribe(chunk, offset, forced_language=forced,
-                                      prefer_hindi_first=prefer_hindi_first)
-              except Exception as exc:  # noqa: BLE001
-                  print(f"FATAL: transcription failed on chunk {idx + 1}: {exc}")
-                  sys.exit(1)
-
-              if detected is None:
-                  detected = (result.get("language") or "en").lower()
-                  print(f"language locked: {detected} (provider={result.get('provider')})")
-
-              words = result["words"]
-              if not words:
-                  print(f"FATAL: chunk {idx + 1} produced an empty transcript")
-                  sys.exit(1)
-              all_words.extend(words)
-
-          if not all_words:
-              print("FATAL: transcript is empty"); sys.exit(1)
-
-          cleaned = clean(all_words)
-          print(f"words: {len(all_words)} raw -> {len(cleaned)} filtered")
-          if len(cleaned) < 10:
-              print("FATAL: too few words survive filtering"); sys.exit(1)
-
-          json.dump(cleaned, open("workspace/audio/full_captions.json", "w"))
-          open("workspace/audio/detected_language.txt", "w").write(detected or "en")
-          print(f"TRANSCRIBE_OK words={len(cleaned)} language={detected}")
-          PY
+          # Real source metadata (written by the download step) biases
+          # proper-noun spelling; absent on resumed runs, where the module
+          # simply runs without context.
+          TITLE=""
+          TAGS=""
+          if [ -s workspace/source/metadata.json ]; then
+            TITLE="$(python3 -c "import json; print((json.load(open('workspace/source/metadata.json')).get('title') or '')[:120])" 2>/dev/null || true)"
+            TAGS="$(python3 -c "import json; print(','.join(str(t) for t in (json.load(open('workspace/source/metadata.json')).get('tags') or [])[:12]))" 2>/dev/null || true)"
+          fi
+          python3 pipeline/transcription.py \
+            --wav workspace/audio/audio.wav \
+            --outdir workspace/audio \
+            --source-language "$SOURCE_LANGUAGE" \
+            ${TITLE:+--title "$TITLE"} \
+            ${TAGS:+--tags "$TAGS"}
 
       - name: Save raw transcription checkpoint
         timeout-minutes: 3
@@ -604,7 +485,10 @@ jobs:
           set -euo pipefail
           REMOTE=$(rclone listremotes | head -1 | tr -d ':')
           BASE="ClipMint/${JOB_ID}/_checkpoints"
-          for f in full_captions.json detected_language.txt; do
+          # This checkpoint holds the RAW (pre-conversion) captions on purpose:
+          # a retry with a different caption_language re-converts from it
+          # instead of reusing stale converted text.
+          for f in full_captions.json detected_language.txt transcription_meta.json; do
             rclone copy "workspace/audio/$f" "${REMOTE}:${BASE}/" \
               --drive-root-folder-id="$GDRIVE_FOLDER_ID" --stats-one-line
           done
@@ -635,17 +519,32 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 6. Hinglish transliteration — bounded optional language cleanup
+      # 6. Caption language conversion — only when the job asked for it
       # ─────────────────────────────────────────────────────────────────────
-      - name: Transliterate Devanagari to Hinglish
+      # original (default): captions stay exactly as the provider produced
+      #   them — romanisation is never unconditional.
+      # hinglish: bounded word-level Devanagari → Hinglish romanisation here,
+      #   before clipping (script conversion must cover the whole transcript).
+      # en: deferred to clip level AFTER prepare — see the
+      #   "Convert clip captions (English)" step; only delivered clips are
+      #   translated, which bounds the LLM cost.
+      - name: Convert captions to Hinglish
         timeout-minutes: 5
+        if: inputs.caption_language == 'hinglish'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
-          echo "transliterate" > workspace/.current_step
-          python3 pipeline/transliterate.py workspace/audio/full_captions.json --budget-seconds 180
+          echo "convert_language" > workspace/.current_step
+          # Fail-closed: leftover Devanagari (provider outage / exhausted
+          # budget) exits 1 with a clear CONVERSION_UNAVAILABLE marker; the
+          # RAW captions and checkpoint stay intact so a retry re-converts.
+          # Never silently deliver the wrong language.
+          python3 pipeline/caption_language.py hinglish \
+            --captions workspace/audio/full_captions.json \
+            --meta-file workspace/audio/transcription_meta.json \
+            --budget-seconds 180
 
       # ─────────────────────────────────────────────────────────────────────
       # 7. Audio analysis
@@ -703,7 +602,12 @@ jobs:
           set -euo pipefail
           REMOTE=$(rclone listremotes | head -1 | tr -d ':')
           BASE="ClipMint/${JOB_ID}/_checkpoints"
-          for f in full_captions.json detected_language.txt silences.txt; do
+          # full_captions.json / detected_language.txt / transcription_meta.json
+          # were already checkpointed RAW (pre-conversion) by the earlier save
+          # step; only the silence file is new here. Keeping the raw captions
+          # authoritative means a retry with a different caption_language
+          # re-converts instead of reusing stale converted text.
+          for f in silences.txt; do
             rclone copy "workspace/audio/$f" "${REMOTE}:${BASE}/" \
               --drive-root-folder-id="$GDRIVE_FOLDER_ID" --stats-one-line
           done
@@ -1095,6 +999,28 @@ jobs:
             $MODE_FLAGS
 
       # ─────────────────────────────────────────────────────────────────────
+      # 10c. English caption conversion — CLIP-LEVEL (bounds LLM cost to the
+      # clips that actually ship). Each clip's caption words are translated at
+      # phrase level with their timings preserved; a conversion that cannot be
+      # satisfied keeps the source language and says so loudly (the module
+      # prints CONVERSION_* markers), never silently ships the wrong language.
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Convert clip captions (English)
+        timeout-minutes: 20
+        if: inputs.caption_language == 'en'
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+        run: |
+          set -euo pipefail
+          echo "convert_captions_en" > workspace/.current_step
+          python3 pipeline/caption_language.py english \
+            --clipsdir workspace/clips \
+            --source-language-file workspace/audio/detected_language.txt \
+            --meta-file workspace/audio/transcription_meta.json \
+            --budget-seconds 240
+
+      # ─────────────────────────────────────────────────────────────────────
       # 11. Render captions (parallel; failures are reported, never hidden)
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: captioning"
@@ -1191,15 +1117,36 @@ jobs:
                   plan = root / "assets" / f"clip_{e['index']:03d}_assets.json"
                   if plan.is_file():
                       shutil.copy2(plan, d / plan.name)
+                  # Per-clip conversion report (caption_language.py) rides
+                  # with the clip as evidence of the language that shipped.
+                  conv = root / "clips" / f"clip_{e['index']:03d}.conversion.json"
+                  if conv.is_file():
+                      shutil.copy2(conv, d / conv.name)
               (d / "clips_manifest.json").write_text(json.dumps(entries, indent=2))
 
           meta = root / "meta"
           meta.mkdir(parents=True, exist_ok=True)
           (meta / "custom").mkdir(parents=True, exist_ok=True)
+          # Custom BGM must ride with the render inputs: the render job's
+          # restore step copies meta/custom/{_custom.mp3,custom_bgm.env}, and
+          # neither file lives under shard-*/ otherwise — every custom-BGM job
+          # would fail at restore.
+          env_file = root / "custom_bgm.env"
+          if env_file.is_file():
+              shutil.copy2(env_file, meta / "custom" / "custom_bgm.env")
+          custom_bgm = Path("remotion-captions/public/bgm/_custom.mp3")
+          if custom_bgm.is_file():
+              shutil.copy2(custom_bgm, meta / "custom" / "_custom.mp3")
           for f in ("clips_manifest.json", "viral_moments.json"):
               src = root / "clips" / f
               if src.exists():
                   shutil.copy2(src, meta / f)
+          # Transcription + conversion evidence rides to the finalize job in
+          # the meta artifact (language, language_source, per-chunk providers
+          # and confidences, conversion warnings for the dashboard).
+          audio_meta = root / "audio" / "transcription_meta.json"
+          if audio_meta.is_file():
+              shutil.copy2(audio_meta, meta / "transcription_meta.json")
           # Job-level asset plan + the staged BGM audio files (the render job
           # re-checks out the repo, so per-job audio must ship via artifact).
           if (root / "assets" / "asset_plan.json").is_file():
@@ -1406,6 +1353,35 @@ jobs:
             cp workspace-downloaded/meta/clips_manifest.json workspace/clips/
           fi
           [ -f workspace-downloaded/meta/viral_moments.json ] && cp workspace-downloaded/meta/viral_moments.json workspace/clips/ || true
+          # Transcription metadata restoration: the split step ships it under
+          # meta/ and pipeline/save_results.py reads it from workspace/output/
+          # for detected_language + transcription_report persistence. Explicit
+          # marker either way so a missing artifact is checkable in the log.
+          if [ -f workspace-downloaded/meta/transcription_meta.json ]; then
+            cp workspace-downloaded/meta/transcription_meta.json workspace/output/transcription_meta.json
+            echo "TRANSCRIPTION_META_RESTORED from meta artifact"
+          else
+            echo "TRANSCRIPTION_META_ABSENT: transcription step did not stage meta/transcription_meta.json (job row keeps its existing values)"
+          fi
+          # QA caption coverage: the captions files ride with each shard's
+          # clips; restore them into workspace/clips (deduped by name — every
+          # shard carries identical copies of its own clips' captions) so the
+          # Score clip quality instrument measures caption coverage instead of
+          # silently running captions-less.
+          python3 - <<'PY'
+          import shutil
+          from pathlib import Path
+
+          root = Path("workspace-downloaded")
+          dest = Path("workspace/clips")
+          merged = 0
+          for src in sorted(root.glob("shard-*/clips/*.captions.json")):
+              target = dest / src.name
+              if not target.exists():
+                  shutil.copy2(src, target)
+                  merged += 1
+          print(f"QA_CAPTIONS_RESTORED merged={merged}")
+          PY
           if [ "$PROCESS_RESULT" = "success" ] && [ "$RENDER_RESULT" = "success" ]; then
             echo "OVERALL_STATUS=success" >> "$GITHUB_ENV"
             echo "CURRENT_STEP=finalize" >> "$GITHUB_ENV"
@@ -1765,8 +1741,15 @@ jobs:
           PY
 
       # ─────────────────────────────────────────────────────────────────────
-      # 13. Record results
+      # 13. Record results (atomic accounting — supabase/migration_quota_v2.sql)
       # ─────────────────────────────────────────────────────────────────────
+      # pipeline/save_results.py calls finalize_job_results: clip-row insert +
+      # quota charge + status=done in ONE database transaction, so a job can
+      # never end up done-but-uncharged or charged-without-rows, and a retried
+      # finalize cannot double-charge. A transient failure here FAILS THE STEP
+      # (fail-closed): the job is handed to the failure path, which refunds the
+      # reservation. Billable unit (computed in SQL): DISTINCT ready 9x16
+      # master clip indexes — variants and failed clips are never billed.
       - name: Save results to Supabase
         if: env.OVERALL_STATUS == 'success'
         env:
@@ -1776,160 +1759,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "save_results" > workspace/.current_step
-          python3 - <<'PY'
-          import glob, json, os, re, sys
-          from datetime import datetime, timezone
-
-          sys.path.insert(0, "pipeline")
-          from db import Supabase
-
-          job_id = os.environ["JOB_ID"]
-          db = Supabase()
-
-          manifest = json.load(open("workspace/output/upload_manifest.json"))
-          prepared = {c["file"]: c for c in json.load(open("workspace/clips/clips_manifest.json"))}
-          moments = json.load(open("workspace/clips/viral_moments.json")).get("clips", [])
-          render = json.load(open("workspace/render_report.json"))
-          # (clip index, variant) → render result, so every uploaded file maps
-          # to the render that actually produced it.
-          render_by = {(r["index"], r.get("variant", "9x16")): r for r in render["results"]}
-          # Private-storage delivery manifest (publish step): (index, variant) →
-          # storage paths, so the dashboard can serve downloads with signed URLs.
-          delivery_by = {}
-          try:
-              for d in json.load(open("workspace/output/delivery_manifest.json")).get("files", []):
-                  delivery_by[(int(d["index"]), d.get("variant", "9x16"))] = d
-          except (OSError, ValueError, KeyError, TypeError):
-              print("  note: no delivery manifest (publish step skipped or failed)")
-
-          def variant_of(name):
-              for variant, suffix in (("9x16", "_captioned.mp4"), ("1x1", "_1x1.mp4"),
-                                      ("16x9", "_16x9.mp4")):
-                  if name.endswith(suffix):
-                      return variant, name[: -len(suffix)]
-              return "9x16", name[: -len(".mp4")]
-
-          # Quality-instrument reports (finalize's "Score clip quality" step):
-          # per MASTER clip index → {score, checks, loudness, clip}. Older
-          # jobs and skipped QA runs leave this empty → NULL in the row, which
-          # the dashboard renders as "not measured".
-          qa_by = {}
-          for f in glob.glob("workspace/qa/clip_*_qa.json"):
-              try:
-                  qa_by[int(re.search(r"clip_(\d+)_qa", f).group(1))] = json.load(open(f))
-              except (OSError, ValueError, AttributeError):
-                  continue
-          qa_score_by = {
-              i: int(r["score"]) for i, r in qa_by.items()
-              if isinstance(r.get("score"), (int, float))
-          }
-
-          user_id = db.get_job(job_id)["user_id"]
-          rows, failed = [], []
-
-          for clip in manifest["clips"]:
-              variant, base = variant_of(clip["name"])
-              try:
-                  index = int(base.split("_")[1])
-              except (IndexError, ValueError):
-                  print(f"  ! skipping unrecognised upload file: {clip['name']}")
-                  continue
-              info = prepared.get(f"clip_{index:03d}.mp4", {})
-              moment = moments[index] if index < len(moments) else {}
-              rendered = render_by.get((index, variant), {})
-              captured = bool(rendered.get("ok"))
-
-              rows.append({
-                  "job_id": job_id,
-                  "user_id": user_id,
-                  "clip_index": index,
-                  # One row per variant (3.4): the same master clip appears once
-                  # per delivered aspect ratio, tagged in clips.variant.
-                  "variant": variant,
-                  "filename": clip["name"],
-                  "duration_seconds": info.get("duration"),
-                  # Prefer the window ffmpeg ACTUALLY rendered (silence-snapped
-                  # and length-clamped) over the raw moment, so the stored span
-                  # always matches the delivered clip.
-                  "start_time": float(info.get("start", moment.get("start_time", 0)) or 0),
-                  "end_time": float(info.get("end", moment.get("end_time", 0)) or 0),
-                  "title": moment.get("title", f"Clip {index + 1}"),
-                  "description": moment.get("description", ""),
-                  "hashtags": moment.get("hashtags", []),
-                  "hook_caption": moment.get("hook", ""),
-                  "viral_score": int(float(moment.get("viral_score", 50) or 50)),
-                  # Quality instrument (master clip). NULL = not measured.
-                  "quality_score": qa_score_by.get(index),
-                  "quality_report": qa_by.get(index) or None,
-                  "drive_file_id": clip.get("id", ""),
-                  "drive_url": clip.get("url", ""),
-                  "thumbnail_url": clip.get("thumbnail_url", ""),
-                  "storage_path": (delivery_by.get((index, variant)) or {}).get("storage_path") or None,
-                  "thumbnail_path": (delivery_by.get((index, variant)) or {}).get("thumbnail_path") or None,
-                  "thumbnail_drive_id": (delivery_by.get((index, variant)) or {}).get("thumbnail_drive_id") or None,
-                  # A clip whose captions failed to render is marked failed rather
-                  # than quietly delivered without captions.
-                  "status": "ready" if captured else "failed",
-              })
-              if not captured:
-                  failed.append(f"{index}:{variant}")
-
-          # Renders that FAILED are deleted by render_clips.py (so a broken file
-          # never ships), which means they never appear in the upload manifest
-          # and the loop above would silently drop them. Re-surface every
-          # non-ok render result as an explicit failed row so the dashboard
-          # still shows what happened instead of just fewer clips.
-          delivered = {(r["clip_index"], r.get("variant", "9x16")) for r in rows}
-          for r in render["results"]:
-              key = (r["index"], r.get("variant", "9x16"))
-              if r.get("ok") or key in delivered:
-                  continue
-              index, variant = key
-              moment = moments[index] if index < len(moments) else {}
-              suffix = "_captioned.mp4" if variant == "9x16" else f"_{variant}.mp4"
-              rows.append({
-                  "job_id": job_id,
-                  "user_id": user_id,
-                  "clip_index": index,
-                  "variant": variant,
-                  "filename": f"clip_{index:03d}{suffix} (render failed, not delivered)",
-                  "duration_seconds": None,
-                  "start_time": float(moment.get("start_time", 0) or 0),
-                  "end_time": float(moment.get("end_time", 0) or 0),
-                  "title": moment.get("title", f"Clip {index + 1}"),
-                  "description": moment.get("description", ""),
-                  "hashtags": moment.get("hashtags", []),
-                  "hook_caption": moment.get("hook", ""),
-                  "viral_score": int(float(moment.get("viral_score", 50) or 50)),
-                  "drive_file_id": "",
-                  "drive_url": "",
-                  "thumbnail_url": "",
-                  "storage_path": None,
-                  "thumbnail_path": None,
-                  "thumbnail_drive_id": None,
-                  "status": "failed",
-              })
-              failed.append(f"{index}:{variant}")
-
-          inserted = db.insert_clips(job_id, rows)
-
-          db.update_job(
-              job_id,
-              status="done",
-              progress=100,
-              clips_count=len(rows),
-              drive_folder_id=manifest.get("folder_id", ""),
-              completed_at=datetime.now(timezone.utc).isoformat(),
-              error_message=(
-                  f"{len(failed)} of {len(rows)} clips could not be captioned "
-                  f"(clip indexes {failed})."
-                  if failed else None
-              ),
-          )
-          print(f"SAVE_OK clips={inserted} caption_failures={len(failed)}")
-          if failed:
-              print("WARNING: some clips were delivered without captions and marked failed")
-          PY
+          python3 pipeline/save_results.py
 
       # ─────────────────────────────────────────────────────────────────────
       # 13b. Clean up the source upload (transient by design)
@@ -2088,8 +1918,18 @@ jobs:
           sys.path.insert(0, "pipeline")
           from db import Supabase
           try:
-              Supabase().set_error(os.environ["JOB_ID"], os.environ["REASON"])
-              print("recorded failure — step:", os.environ.get("STEP"))
+              # fail_job_quota: terminal status + error message + quota refund
+              # in ONE transaction (migration_quota_v2.sql). Idempotent — the
+              # dashboard webhook may deliver the same terminal status later
+              # and this CAS makes the duplicate a no-op, so the reservation
+              # can never be refunded twice. A lost refund here is healed by
+              # the reconcile cron; the run log must still show the failure.
+              settled = Supabase().fail_job(
+                  os.environ["JOB_ID"], os.environ["REASON"])
+              print("recorded failure — step:", os.environ.get("STEP"),
+                    "| quota:", "refunded" if settled else "already settled")
           except Exception as exc:
-              print("could not record failure:", exc)
+              # Non-fatal: the job's quota_state stays pending and the
+              # /api/cron/reconcile sweep settles it safely later.
+              print("could not record failure (reconciler will settle):", exc)
           PY

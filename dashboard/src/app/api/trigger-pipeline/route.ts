@@ -2,40 +2,84 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/server";
 import { validateVideoUrl } from "@/lib/validateUrl";
 import { r2Configured, r2PresignGet } from "@/lib/r2";
-import { effectiveLimits } from "@/lib/types";
 
 /**
  * POST /api/trigger-pipeline
  *
- * Called by the dashboard after a job is inserted into Supabase.
- * Triggers the GitHub Actions workflow_dispatch to start processing.
- * This runs server-side so the GITHUB_TOKEN never reaches the browser.
+ * Dispatches (or re-dispatches) a job to the GitHub Actions pipeline. The
+ * browser never PATCHes the jobs table (INSERT/UPDATE on jobs is revoked from
+ * authenticated) — this route owns every dispatch mutation.
  *
- * SECURITY: the request body only carries `job_id`. `video_url`,
- * `caption_style` and `max_clips` are always re-read from the stored job row —
- * the URL ends up in a shell command on the CI runner, so a client-supplied
- * value must never be trusted.
+ * ALL dispatch state decisions happen in ONE atomic transaction via the
+ * service RPC `claim_job_dispatch` (supabase/migration_quota_v2.sql, unified
+ * profile→job lock order):
+ *
+ *   queued + dispatch_count=0   → claim (first dispatch; existing hold stands)
+ *   running + dispatch_count>0  → refused ("already started"; the in-flight
+ *                                 run's hold is never touched)
+ *   failed / cancelled          → re-reserve against the CURRENT window, reset
+ *                                 status, claim (fresh budget; videos_refunded
+ *                                 reset for the new run)
+ *   done / charged              → refused (done jobs never retry)
+ *
+ * The RPC returns the granted clip budget and the route dispatches THAT value
+ * (never a stale max_clips). Fail-closed: any RPC failure aborts with no
+ * dispatch.
+ *
+ * Uncertainty handling: a GitHub HTTP error status means the dispatch was NOT
+ * accepted → the job is settled atomically (fail_job_quota: failed + refund).
+ * A thrown fetch (network error) leaves acceptance UNKNOWN → the job is
+ * deliberately left queued+claimed so a possibly-accepted run is not refunded
+ * while a duplicate is being processed; the reconcile cron reaps it if no run
+ * materializes (updated_at heartbeat older than 6 h).
  */
 
-type SupabaseLike = NonNullable<ReturnType<typeof createServiceClient>>;
+interface JobWithQuota {
+    id: string;
+    user_id: string;
+    video_url: string | null;
+    video_storage_path: string | null;
+    caption_style: string | null;
+    caption_pace: string | null;
+    source_language: string | null;
+    caption_language: string | null;
+    max_clips: number | null;
+    job_mode: string | null;
+    remove_silences: boolean | null;
+    auto_punch_in: boolean | null;
+    bgm_mood: string | null;
+    custom_bgm_url: string | null;
+    status: string;
+    quota_state: string | null;
+    quota_video_charged: boolean | null;
+    dispatch_count: number | null;
+    checkpoint_url: string | null;
+    usage_window_start: string | null;
+}
 
+const MAX_DISPATCHES_PER_JOB = 5;
 const VALID_CAPTION_PACES = ["fast", "balanced", "slow"] as const;
-type CaptionPace = (typeof VALID_CAPTION_PACES)[number];
+const VALID_SOURCE_LANGUAGES = ["auto", "hi", "en"] as const;
+const VALID_CAPTION_LANGUAGES = ["original", "hinglish", "en"] as const;
 
-/** Mark a job as failed with a user-facing message (best effort). */
-async function failJob(supabase: SupabaseLike, jobId: string, message: string) {
-    const { error } = await supabase
-        .from("jobs")
-        .update({ status: "failed", error_message: message })
-        .eq("id", jobId);
+type QuotaError = { status: number; message: string };
 
-    if (error) console.error("Could not mark job as failed:", error.message);
+function mapQuotaError(message: string): QuotaError | null {
+    if (message.startsWith("QUOTA_VIDEOS_LIMIT") || message.startsWith("QUOTA_CLIPS_LIMIT")) {
+        return {
+            status: 402,
+            message: message.split(": ").slice(1).join(": ") || "Plan limit reached.",
+        };
+    }
+    if (message.startsWith("QUOTA_JOB_DONE")) {
+        return { status: 409, message: "This video is already completed." };
+    }
+    return null;
 }
 
 export async function POST(request: NextRequest) {
     const supabase = await createClient();
 
-    // Verify user is authenticated
     const {
         data: { user },
     } = await supabase.auth.getUser();
@@ -48,143 +92,158 @@ export async function POST(request: NextRequest) {
     const job_id = body?.job_id;
 
     if (!job_id || typeof job_id !== "string") {
+        return NextResponse.json({ error: "job_id is required" }, { status: 400 });
+    }
+
+    // Retry semantics: resume=true forces checkpoint resume, resume=false
+    // forces a fresh run; omitted defaults to the saved checkpoint when one
+    // exists. Only these two flags are accepted from the client — everything
+    // else is re-read from the stored row.
+    const resumeInput = body?.resume;
+    if (resumeInput !== undefined && typeof resumeInput !== "boolean") {
+        return NextResponse.json({ error: "resume must be a boolean" }, { status: 400 });
+    }
+
+    const admin = createServiceClient();
+    if (!admin) {
+        // Fail closed: without the service key there is no accounting.
+        console.error("[trigger] SUPABASE_SERVICE_ROLE_KEY is not configured");
         return NextResponse.json(
-            { error: "job_id is required" },
-            { status: 400 }
+            { error: "Processing is temporarily unavailable. Please try again shortly." },
+            { status: 503 }
         );
     }
 
-    // ── Two optional pipeline inputs (neither is security-sensitive — they do
-    //    not reach a shell line, only typed workflow inputs) ──
-    // `resume`: retry from the saved transcription checkpoint when one exists.
-    const resumeRequested = body?.resume === true;
-    // `caption_pace`: fast | balanced | slow (workflow defaults to balanced).
-    const paceInput = typeof body?.caption_pace === "string" ? body.caption_pace : "balanced";
-    const captionPace: CaptionPace = (VALID_CAPTION_PACES as readonly string[]).includes(paceInput)
-        ? (paceInput as CaptionPace)
-        : "balanced";
-
-    // Verify the job belongs to this user and read the *stored* configuration.
-    const { data: job, error: jobError } = await supabase
+    // Read the stored job through the RLS session client (ownership proof).
+    // The select is a SINGLE literal string — the supabase-js typed-query
+    // parser mis-handles concatenated/dynamic select strings.
+    const { data, error: jobError } = await supabase
         .from("jobs")
-        .select("id, user_id, video_url, caption_style, max_clips, status, bgm_mood, custom_bgm_url, job_mode, remove_silences, auto_punch_in, video_storage_path")
+        .select("id,user_id,video_url,video_storage_path,caption_style,caption_pace,source_language,caption_language,max_clips,job_mode,remove_silences,auto_punch_in,bgm_mood,custom_bgm_url,status,quota_state,quota_video_charged,dispatch_count,checkpoint_url,usage_window_start")
         .eq("id", job_id)
         .eq("user_id", user.id)
         .single();
 
+    const job = data ? (data as unknown as JobWithQuota) : null;
     if (jobError || !job) {
+        return NextResponse.json({ error: "Job not found or not authorized" }, { status: 404 });
+    }
+
+    // ── Atomic claim (state decision + reservation + reset + count) ──────
+    const { data: claim, error: claimError } = await admin.rpc("claim_job_dispatch", {
+        p_job_id: job.id,
+    });
+    if (claimError || !claim) {
+        const message = claimError?.message ?? "unknown error";
+        console.error("[trigger] claim_job_dispatch failed:", message);
+        const mapped = mapQuotaError(message);
+        if (mapped) {
+            return NextResponse.json({ error: mapped.message }, { status: mapped.status });
+        }
         return NextResponse.json(
-            { error: "Job not found or not authorized" },
-            { status: 404 }
+            { error: "Could not start processing. Please try again shortly." },
+            { status: 503 }
         );
     }
 
-    // Service-role client for quota reads/writes. Falls back to the RLS-scoped
-    // session client (which can read the caller's own profile) if the key is
-    // not configured, so the route keeps working in local dev.
-    const admin = createServiceClient();
-    if (!admin) {
-        console.warn("SUPABASE_SERVICE_ROLE_KEY not set — using session client for quota checks");
+    // claim shape: [{ claimed, reason, granted_clips }]
+    const claimRow = Array.isArray(claim) ? claim[0] : claim;
+    if (!claimRow || typeof claimRow.claimed !== "boolean"
+        || typeof claimRow.reason !== "string"
+        || !Number.isInteger(claimRow.granted_clips)
+        || claimRow.granted_clips < 0
+        || (claimRow.claimed && (claimRow.granted_clips < 1 || claimRow.granted_clips > 20))) {
+        console.error("[trigger] malformed quota claim; refusing dispatch");
+        return NextResponse.json({ error: "Could not verify the processing reservation. Please try again shortly." }, { status: 503 });
     }
-    const quotaClient = admin ?? supabase;
 
-    // ── Resolve the source URL ──
-    // Uploaded sources live in the PRIVATE video-uploads bucket; the stored
-    // video_url is just a signed URL that expires, so a fresh one is minted
-    // here on every dispatch (including retries days later).
+    if (!claimRow.claimed) {
+        if (claimRow.reason === "done") {
+            return NextResponse.json(
+                { error: "This video is already completed." },
+                { status: 409 }
+            );
+        }
+        // A run is already claimed/in flight — never touch its hold.
+        return NextResponse.json(
+            { error: "This video is already processing." },
+            { status: 409 }
+        );
+    }
+
+    if ((job.dispatch_count ?? 0) >= MAX_DISPATCHES_PER_JOB) {
+        // The claim succeeded; undo it via a settle so the cap stays honest.
+        await failJobQuota(admin, job.id,
+            "This video has reached its retry limit. Please contact support.");
+        return NextResponse.json(
+            { error: "This video has reached its retry limit. Please contact support." },
+            { status: 429 }
+        );
+    }
+
+    // ── Resolve the source URL ───────────────────────────────────────────
     let sourceUrl = job.video_url;
     if (job.video_storage_path) {
-        // Uploaded sources live in the R2 cache under sources/ (evicted after
-        // 7 days; deleted right after a successful job). A fresh presigned URL
-        // is minted on EVERY dispatch, so a retry days later still works.
         if (!r2Configured()) {
-            const message = "Video uploads are not configured yet. Please contact support.";
-            await failJob(quotaClient, job.id, message);
-            return NextResponse.json({ error: message }, { status: 503 });
+            await failJobQuota(admin, job.id,
+                "Video uploads are not configured yet. Please contact support.");
+            return NextResponse.json(
+                { error: "Video uploads are not configured yet. Please contact support." },
+                { status: 503 }
+            );
         }
         const signed = await r2PresignGet(job.video_storage_path, 60 * 60 * 24);
         if (!signed) {
-            const message = "Your uploaded video could not be read. Please upload it again.";
-            await failJob(quotaClient, job.id, message);
-            return NextResponse.json({ error: message }, { status: 400 });
+            await failJobQuota(admin, job.id,
+                "Your uploaded video could not be read. Please upload it again.");
+            return NextResponse.json(
+                { error: "Your uploaded video could not be read. Please upload it again." },
+                { status: 400 }
+            );
         }
         sourceUrl = signed;
     }
 
-    // ── Validate the source URL (defence in depth: it is interpolated into a
-    //    shell command by the workflow) ──
     const validation = validateVideoUrl(sourceUrl);
     if (!validation.ok) {
-        await failJob(quotaClient, job.id, validation.reason);
+        await failJobQuota(admin, job.id, validation.reason);
         return NextResponse.json({ error: validation.reason }, { status: 400 });
     }
 
-    // ── Quota checks (server-side; the browser check is UX only) ──
-    // Roll the monthly usage window first (no-op unless due) so gating uses
-    // this window's usage, not a stale lifetime count.
-    await quotaClient.rpc("roll_usage_period_if_due", { p_user_id: job.user_id });
-
-    const { data: profile, error: profileError } = await quotaClient
-        .from("profiles")
-        .select("clips_used, clips_limit, videos_used, videos_limit, plan, current_period_end")
-        .eq("id", job.user_id)
-        .single();
-
-    if (profileError || !profile) {
-        console.error("Could not read profile for quota check:", profileError?.message);
+    // ── Dispatch GitHub Actions with the PERSISTED choices + fresh budget ─
+    const githubToken = process.env.GITHUB_TOKEN;
+    const githubRepo = process.env.GITHUB_REPO;
+    if (!githubToken || !githubRepo) {
+        const missing = [!githubToken && "GITHUB_TOKEN", !githubRepo && "GITHUB_REPO"]
+            .filter(Boolean)
+            .join(", ");
+        console.error(`[trigger] ${missing} not set — pipeline not triggered`);
+        await failJobQuota(admin, job.id,
+            "Processing service is temporarily unavailable. Please try again later.");
         return NextResponse.json(
-            { error: "Could not verify your plan limits. Please try again." },
+            { error: "Processing service is temporarily unavailable." },
             { status: 500 }
         );
     }
 
-    // The dashboard reserves a video slot (increment_videos_used) *before* it
-    // creates the job, so videos_used already includes this job. Only a value
-    // above the limit means someone slipped past the reservation RPC.
-    // One-time plans expire: an expired paid plan is gated at FREE limits
-    // server-side, for BOTH resources (the stored profile limits still say
-    // Pro after expiry — they are restored on the next purchase).
-    const limits = effectiveLimits(profile);
+    const captionPace = VALID_CAPTION_PACES.includes(
+        job.caption_pace as (typeof VALID_CAPTION_PACES)[number]
+    )
+        ? (job.caption_pace as string)
+        : "balanced";
+    const sourceLanguage = VALID_SOURCE_LANGUAGES.includes(
+        job.source_language as (typeof VALID_SOURCE_LANGUAGES)[number]
+    )
+        ? (job.source_language as string)
+        : "auto";
+    const captionLanguage = VALID_CAPTION_LANGUAGES.includes(
+        job.caption_language as (typeof VALID_CAPTION_LANGUAGES)[number]
+    )
+        ? (job.caption_language as string)
+        : "original";
 
-    if ((profile.videos_used ?? 0) > limits.videos) {
-        const message = `You've reached your limit of ${limits.videos} video(s). Please upgrade.`;
-        await failJob(quotaClient, job.id, message);
-        return NextResponse.json({ error: message }, { status: 402 });
-    }
-
-    const remainingClips = Math.max(0, limits.clips - (profile.clips_used ?? 0));
-    if (remainingClips < 1) {
-        const message = "You've run out of clips. Please upgrade your plan to keep creating.";
-        await failJob(quotaClient, job.id, message);
-        return NextResponse.json({ error: message }, { status: 402 });
-    }
-
-    // Clamp server-side: the client may ask for more clips than it has left.
-    const requestedClips = Number(job.max_clips) || 10;
-    const effectiveMaxClips = Math.min(Math.max(requestedClips, 1), remainingClips);
-
-    // Trigger GitHub Actions workflow
-    const githubToken = process.env.GITHUB_TOKEN;
-    const githubRepo = process.env.GITHUB_REPO;
-
-    if (!githubToken || !githubRepo) {
-        console.warn("GITHUB_TOKEN or GITHUB_REPO not set — pipeline not triggered");
-
-        const missing = [];
-        if (!githubToken) missing.push("GITHUB_TOKEN");
-        if (!githubRepo) missing.push("GITHUB_REPO");
-
-        await failJob(
-            quotaClient,
-            job.id,
-            "Processing service is temporarily unavailable. Please try again later."
-        );
-
-        return NextResponse.json({
-            triggered: false,
-            error: "Processing service is temporarily unavailable.",
-        }, { status: 500 });
-    }
+    const resumeFromCheckpoint =
+        resumeInput === true ? true : resumeInput === false ? false : !!job.checkpoint_url;
 
     const dispatchUrl = `https://api.github.com/repos/${githubRepo}/actions/workflows/process-video.yml/dispatches`;
 
@@ -202,9 +261,11 @@ export async function POST(request: NextRequest) {
                     job_id: job.id,
                     video_url: validation.url,
                     caption_style: job.caption_style || "hormozi",
-                    max_clips: String(effectiveMaxClips),
+                    max_clips: String(claimRow.granted_clips),
                     caption_pace: captionPace,
-                    resume_from_checkpoint: resumeRequested ? "true" : "false",
+                    source_language: sourceLanguage,
+                    caption_language: captionLanguage,
+                    resume_from_checkpoint: resumeFromCheckpoint ? "true" : "false",
                     bgm_mood: job.bgm_mood || "auto",
                     custom_bgm_url: job.custom_bgm_url || "",
                     job_mode: job.job_mode === "captions" ? "captions" : "clips",
@@ -215,39 +276,59 @@ export async function POST(request: NextRequest) {
         });
 
         if (!dispatchRes.ok) {
+            // GitHub rejected the dispatch — acceptance is definitively NO.
             const errText = await dispatchRes.text();
-            console.error("GitHub dispatch failed:", `GitHub API ${dispatchRes.status}: ${errText.slice(0, 500)}`, "URL:", dispatchUrl);
-
-            await failJob(
-                quotaClient,
-                job.id,
-                "Could not start video processing. Please try again."
+            console.error(
+                "GitHub dispatch failed:",
+                `GitHub API ${dispatchRes.status}: ${errText.slice(0, 500)}`,
+                "URL:",
+                dispatchUrl
             );
-
+            await failJobQuota(admin, job.id,
+                "Could not start video processing. Please try again.");
             return NextResponse.json(
                 { error: "Could not start video processing. Please try again." },
                 { status: 500 }
             );
         }
-
-        return NextResponse.json({
-            triggered: true,
-            job_id: job.id,
-            max_clips: effectiveMaxClips,
-        });
     } catch (err) {
+        // Network-level failure: GitHub may or may not have accepted the
+        // dispatch. Do NOT refund — the job stays queued+claimed so a possibly
+        // accepted run is not refunded; the reconcile cron reaps it (6 h
+        // stale heartbeat) if no run materialized.
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.error("Pipeline trigger error:", errMsg);
-
-        await failJob(
-            quotaClient,
-            job.id,
-            "An unexpected error occurred. Please try again."
+        console.error(
+            "Pipeline trigger network error — dispatch acceptance UNKNOWN; job left queued for reconciliation:",
+            errMsg
         );
-
         return NextResponse.json(
-            { error: "An unexpected error occurred. Please try again." },
-            { status: 500 }
+            { error: "Processing may have started. Check this video's status in a few minutes." },
+            { status: 502 }
         );
     }
+
+    return NextResponse.json({
+        triggered: true,
+        job_id: job.id,
+        max_clips: claimRow.granted_clips,
+        resume_from_checkpoint: resumeFromCheckpoint,
+    });
+}
+
+/**
+ * Atomic terminal status + quota refund (fail_job_quota RPC). Used when THIS
+ * route rejects/dispatches-fails so the reservation can never leak. A failure
+ * here is logged loudly — the reconcile cron settles the pending job later.
+ */
+async function failJobQuota(
+    supabase: NonNullable<ReturnType<typeof createServiceClient>>,
+    jobId: string,
+    message: string
+) {
+    const { error } = await supabase.rpc("fail_job_quota", {
+        p_job_id: jobId,
+        p_message: message,
+        p_status: "failed",
+    });
+    if (error) console.error("[trigger] fail_job_quota failed for", jobId, error.message);
 }

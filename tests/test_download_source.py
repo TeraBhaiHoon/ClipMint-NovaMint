@@ -99,8 +99,11 @@ def test_workflow_shares_download_path_and_saves_transcript_before_optional_clea
     assert 'download_source.py' in by_name['Resolve checkpoint']['run']
     assert 'yt-dlp[default]' in by_name['Install system dependencies']['run']
     names = [step.get('name') for step in steps]
-    assert names.index('Save raw transcription checkpoint') < names.index('Transliterate Devanagari to Hinglish')
-    assert 'pipeline/transliterate.py' in by_name['Transliterate Devanagari to Hinglish']['run']
+    assert names.index('Save raw transcription checkpoint') < names.index('Convert captions to Hinglish')
+    # The Hinglish conversion runs through the caption_language wrapper
+    # (fail-closed + meta reporting); transliterate.py remains its engine.
+    assert 'pipeline/caption_language.py hinglish' in by_name['Convert captions to Hinglish']['run']
+    assert '--meta-file' in by_name['Convert captions to Hinglish']['run']
     finalize = {step.get('name'): step for step in workflow['jobs']['finalize']['steps']}
     assert finalize['Download render inputs']['if'] == "needs.process.result == 'success'"
     assert 'failure()' in finalize['Record failure']['if']

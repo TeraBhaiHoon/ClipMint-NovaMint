@@ -13,6 +13,21 @@ export type CaptionStyle =
     | "colorful"
     | "minimal";
 
+export type SourceLanguage = "auto" | "hi" | "en";
+export type CaptionLanguage = "original" | "hinglish" | "en";
+export type CaptionPace = "fast" | "balanced" | "slow";
+
+export const SOURCE_LANGUAGES: { value: SourceLanguage; label: string; description: string }[] = [
+    { value: "auto", label: "Auto-detect", description: "Recognize each audio section without forcing English." },
+    { value: "hi", label: "Hindi / Hinglish", description: "Hindi speech, including Hindi mixed with English." },
+    { value: "en", label: "English", description: "Use when the speaker is speaking English." },
+];
+export const CAPTION_LANGUAGES: { value: CaptionLanguage; label: string; description: string }[] = [
+    { value: "original", label: "Original language", description: "Keep what was spoken. Hindi stays in देवनागरी." },
+    { value: "hinglish", label: "Hinglish", description: "Write Hindi in Latin letters, without translating it." },
+    { value: "en", label: "English translation", description: "Translate phrases to English. Translation timing is estimated." },
+];
+
 export type JobStatus =
     | "queued"
     | "downloading"
@@ -39,6 +54,8 @@ export interface Profile {
     clips_limit: number;
     videos_used: number;
     videos_limit: number;
+    clips_reserved?: number;
+    usage_period_start?: string;
     notify_email: boolean;
     notify_discord: boolean;
     notify_job_complete: boolean;
@@ -79,6 +96,19 @@ export interface Job {
     video_duration_seconds: number | null;
     source_type: "url" | "upload" | "drive";
     caption_style: CaptionStyle;
+    source_language?: SourceLanguage;
+    caption_language?: CaptionLanguage;
+    caption_pace?: CaptionPace;
+    detected_language?: string | null;
+    transcription_report?: Record<string, unknown> | null;
+    quota_state?: "pending" | "charged" | "refunded";
+    quota_video_charged?: boolean;
+    clips_budget?: number | null;
+    requested_clips?: number | null;
+    usage_window_start?: string | null;
+    dispatch_count?: number;
+    creation_request_id?: string | null;
+    quota_clips_charged?: number | null;
     max_clips: number;
     target_platforms: string[];
     status: JobStatus;
@@ -185,15 +215,15 @@ export const PLAN_LIMITS: Record<Plan, { clips: number; videos: number; monthlyP
 };
 
 export const CAPTION_STYLES: { value: CaptionStyle; label: string; description: string }[] = [
-    { value: "hormozi", label: "Hormozi", description: "Word-by-word green highlight with scale pop" },
-    { value: "bounce", label: "Bounce", description: "Spring physics bounce-in animation" },
-    { value: "fade", label: "Fade", description: "Smooth fade in/out" },
-    { value: "glow", label: "Glow", description: "Pulsing neon glow effect" },
-    { value: "typewriter", label: "Typewriter", description: "Character-by-character typing with cursor" },
-    { value: "glitch", label: "Glitch", description: "RGB split glitch effect" },
-    { value: "neon", label: "Neon", description: "Flickering neon sign with layered glow" },
-    { value: "colorful", label: "Colorful", description: "Rainbow-colored words with staggered entrance" },
-    { value: "minimal", label: "Minimal", description: "Frosted glass pill with subtle slide-up" },
+    { value: "hormozi", label: "Hormozi", description: "High-contrast active-word highlight" },
+    { value: "bounce", label: "Bounce", description: "Controlled word pop with stable line spacing" },
+    { value: "fade", label: "Fade", description: "Soft editorial captions on a dark reading panel" },
+    { value: "glow", label: "Glow", description: "Soft active-word glow with a crisp text core" },
+    { value: "typewriter", label: "Typewriter", description: "Speech-timed typing that preserves Hindi characters" },
+    { value: "glitch", label: "Glitch", description: "Brief chromatic accent without continuous jitter" },
+    { value: "neon", label: "Neon", description: "Steady neon lettering without flashing" },
+    { value: "colorful", label: "Colorful", description: "Readable pastel word accents" },
+    { value: "minimal", label: "Minimal", description: "Compact two-line subtitle panel" },
 ];
 
 export const JOB_STATUS_LABELS: Record<JobStatus, { label: string; emoji: string; color: string }> = {

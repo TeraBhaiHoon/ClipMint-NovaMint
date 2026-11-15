@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Captions, Check, ChevronRight, CloudUpload, FileVideo, FolderOpen, Link2, Music2, Scissors, SlidersHorizontal, Sparkles, Upload, Wand2, X } from "lucide-react";
 import { createClient } from "@/lib/supabase";
-import { CAPTION_STYLES, effectiveLimits, type CaptionStyle } from "@/lib/types";
+import { CAPTION_LANGUAGES, CAPTION_STYLES, SOURCE_LANGUAGES, effectiveLimits, type CaptionLanguage, type SourceLanguage, type CaptionStyle } from "@/lib/types";
 import { readCaptionPreference } from "@/lib/dashboard";
 import { validateVideoUrl } from "@/lib/validateUrl";
 import { useDashboard } from "../_components/dashboard-provider";
@@ -35,6 +35,8 @@ export default function NewVideoPage() {
     const [videoFile, setVideoFile] = useState<File | null>(null);
     const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("hormozi");
     const [captionPace, setCaptionPace] = useState<Pace>("balanced");
+    const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("auto");
+    const [captionLanguage, setCaptionLanguage] = useState<CaptionLanguage>("original");
     const [maxClips, setMaxClips] = useState(5);
     const [jobMode, setJobMode] = useState<"clips" | "captions">("clips");
     const [removeSilences, setRemoveSilences] = useState(true);
@@ -50,6 +52,7 @@ export default function NewVideoPage() {
     const errorRef = useRef<HTMLDivElement>(null);
     const preferenceLoaded = useRef<string | null>(null);
     const submitting = useRef(false);
+    const submissionId = useRef<string | null>(null);
 
     useEffect(() => {
         if (!account || preferenceLoaded.current === account.id) return;
@@ -63,7 +66,7 @@ export default function NewVideoPage() {
     useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
     const hasSource = sourceType === "file" ? !!videoFile : !!videoUrl.trim();
-    const remaining = profile ? Math.max(0, effectiveLimits(profile).clips - profile.clips_used) : null;
+    const remaining = profile ? Math.max(0, effectiveLimits(profile).clips - profile.clips_used - (profile.clips_reserved || 0)) : null;
     const styleLabel = CAPTION_STYLES.find((style) => style.value === captionStyle)?.label || "Hormozi";
 
     function selectFile(file: File | null) {
@@ -83,9 +86,6 @@ export default function NewVideoPage() {
         setIsSubmitting(true);
         setError(null);
         setCreatedJobId(null);
-        let reservedSlot = false;
-        let userId: string | null = null;
-        let jobCreated = false;
         try {
             let normalizedUrl: string | null = null;
             let videoStoragePath: string | null = null;
@@ -101,16 +101,7 @@ export default function NewVideoPage() {
 
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) throw new Error("Please sign in again before creating a video.");
-            userId = user.id;
-            const { error: rollError } = await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
-            if (rollError) throw new Error("Couldn’t check your current usage. Please try again.");
-            const { data: currentProfile, error: profileError } = await supabase.from("profiles").select("plan, current_period_end, clips_used, videos_used").eq("id", user.id).single();
-            if (profileError || !currentProfile) throw new Error("Couldn’t verify your plan limits. Please try again.");
-            const limits = effectiveLimits(currentProfile);
-            if (currentProfile.videos_used >= limits.videos) throw new Error(`You’ve used your ${limits.videos} videos for this period. View your plan in Settings → Billing.`);
-            const clipsLeft = Math.max(0, limits.clips - currentProfile.clips_used);
-            if (!clipsLeft) throw new Error("No clips remain in this period. View your plan in Settings → Billing.");
-            const effectiveMaxClips = Math.min(jobMode === "captions" ? 1 : maxClips, clipsLeft);
+            const effectiveMaxClips = jobMode === "captions" ? 1 : maxClips;
 
             if (sourceType === "file" && videoFile) {
                 const response = await fetch("/api/uploads/presign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: videoFile.name, size: videoFile.size }) });
@@ -140,25 +131,24 @@ export default function NewVideoPage() {
                 customBgmUrl = supabase.storage.from("bgm-uploads").getPublicUrl(path).data.publicUrl;
             }
 
-            const { data: reserved, error: reserveError } = await supabase.rpc("increment_videos_used", { p_user_id: user.id });
-            if (reserveError) throw new Error("Couldn’t reserve a video slot. Please try again.");
-            if (reserved !== true) throw new Error("You’ve reached your video limit or a slot couldn’t be reserved. Please try again.");
-            reservedSlot = true;
             const row: Record<string, unknown> = {
-                user_id: user.id, video_url: normalizedUrl, video_filename: sourceType === "file" ? videoFile?.name : null,
+                video_url: normalizedUrl, video_filename: sourceType === "file" ? videoFile?.name : null,
                 source_type: sourceType === "file" ? "upload" : sourceType, caption_style: captionStyle,
-                max_clips: effectiveMaxClips, status: "queued", progress: 0, job_mode: jobMode,
+                source_language: sourceLanguage, caption_language: captionLanguage, caption_pace: captionPace,
+                max_clips: effectiveMaxClips, job_mode: jobMode,
                 remove_silences: jobMode === "captions" ? removeSilences : false,
                 auto_punch_in: jobMode === "captions" ? autoPunchIn : false,
             };
             if (videoStoragePath) row.video_storage_path = videoStoragePath;
             if (bgmChoice !== "auto" && bgmChoice !== "custom") row.bgm_mood = bgmChoice;
             if (customBgmUrl) row.custom_bgm_url = customBgmUrl;
-            const { data: job, error: insertError } = await supabase.from("jobs").insert(row).select("id").single();
-            if (insertError || !job) throw new Error("Your video project couldn’t be created. Please try again.");
-            jobCreated = true;
+            submissionId.current ??= crypto.randomUUID();
+            const createResponse = await fetch("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...row, request_id: submissionId.current }) });
+            const created = await createResponse.json().catch(() => null);
+            if (!createResponse.ok || !created?.job?.id) throw new Error(created?.error || "Your video project couldn’t be created. Please try again.");
+            const job = created.job;
             setCreatedJobId(job.id);
-            const response = await fetch("/api/trigger-pipeline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job_id: job.id, caption_pace: captionPace }) });
+            const response = await fetch("/api/trigger-pipeline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job_id: job.id }) });
             if (!response.ok) {
                 const payload = await response.json().catch(() => null);
                 throw new Error(payload?.error || "Your project was saved, but processing didn’t start. Open it below to retry.");
@@ -166,7 +156,7 @@ export default function NewVideoPage() {
             void refreshProfile();
             router.push(`/dashboard/${job.id}`);
         } catch (cause) {
-            if (reservedSlot && !jobCreated && userId) await supabase.rpc("refund_videos_used", { p_user_id: userId });
+            void refreshProfile();
             setError(cause instanceof Error ? cause.message : "Something went wrong. Please try again.");
         } finally {
             setUploadPct(null);
@@ -194,7 +184,8 @@ export default function NewVideoPage() {
                     <div className="studio-field studio-create-output"><span className="studio-field-label">What would you like to make?</span><div className="studio-choice-grid studio-choice-grid--two" role="group" aria-label="Output mode"><Choice selected={jobMode === "clips"} title="Short clips" description="AI picks the best moments and cuts vertical clips." icon={Scissors} onClick={() => setJobMode("clips")} /><Choice selected={jobMode === "captions"} title="Full video captions" description="Caption and auto-edit your entire video." icon={Captions} onClick={() => setJobMode("captions")} /></div></div>
                 </section>
                 <section className="studio-panel" id="captions"><SectionHeading title="02 · Choose your captions" description="Select a style and reading pace. You can change the look for each project." icon={Captions} />
-                    <div className="studio-choice-grid studio-caption-choices" role="group" aria-label="Caption style">{CAPTION_STYLES.map((style) => <Choice key={style.value} title={style.label} description={style.description} selected={captionStyle === style.value} onClick={() => setCaptionStyle(style.value)}><span className={`studio-caption-sample studio-caption-sample--${style.value}`} aria-hidden="true">Make it <em>count.</em></span></Choice>)}</div>
+                    <div className="studio-choice-grid studio-caption-choices" role="group" aria-label="Caption style">{CAPTION_STYLES.map((style) => <Choice key={style.value} title={style.label} description={style.description} selected={captionStyle === style.value} onClick={() => setCaptionStyle(style.value)}><img className="studio-caption-render" src={`/caption-previews/${sourceLanguage === "hi" && captionLanguage === "original" ? "hi" : "en"}-${style.value}.webp`} width={540} height={255} alt={`${style.label} caption renderer sample`} loading="lazy" /></Choice>)}</div>
+                    <div className="studio-grid-two studio-create-language"><div className="studio-field"><label htmlFor="source-language">Spoken language</label><select id="source-language" className="studio-select" value={sourceLanguage} onChange={(event) => setSourceLanguage(event.target.value as SourceLanguage)} aria-describedby="source-language-hint">{SOURCE_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select><p id="source-language-hint" className="studio-field-hint">{SOURCE_LANGUAGES.find((language) => language.value === sourceLanguage)?.description} Select Hindi for Hindi-heavy videos.</p></div><div className="studio-field"><label htmlFor="caption-language">Subtitle output</label><select id="caption-language" className="studio-select" value={captionLanguage} onChange={(event) => setCaptionLanguage(event.target.value as CaptionLanguage)} aria-describedby="caption-language-hint">{CAPTION_LANGUAGES.map((language) => <option key={language.value} value={language.value}>{language.label}</option>)}</select><p id="caption-language-hint" className="studio-field-hint">{CAPTION_LANGUAGES.find((language) => language.value === captionLanguage)?.description}</p></div></div>
                     <div className="studio-field studio-create-pace"><span className="studio-field-label">Reading pace</span><div className="studio-choice-grid" role="group" aria-label="Caption pace">{PACES.map((pace) => <Choice key={pace.value} selected={captionPace === pace.value} title={pace.label} description={pace.hint} onClick={() => setCaptionPace(pace.value)} />)}</div></div>
                 </section>
                 <section className="studio-panel" id="output"><SectionHeading title="03 · Fine-tune the output" description="Set the length of your batch and the sound of your video." icon={SlidersHorizontal} />
@@ -206,8 +197,8 @@ export default function NewVideoPage() {
             </fieldset>
             <aside className="studio-create-summary" aria-label="Video configuration summary"><div className="studio-panel">
                 <div className="studio-summary-title"><Sparkles size={18} aria-hidden="true" /><h2>Your next video</h2></div>
-                <div className={`studio-caption-preview studio-caption-sample--${captionStyle}`}><span className="studio-preview-label">Caption style preview</span><p>Make every<br /><em>moment count.</em></p><span className="studio-preview-footer">{styleLabel} · {PACES.find((pace) => pace.value === captionPace)?.label}</span></div>
-                <dl className="studio-summary-list"><div><dt>Source</dt><dd>{!hasSource ? "Not added yet" : sourceType === "file" ? "Uploaded video" : sourceType === "drive" ? "Google Drive" : "Video link"}</dd></div><div><dt>Output</dt><dd>{jobMode === "clips" ? `Up to ${remaining === null ? maxClips : Math.min(maxClips, remaining)} short clips` : "1 full video"}</dd></div><div><dt>Music</dt><dd>{MUSIC.find((music) => music.value === bgmChoice)?.label}</dd></div>{remaining !== null && <div><dt>Clips available</dt><dd>{remaining}</dd></div>}</dl>
+                <div className={`studio-caption-preview studio-caption-sample--${captionStyle}`}><span className="studio-preview-label">Rendered style sample</span><img className="studio-caption-render" src={`/caption-previews/${sourceLanguage === "hi" && captionLanguage === "original" ? "hi" : "en"}-${captionStyle}.webp`} width={540} height={255} alt={`Sample rendered using ${styleLabel}`} /><span className="studio-preview-footer">{styleLabel} · {PACES.find((pace) => pace.value === captionPace)?.label}</span></div>
+                <dl className="studio-summary-list"><div><dt>Source</dt><dd>{!hasSource ? "Not added yet" : sourceType === "file" ? "Uploaded video" : sourceType === "drive" ? "Google Drive" : "Video link"}</dd></div><div><dt>Output</dt><dd>{jobMode === "clips" ? `Up to ${remaining === null ? maxClips : Math.min(maxClips, remaining)} short clips` : "1 full video"}</dd></div><div><dt>Spoken language</dt><dd>{SOURCE_LANGUAGES.find((language) => language.value === sourceLanguage)?.label}</dd></div><div><dt>Subtitles</dt><dd>{CAPTION_LANGUAGES.find((language) => language.value === captionLanguage)?.label}</dd></div><div><dt>Music</dt><dd>{MUSIC.find((music) => music.value === bgmChoice)?.label}</dd></div>{remaining !== null && <div><dt>Clips available</dt><dd>{remaining}</dd></div>}</dl>
                 <div ref={errorRef} tabIndex={-1}>{error && <Notice tone="error">{error}{createdJobId && <a href={`/dashboard/${createdJobId}`} className="studio-text-link"> Open saved project</a>}</Notice>}</div>
                 <Button type="submit" busy={isSubmitting} disabled={!hasSource || !!createdJobId || (sourceType === "file" && (videoFile?.size || 0) > MAX_UPLOAD_BYTES)} className="studio-create-submit">{isSubmitting ? uploadPct !== null ? `Uploading ${uploadPct}%…` : "Starting your video…" : "Create video"}{!isSubmitting && <ChevronRight size={17} aria-hidden="true" />}</Button>
                 <p className="studio-summary-hint"><Check size={14} aria-hidden="true" />Your settings are saved with this project.</p>

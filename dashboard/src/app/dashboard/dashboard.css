@@ -246,6 +246,9 @@
 .studio-create-fields:disabled { opacity: .75; }
 .studio-source-tabs { margin-bottom: 24px; }
 .studio-create-output, .studio-create-pace { margin-top: 28px; }
+.studio-create-language { margin-top: 24px; }
+.studio-caption-render { display: block; width: 100%; height: auto; border-radius: 6px; margin-bottom: 8px; }
+.studio-caption-preview .studio-caption-render { margin: 0; }
 .studio-dropzone { position: relative; background: #fafcf8; border: 1px dashed #a7b99c; border-radius: 10px; min-height: 185px; padding: 24px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 9px; text-align: center; }
 .studio-dropzone.is-dragging, .studio-dropzone:focus-within { border-color: var(--studio-accent-text); background: var(--studio-selected); }
 .studio-dropzone > svg { color: #668159; }

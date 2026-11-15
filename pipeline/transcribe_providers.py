@@ -32,7 +32,8 @@ which passes this module the chunk's absolute offset in seconds).
 Providers
 ---------
 Groq      POST /openai/v1/audio/transcriptions, verbose_json + word
-          granularity, models whisper-large-v3-turbo → whisper-large-v3.
+          granularity, models whisper-large-v3 → whisper-large-v3-turbo
+          (accuracy first; turbo is the cheaper fallback).
 Deepgram  POST /v1/listen?model=nova-3&language=multi&smart_format=true with
           the raw WAV bytes as the body (Content-Type: audio/wav). Words carry
           second-float start/end and are returned by default.
@@ -49,7 +50,9 @@ downstream caption paging still works.
 
 from __future__ import annotations
 
+import math
 import os
+import re
 import time
 import wave
 
@@ -57,7 +60,9 @@ import requests
 
 # ── Provider endpoints / constants ──────────────────────────────────────────
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]
+# Preferred model first, turbo is the cheaper fallback (relative quality on
+# Hindi/Hinglish is measured per job's golden set, not claimed here).
+GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 
 DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 # keyterm must be REPEATED query params (Deepgram API shape), hence tuples.
@@ -117,6 +122,63 @@ def wav_duration_sec(path: str) -> float:
         return 0.0
 
 
+PROMPT_BASE = (
+    "Transcribe in the original spoken language and native script; "
+    "do NOT translate. Preserve English words when the speaker code-switches."
+)
+# The whole metadata context is a HINT: bounded in characters, never a
+# second transcript.
+CONTEXT_CHAR_BUDGET = 300
+
+
+def build_prompt(context: dict | None) -> str:
+    """Base prompt + bounded creator metadata (title ≤120 chars, ≤12 tags of
+    ≤24 chars, whole context ≤ CONTEXT_CHAR_BUDGET characters)."""
+    parts = [PROMPT_BASE]
+    if context:
+        title = str(context.get("title") or "").strip()[:120]
+        tags = [str(t).strip()[:24] for t in (context.get("tags") or [])[:12]
+                if str(t).strip()]
+        context_text = ""
+        if title:
+            context_text += f"Video title: {title}. "
+        if tags:
+            context_text += "Topics: " + ", ".join(tags) + "."
+        parts.append(context_text[:CONTEXT_CHAR_BUDGET].strip())
+    return " ".join(p for p in parts if p)
+
+
+MAX_DEEPGRAM_PARAMS = 14
+
+
+def _deepgram_params(context: dict | None,
+                     language: str | None) -> list[tuple[str, str]]:
+    """Base query params with the language hint made authoritative (a real
+    ISO code replaces `multi`), + creator tags as extra keyterms."""
+    params = [(k, language if (k == "language" and language) else v)
+              for k, v in DEEPGRAM_PARAMS]
+    seen = {v.lower() for k, v in params if k == "keyterm"}
+    for tag in (context or {}).get("tags") or []:
+        term = str(tag).strip()[:40]
+        if term and term.lower() not in seen and len(params) < MAX_DEEPGRAM_PARAMS:
+            params.append(("keyterm", term))
+            seen.add(term.lower())
+    return params
+
+
+def _valid_pair(start, end) -> tuple[float, float] | None:
+    """(start, end) as finite floats with end > start, else None.
+
+    Malformed provider timestamps (strings, NaN/inf, inverted ranges) skip
+    the WORD — they must never crash the provider chain."""
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+        return None
+    start_f, end_f = float(start), float(end)
+    if not (math.isfinite(start_f) and math.isfinite(end_f)) or end_f <= start_f:
+        return None
+    return start_f, end_f
+
+
 # ── Groq ────────────────────────────────────────────────────────────────────
 LANGUAGE_CODES = {
     "hindi": "hi", "english": "en", "hinglish": "hi", "urdu": "ur",
@@ -124,30 +186,61 @@ LANGUAGE_CODES = {
     "marathi": "mr", "gujarati": "gu", "kannada": "kn", "malayalam": "ml",
 }
 
+UNDETERMINED = "und"
 
-def parse_groq_payload(data: dict, offset_s: float) -> tuple[list[dict], str]:
-    """Groq verbose_json → (canonical words, language code)."""
-    raw_lang = (data.get("language") or "en").lower()
-    language = LANGUAGE_CODES.get(raw_lang, raw_lang)
 
-    words = [
-        _word(w.get("word", w.get("text", "")), w["start"], w["end"], offset_s,
-              w.get("probability"))
-        for w in (data.get("words") or [])
-        if w.get("start") is not None and w.get("end") is not None
-    ]
+def normalize_language(raw) -> str:
+    """Provider language field → a safe ISO-639-1 code or `und`.
+
+    Providers return either codes ("en"), full names ("english", "hindi"),
+    locale tags ("en-US") or free-text names ("bhojpuri"). Only a real
+    2-letter code may travel on: anything else becomes `und` so callers can
+    treat it as "not locked" instead of feeding a full name back into an API
+    that expects ISO-639-1 (which used to 400 every later chunk).
+    """
+    value = str(raw or "").strip().lower()
+    if not value:
+        return UNDETERMINED
+    value = LANGUAGE_CODES.get(value, value)
+    if re.fullmatch(r"[a-z]{2}", value):
+        return value
+    locale = re.fullmatch(r"([a-z]{2})[-_][a-z]{2,8}", value)
+    if locale:
+        return locale.group(1)
+    return UNDETERMINED
+
+
+def parse_groq_payload(data: dict, offset_s: float) -> tuple[list[dict], str, bool]:
+    """Groq verbose_json → (canonical words, language code, word_timed).
+
+    `word_timed` is False when words had to be spread across segment windows
+    (the provider omitted word granularity) — the caller prefers a provider
+    that produced real timings before accepting an estimate."""
+    language = normalize_language(data.get("language"))
+
+    words = []
+    for w in data.get("words") or []:
+        pair = _valid_pair(w.get("start"), w.get("end"))
+        if pair is None:
+            continue
+        words.append(_word(w.get("word", w.get("text", "")),
+                           pair[0], pair[1], offset_s, w.get("probability")))
+    timed = bool(words)
     if not words:
         # Provider omitted word granularity: spread each segment's words evenly
         # across its own window so captions still get per-word timings.
         for seg in data.get("segments") or []:
-            seg_start, seg_end = seg.get("start"), seg.get("end")
-            if seg_start is None or seg_end is None:
+            pair = _valid_pair(seg.get("start"), seg.get("end"))
+            if pair is None:
                 continue
-            words.extend(_spread_words(seg.get("text") or "", seg_start, seg_end, offset_s))
-    return words, language
+            words.extend(_spread_words(seg.get("text") or "",
+                                       pair[0], pair[1], offset_s))
+    return words, language, timed
 
 
-def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[list[dict], str, str] | None:
+def _transcribe_groq(path: str, offset_s: float, language: str | None,
+                     context: dict | None = None,
+                     ) -> tuple[list[dict], str, str, bool] | None:
     key = os.environ.get("GROQ_API_KEY", "").strip()
     if not key:
         print("  groq: GROQ_API_KEY not set — skipping provider")
@@ -168,11 +261,7 @@ def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[
             # noticeably fewer misspelled names/brand terms than a bare call,
             # and temperature=0 keeps chunk-to-chunk vocabulary consistent.
             form["temperature"] = "0"
-            form["prompt"] = (
-                "Podcast, vlog or lecture speech. Keep person names, brand names "
-                "and technical terms exactly as spoken. Romanised Hindi words are "
-                "written the way they are typed on social media."
-            )
+            form["prompt"] = build_prompt(context)
             try:
                 with open(path, "rb") as fh:
                     resp = requests.post(
@@ -198,10 +287,11 @@ def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[
                     print(f"  groq/{model}: HTTP 200 with non-JSON body ({exc})")
                     break
                 if data.get("words") or data.get("segments"):
-                    words, lang = parse_groq_payload(data, offset_s)
+                    words, lang, timed = parse_groq_payload(data, offset_s)
                     if words:
-                        print(f"  groq: ok model={model} lang={lang}")
-                        return words, lang, model
+                        print(f"  groq: ok model={model} lang={lang} "
+                              f"timed={timed}")
+                        return words, lang, model, timed
                 print(f"  groq/{model}: HTTP 200 but no usable transcript")
                 break
             if resp.status_code in (429, 500, 502, 503):
@@ -215,27 +305,32 @@ def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[
 
 
 # ── Deepgram ────────────────────────────────────────────────────────────────
-def parse_deepgram_payload(data: dict, offset_s: float, duration_s: float) -> list[dict]:
-    """Deepgram listen response → canonical words (punctuated_word preferred)."""
+def parse_deepgram_payload(data: dict, offset_s: float,
+                           duration_s: float) -> tuple[list[dict], bool]:
+    """Deepgram listen response → (canonical words, word_timed)
+    (punctuated_word preferred)."""
     words: list[dict] = []
     try:
         alt = data["results"]["channels"][0]["alternatives"][0]
     except (KeyError, IndexError, TypeError):
-        return words
+        return words, False
     for w in alt.get("words") or []:
-        start, end = w.get("start"), w.get("end")
-        if start is None or end is None:
+        pair = _valid_pair(w.get("start"), w.get("end"))
+        if pair is None:
             continue
         words.append(_word(
             w.get("punctuated_word") or w.get("word") or "",
-            start, end, offset_s, w.get("confidence"),
+            pair[0], pair[1], offset_s, w.get("confidence"),
         ))
+    timed = bool(words)
     if not words and (alt.get("transcript") or "").strip() and duration_s > 0:
         words = _spread_words(alt.get("transcript") or "", 0.0, duration_s, offset_s)
-    return words
+    return words, timed
 
 
-def _transcribe_deepgram(path: str, offset_s: float, language: str | None = None) -> tuple[list[dict], str, str] | None:
+def _transcribe_deepgram(path: str, offset_s: float, language: str | None = None,
+                         context: dict | None = None,
+                         ) -> tuple[list[dict], str, str, bool] | None:
     key = os.environ.get("DEEPGRAM_API_KEY", "").strip()
     if not key:
         print("  deepgram: DEEPGRAM_API_KEY not set — skipping provider")
@@ -245,11 +340,14 @@ def _transcribe_deepgram(path: str, offset_s: float, language: str | None = None
     with open(path, "rb") as fh:
         audio = fh.read()
 
+    # The language hint is authoritative when it is a real code: `language=hi`
+    # pins the model instead of the previous always-`multi` behaviour.
+    params = _deepgram_params(context, language)
     for attempt in range(ATTEMPTS_PER_PROVIDER):
         try:
             resp = requests.post(
                 DEEPGRAM_URL,
-                params=DEEPGRAM_PARAMS,
+                params=params,
                 headers={
                     "Authorization": f"Token {key}",
                     "Content-Type": "audio/wav",
@@ -269,17 +367,31 @@ def _transcribe_deepgram(path: str, offset_s: float, language: str | None = None
             except ValueError as exc:
                 print(f"  deepgram: HTTP 200 with non-JSON body ({exc})")
                 break
-            words = parse_deepgram_payload(data, offset_s, duration)
+            words, timed = parse_deepgram_payload(data, offset_s, duration)
             if words:
+                # detected_language lives in results.channels[0] per the
+                # current docs (BCP-47); metadata.detected_language is the
+                # legacy location — support both.
                 detected = ""
                 try:
-                    detected = (data.get("metadata") or {}).get("detected_language") or ""
-                except AttributeError:
+                    detected = (data["results"]["channels"][0]
+                                .get("detected_language") or "")
+                except (KeyError, IndexError, TypeError, AttributeError):
                     detected = ""
-                print(f"  deepgram: ok words={len(words)} detected={detected or 'n/a'}")
-                # `language=multi` transcribes any language; a Hindi-preferred
-                # call already locked `hi`, anything else reports multi as en.
-                return words, "multi", "nova-3"
+                if not detected:
+                    try:
+                        detected = (data.get("metadata") or {}
+                                    ).get("detected_language") or ""
+                    except AttributeError:
+                        detected = ""
+                # Report the code Deepgram actually detected (normalized) so
+                # callers can lock on it; `multi` only when none was reported.
+                lang = normalize_language(detected)
+                if lang == UNDETERMINED:
+                    lang = "multi"
+                print(f"  deepgram: ok words={len(words)} timed={timed} "
+                      f"detected={lang}")
+                return words, lang, "nova-3", timed
             print("  deepgram: HTTP 200 but no usable transcript")
             break
         if resp.status_code in (429, 500, 502, 503):
@@ -293,8 +405,9 @@ def _transcribe_deepgram(path: str, offset_s: float, language: str | None = None
 
 
 # ── NIM (Riva gRPC) ─────────────────────────────────────────────────────────
-def parse_riva_response(response, offset_s: float, duration_s: float) -> list[dict]:
-    """Riva offline_recognize response → canonical words.
+def parse_riva_response(response, offset_s: float,
+                        duration_s: float) -> tuple[list[dict], bool]:
+    """Riva offline_recognize response → (canonical words, word_timed).
 
     Word timings are second floats. Results without word offsets (non-speech
     audio returns empty word lists) get their transcript spread evenly across
@@ -305,7 +418,7 @@ def parse_riva_response(response, offset_s: float, duration_s: float) -> list[di
     try:
         results = list(response.results)
     except (TypeError, AttributeError):
-        return words
+        return words, False
 
     for result in results:
         try:
@@ -316,25 +429,28 @@ def parse_riva_response(response, offset_s: float, duration_s: float) -> list[di
         riva_words = list(getattr(alt, "words", []) or [])
         if riva_words:
             for w in riva_words:
-                start = getattr(w, "start_time", None)
-                end = getattr(w, "end_time", None)
-                if start is None or end is None:
+                pair = _valid_pair(getattr(w, "start_time", None),
+                                   getattr(w, "end_time", None))
+                if pair is None:
                     continue
                 words.append(_word(
-                    getattr(w, "word", "") or transcript, start, end, offset_s,
-                    getattr(w, "confidence", None),
+                    getattr(w, "word", "") or transcript, pair[0], pair[1],
+                    offset_s, getattr(w, "confidence", None),
                 ))
         elif transcript.strip():
             no_offset_texts.append(transcript.strip())
 
+    timed = bool(words)
     if no_offset_texts and duration_s > 0:
         slice_sec = duration_s / len(no_offset_texts)
         for i, text in enumerate(no_offset_texts):
             words.extend(_spread_words(text, i * slice_sec, (i + 1) * slice_sec, offset_s))
-    return words
+    return words, timed
 
 
-def _transcribe_nim(path: str, offset_s: float, language: str | None = None) -> tuple[list[dict], str, str] | None:
+def _transcribe_nim(path: str, offset_s: float, language: str | None = None,
+                    context: dict | None = None,
+                    ) -> tuple[list[dict], str, str, bool] | None:
     key = os.environ.get("NVIDIA_NIM_API_KEY", "").strip()
     if not key:
         print("  nim: NVIDIA_NIM_API_KEY not set — skipping provider")
@@ -376,10 +492,11 @@ def _transcribe_nim(path: str, offset_s: float, language: str | None = None) -> 
             time.sleep(wait)
             continue
 
-        words = parse_riva_response(response, offset_s, duration)
+        words, timed = parse_riva_response(response, offset_s, duration)
         if words:
-            print(f"  nim: ok words={len(words)} model=openai/whisper-large-v3 (riva)")
-            return words, "multi", "openai/whisper-large-v3"
+            print(f"  nim: ok words={len(words)} timed={timed} "
+                  "model=openai/whisper-large-v3 (riva)")
+            return words, "multi", "openai/whisper-large-v3", timed
         print("  nim: response contained no usable transcript")
         break
     return None
@@ -391,14 +508,18 @@ def transcribe(
     segment_offset_sec: float = 0.0,
     forced_language: str | None = None,
     prefer_hindi_first: bool = False,
+    context: dict | None = None,
 ) -> dict:
     """Transcribe one WAV chunk through the provider chain.
 
-    Returns {"words": Caption[], "language": str, "provider": str, "model": str}.
-    `language` is "multi" when the provider cannot report a single language and
-    no forced language was given; the workflow's language lock only consumes it
-    on the first chunk, where Groq (or the Hindi preference) supplies a real
-    code.
+    Returns {"words": Caption[], "language": str, "provider": str, "model": str,
+    "timing_source": "word"|"estimated"}.
+    `language` is a normalized ISO-639-1 code, "multi" when the provider cannot
+    report a single language and no forced language was given, or "und" when
+    the provider's answer could not be normalized; the workflow's language lock
+    only consumes real codes. A transcript WITHOUT word timings is only used
+    after every provider had the chance to produce real timings — estimated
+    spreads over a 5-minute chunk are far too coarse to prefer.
     """
     order = (
         [("deepgram", _transcribe_deepgram), ("groq", _transcribe_groq), ("nim", _transcribe_nim)]
@@ -407,9 +528,10 @@ def transcribe(
     )
 
     errors: list[str] = []
+    estimated: dict | None = None   # first transcript without word timings
     for name, fn in order:
         try:
-            result = fn(wav_path, segment_offset_sec, forced_language)
+            result = fn(wav_path, segment_offset_sec, forced_language, context)
         except Exception as exc:  # noqa: BLE001 — a provider bug must not kill the others
             errors.append(f"{name}: {type(exc).__name__}: {exc}")
             print(f"  {name}: crashed ({errors[-1]})")
@@ -417,10 +539,24 @@ def transcribe(
         if result is None:
             errors.append(f"{name}: no transcript")
             continue
-        words, language, model = result
-        if forced_language and language in ("multi", ""):
+        words, language, model, timed = result
+        if forced_language and language in ("multi", "", UNDETERMINED):
             language = forced_language
-        return {"words": words, "language": language, "provider": name, "model": model}
+        if timed:
+            return {"words": words, "language": language, "provider": name,
+                    "model": model, "timing_source": "word"}
+        if estimated is None:
+            estimated = {"words": words, "language": language, "provider": name,
+                         "model": model}
+            print(f"  {name}: transcript without word timings — "
+                  "trying word-timed providers first")
+    if estimated is not None:
+        # Honest estimate: evenly spread words, confidence absent, flagged so
+        # the report can say the timings are not measured.
+        estimated["timing_source"] = "estimated"
+        print(f"  {estimated['provider']}: no provider produced word timings — "
+              "using the evenly spread estimate")
+        return estimated
 
     raise RuntimeError(f"all transcription providers failed: {'; '.join(errors)}")
 

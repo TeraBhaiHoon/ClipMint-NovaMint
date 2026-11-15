@@ -1,0 +1,13 @@
+{
+  "name": "clipmint-quota-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "PGlite (real Postgres WASM) integration tests for the ClipMint quota v2 SQL. No server/docker; applies the repo's actual supabase/schema.sql + all migrations verbatim, stubbing only auth roles/storage fixture. Run: npm install && npm test (from this directory).",
+  "type": "module",
+  "scripts": {
+    "test": "node verify_quota.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.3.14"
+  }
+}

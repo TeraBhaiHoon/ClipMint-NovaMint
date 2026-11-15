@@ -193,6 +193,21 @@ async function handleVerification(request: NextRequest) {
                     { status: 500 }
                 );
             }
+
+            // Retain currently running holds: jobs still processing keep their
+            // reserved clip budget inside the new window
+            // (supabase/migration_quota_v2.sql).
+            const { error: holdsError } = await supabaseAdmin.rpc(
+                "preserve_running_holds",
+                { p_user_id: user.id }
+            );
+            if (holdsError) {
+                console.error("Failed to preserve running holds:", holdsError.message);
+                return NextResponse.json(
+                    { error: "Failed to upgrade plan" },
+                    { status: 500 }
+                );
+            }
         }
 
         if (request.method === "GET") {

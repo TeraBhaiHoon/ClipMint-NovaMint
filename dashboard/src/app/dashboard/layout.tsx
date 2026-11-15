@@ -76,6 +76,7 @@ function Workspace({ children }: { children: React.ReactNode }) {
                         <div className="studio-account-usage-title"><span>Plan & usage</span>{profile && !error && <span className="studio-plan-pill">{limits.label}</span>}</div>
                         {loading ? <p>Loading your plan…</p> : error ? <p>Usage temporarily unavailable</p> : profile && <>
                             <UsageMeter label="Clips" used={profile.clips_used || 0} limit={limits.clips} suffix="" />
+                            {!!profile.clips_reserved && <p>{profile.clips_reserved} clips reserved for processing</p>}
                             <Link href="/dashboard/settings?tab=billing">Manage plan <ArrowUpRight size={14} aria-hidden="true" /></Link>
                         </>}
                     </div>}

@@ -114,6 +114,46 @@ class Supabase:
             completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    # -- quota RPCs (supabase/migration_quota_v2.sql) ------------------------
+    def rpc(self, name: str, params: dict[str, Any]) -> Any:
+        """Call a PostgREST RPC with the same retry discipline as REST.
+
+        A missing function (migration not applied) or a raised error surfaces
+        as RuntimeError so callers FAIL CLOSED — quota transitions must never
+        be skipped silently. PostgREST maps plpgsql RAISE ... USING ERRCODE to
+        HTTP 400 with a JSON body {message, code, detail}.
+        """
+        resp = self._request("POST", f"rpc/{name}", json=params)
+        if resp.status_code == 404:
+            raise RuntimeError(
+                f"RPC {name} not found — is supabase/migration_quota_v2.sql applied? "
+                f"{resp.text[:200]}"
+            )
+        if resp.status_code not in (200, 204):
+            raise RuntimeError(f"RPC {name} failed (HTTP {resp.status_code}): {resp.text[:300]}")
+        if resp.status_code == 204 or not resp.text:
+            return None
+        return json.loads(resp.text)
+
+    def finalize_job(self, job_id: str, clips: list[dict[str, Any]], meta: dict[str, Any]) -> int:
+        """Atomic finalization: clip rows + quota charge + done in ONE
+        database transaction. Raises on failure (never leave a done job
+        uncharged); returns the delivered master-clip count."""
+        delivered = self.rpc(
+            "finalize_job_results",
+            {"p_job_id": job_id, "p_clips": clips, "p_meta": meta},
+        )
+        return int(delivered or 0)
+
+    def fail_job(self, job_id: str, message: str, status: str = "failed") -> bool:
+        """Atomic terminal status + quota refund. Idempotent (quota_state CAS);
+        returns False when the job was already settled."""
+        result = self.rpc(
+            "fail_job_quota",
+            {"p_job_id": job_id, "p_message": message[:2000], "p_status": status},
+        )
+        return bool(result)
+
     # -- checkpoints -------------------------------------------------------
     def get_checkpoint_url(self, job_id: str) -> str:
         """The Drive URL recorded for this job's transcription checkpoint, or
@@ -182,6 +222,15 @@ def main() -> None:
     p.add_argument("--message", required=True)
     p.add_argument("--status", default="failed")
 
+    p = sub.add_parser("fail-job")
+    p.add_argument("--job-id", required=True)
+    p.add_argument("--message", required=True)
+    p.add_argument("--status", default="failed", choices=["failed", "cancelled"])
+
+    p = sub.add_parser("finalize-job")
+    p.add_argument("--clips-json", required=True)
+    p.add_argument("--meta-json", required=True)
+
     p = sub.add_parser("get-job")
     p.add_argument("--job-id", required=True)
 
@@ -209,6 +258,20 @@ def main() -> None:
     elif args.cmd == "set-error":
         db.set_error(args.job_id, args.message, args.status)
         print(f"OK error recorded ({args.status})")
+    elif args.cmd == "fail-job":
+        # Atomic terminal status + quota refund (migration_quota_v2.sql).
+        # STRICT: a lost refund here is healed by the reconcile cron, but the
+        # operator must see the failure in the run log.
+        settled = db.fail_job(args.job_id, args.message, args.status)
+        print(f"OK job {args.job_id} settled ({'refunded' if settled else 'already settled'})")
+    elif args.cmd == "finalize-job":
+        with open(args.clips_json) as fh:
+            clips = json.load(fh)
+        with open(args.meta_json) as fh:
+            meta = json.load(fh)
+        job_id = clips[0]["job_id"] if clips else meta["job_id"]
+        delivered = db.finalize_job(job_id, clips, meta)
+        print(f"OK finalized job {job_id}: delivered {delivered} master clip(s)")
     elif args.cmd == "get-job":
         print(json.dumps(db.get_job(args.job_id)))
     elif args.cmd == "get-checkpoint":

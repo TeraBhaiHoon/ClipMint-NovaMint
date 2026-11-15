@@ -139,6 +139,20 @@ export async function POST(request: NextRequest) {
                         );
                     }
 
+                    // Retain currently running holds: jobs still processing keep
+                    // their reserved clip budget inside the NEW window (their
+                    // settlement releases the hold against the recorded
+                    // reservation window — supabase/migration_quota_v2.sql).
+                    const { error: holdsError } = await supabase.rpc(
+                        "preserve_running_holds",
+                        { p_user_id: userId }
+                    );
+                    if (holdsError) {
+                        throw new Error(
+                            `Failed to preserve running holds for ${userId}: ${holdsError.message}`
+                        );
+                    }
+
                     // Log payment
                     const { error: insertError } = await supabase.from("payments").insert({
                         user_id: userId,
@@ -222,6 +236,10 @@ export async function POST(request: NextRequest) {
                     .update({
                         clips_used: 0,
                         videos_used: 0,
+                        // The renewal starts a fresh usage window NOW — without
+                        // this, the 30-day lazy roll could fire mid-plan at an
+                        // arbitrary offset from the billing cycle.
+                        usage_period_start: new Date().toISOString(),
                         subscription_status: "active",
                         current_period_end: periodEnd.toISOString(),
                     })
@@ -230,6 +248,17 @@ export async function POST(request: NextRequest) {
                 if (updateError) {
                     throw new Error(
                         `Failed to renew subscription for ${userId}: ${updateError.message}`
+                    );
+                }
+
+                // Retain currently running holds in the fresh window.
+                const { error: holdsError } = await supabase.rpc(
+                    "preserve_running_holds",
+                    { p_user_id: userId }
+                );
+                if (holdsError) {
+                    throw new Error(
+                        `Failed to preserve running holds for ${userId}: ${holdsError.message}`
                     );
                 }
                 break;
@@ -276,6 +305,17 @@ export async function POST(request: NextRequest) {
                 if (updateError) {
                     throw new Error(
                         `Failed to downgrade expired subscription for ${userId}: ${updateError.message}`
+                    );
+                }
+
+                // Retain currently running holds in the fresh Free window.
+                const { error: holdsError } = await supabase.rpc(
+                    "preserve_running_holds",
+                    { p_user_id: userId }
+                );
+                if (holdsError) {
+                    throw new Error(
+                        `Failed to preserve running holds for ${userId}: ${holdsError.message}`
                     );
                 }
                 break;

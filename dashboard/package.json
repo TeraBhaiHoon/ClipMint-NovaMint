@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:dashboard": "node --test tests/dashboard.test.mjs",
-    "test:homepage": "node --test tests/homepage.test.mjs"
+    "test:homepage": "node --test tests/homepage.test.mjs",
+    "test:quota": "node --test tests/quota-routes.test.mjs tests/gateway-quota.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.9.0",

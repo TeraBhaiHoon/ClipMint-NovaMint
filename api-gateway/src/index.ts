@@ -45,6 +45,11 @@ interface CreateJobBody {
     caption_style?: string;
     max_clips?: number;
     source_type?: string;
+    /** Persisted processing selectors (defaults applied server-side). */
+    caption_pace?: string;
+    source_language?: string;
+    caption_language?: string;
+    request_id?: string;
 }
 
 // ─── Video URL validation / normalisation (mirror of lib/validateUrl.ts) ────
@@ -224,6 +229,8 @@ function errorResponse(message: string, status: number, env?: Env): Response {
 interface RpcResult {
     ok: boolean;
     data: unknown;
+    error?: string;
+    status?: number;
 }
 
 async function callRpc(env: Env, fn: string, params: Record<string, unknown>): Promise<RpcResult | null> {
@@ -241,9 +248,9 @@ async function callRpc(env: Env, fn: string, params: Record<string, unknown>): P
         if (!res.ok) {
             const detail = (await res.text()).slice(0, 300);
             console.error(`RPC ${fn} failed: ${res.status} ${detail}`);
-            return null;
+            const parsed = JSON.parse(detail);
+            return { ok: false, data: null, error: typeof parsed?.message === "string" ? parsed.message : detail, status: res.status };
         }
-
         const text = await res.text();
         return { ok: true, data: text ? JSON.parse(text) : null };
     } catch (err) {
@@ -253,18 +260,56 @@ async function callRpc(env: Env, fn: string, params: Record<string, unknown>): P
 }
 
 /**
- * Reserve one video slot atomically (supabase/migration_quota.sql).
- * Returns true (reserved), false (limit reached) or null (RPC unavailable —
- * caller fails open so the API keeps working if the migration is not applied).
+ * Create the job + reserve quota as ONE atomic transaction
+ * (supabase/migration_quota_v2.sql `create_job_with_quota`).
+ *
+ * FAIL-CLOSED: any RPC failure (transport, 5xx, missing migration) returns
+ * null and the caller refuses the submission — there is no path that creates
+ * a job without a settled reservation. The RPC raises QUOTA_VIDEOS_LIMIT /
+ * QUOTA_CLIPS_LIMIT messages when the plan is exhausted (mapped to 402).
  */
-async function reserveVideoSlot(env: Env, userId: string): Promise<boolean | null> {
-    const result = await callRpc(env, "increment_videos_used", { p_user_id: userId });
-    if (!result) return null;
-    return result.data === true;
+async function createJobWithQuota(
+    env: Env,
+    userId: string,
+    job: Record<string, unknown>,
+    requestId: string,
+): Promise<{ ok: true; jobId: string } | { ok: false; status: number; message: string }> {
+    const result = await callRpc(env, "create_job_with_quota", {
+        p_user_id: userId,
+        p_job: job,
+        p_creation_request_id: requestId,
+    });
+    if (!result) {
+        return {
+            ok: false,
+            status: 503,
+            message: "Quota service is temporarily unavailable. Please try again shortly.",
+        };
+    }
+    if (result && !result.ok) {
+        const message = result.error || "Quota service declined the request";
+        if (message.startsWith("QUOTA_")) return { ok: false, status: 402, message };
+        if (message.startsWith("REQUEST_ID_PAYLOAD_MISMATCH")) return { ok: false, status: 409, message };
+        return { ok: false, status: 503, message: "Quota service is temporarily unavailable" };
+    }
+    const jobId = typeof result.data === "string" ? result.data : null;
+    if (!jobId) {
+        return { ok: false, status: 503, message: "Failed to create job" };
+    }
+    return { ok: true, jobId };
 }
 
-async function refundVideoSlot(env: Env, userId: string): Promise<void> {
-    await callRpc(env, "refund_videos_used", { p_user_id: userId });
+/**
+ * Atomic terminal status + quota refund for a job whose dispatch failed
+ * (fail_job_quota — CAS-guarded, idempotent). Best effort: a failure here is
+ * healed by the reconcile sweep because the job stays quota_state='pending'.
+ */
+async function failJobQuota(env: Env, jobId: string, message: string): Promise<void> {
+    await callRpc(env, "fail_job_quota", {
+        p_job_id: jobId,
+        p_message: message.slice(0, 2000),
+        p_status: "failed",
+    });
 }
 
 // ─── Auth Middleware ──────────────────────────────────────────────────────────
@@ -378,7 +423,8 @@ async function handleCreateJob(
     user: ApiUser,
     env: Env
 ): Promise<Response> {
-    const body = (await request.json()) as CreateJobBody;
+    const body = await request.json().catch(() => null) as CreateJobBody | null;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return errorResponse("Invalid request body", 400, env);
 
     // ── Validate + normalise the URL (it is interpolated into a shell command
     //    by the workflow, so this is the security boundary) ──
@@ -387,23 +433,8 @@ async function handleCreateJob(
         return errorResponse(validation.reason || "Invalid video_url", 400, env);
     }
 
-    // ── Quota ──
-    if (user.videos_used >= user.videos_limit) {
-        return errorResponse(
-            `Video limit reached (${user.videos_used}/${user.videos_limit}). Upgrade your plan.`,
-            429,
-            env
-        );
-    }
-
-    const remainingClips = Math.max(0, (user.clips_limit ?? 0) - (user.clips_used ?? 0));
-    if (remainingClips < 1) {
-        return errorResponse(
-            `Clip limit reached (${user.clips_used}/${user.clips_limit}). Upgrade your plan.`,
-            429,
-            env
-        );
-    }
+    // The transactional RPC rolls expired periods and computes effective limits.
+    // Cached/raw profile counters must not reject a newly rolled allowance.
 
     const VALID_STYLES = [
         "hormozi", "bounce", "fade", "glow", "typewriter",
@@ -414,49 +445,46 @@ async function handleCreateJob(
         return errorResponse(`Invalid caption_style. Must be one of: ${VALID_STYLES.join(", ")}`, 400, env);
     }
 
-    // Clamp server-side to the plan's remaining clips.
-    const maxClips = Math.min(Math.max(body.max_clips || 10, 1), 20, remainingClips);
-
-    // Reserve the video slot *before* creating/dispatching the job so a
-    // concurrent submission cannot slip past the limit.
-    const reserved = await reserveVideoSlot(env, user.id);
-    if (reserved === false) {
-        return errorResponse(
-            `Video limit reached (${user.videos_used}/${user.videos_limit}). Upgrade your plan.`,
-            429,
-            env
-        );
+    const VALID_PACES = ["fast", "balanced", "slow"];
+    const VALID_SOURCE_LANGUAGES = ["auto", "hi", "en"];
+    const VALID_CAPTION_LANGUAGES = ["original", "hinglish", "en"];
+    for (const [value, allowed, label] of [
+        [body.caption_pace, VALID_PACES, "caption_pace"],
+        [body.source_language, VALID_SOURCE_LANGUAGES, "source_language"],
+        [body.caption_language, VALID_CAPTION_LANGUAGES, "caption_language"],
+    ] as const) {
+        if (value !== undefined && !allowed.includes(value)) return errorResponse(`Invalid ${label}`, 400, env);
     }
-    const slotReserved = reserved === true;
+    const captionPace = body.caption_pace || "balanced";
+    const sourceLanguage = body.source_language || "auto";
+    const captionLanguage = body.caption_language || "original";
+    if (body.max_clips !== undefined && (!Number.isInteger(body.max_clips) || body.max_clips < 1 || body.max_clips > 20)) return errorResponse("max_clips must be an integer between 1 and 20", 400, env);
+    const maxClips = body.max_clips ?? 10;
+    const requestId = body.request_id || crypto.randomUUID();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) return errorResponse("request_id must be a UUID", 400, env);
 
-    // Create job in Supabase
-    const jobRes = await fetch(`${env.SUPABASE_URL}/rest/v1/jobs`, {
-        method: "POST",
-        headers: {
-            apikey: env.SUPABASE_SERVICE_KEY,
-            Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-            "Content-Type": "application/json",
-            Prefer: "return=representation",
-        },
-        body: JSON.stringify({
-            user_id: user.id,
-            video_url: validation.url,
-            caption_style: captionStyle,
-            max_clips: maxClips,
-            source_type: body.source_type || "url",
-            status: "queued",
-        }),
-    });
-
-    const jobs = (await jobRes.json()) as Array<{ id: string }>;
-    if (!jobs.length) {
-        if (slotReserved) await refundVideoSlot(env, user.id);
-        return errorResponse("Failed to create job", 500, env);
+    // Create job + reserve quota atomically (fail-closed).
+    const created = await createJobWithQuota(env, user.id, {
+        video_url: validation.url,
+        caption_style: captionStyle,
+        caption_pace: captionPace,
+        source_language: sourceLanguage,
+        caption_language: captionLanguage,
+        max_clips: maxClips,
+        source_type: body.source_type === "drive" ? "drive" : "url",
+    }, requestId);
+    if (!created.ok) {
+        return errorResponse(created.message, created.status, env);
     }
+    const jobId = created.jobId;
+    const claimed = await callRpc(env, "claim_job_dispatch", { p_job_id: jobId });
+    if (!claimed?.ok) return errorResponse("Could not verify the processing reservation", 503, env);
+    const claim = Array.isArray(claimed.data) ? claimed.data[0] : claimed.data;
+    if (!claim || typeof claim !== "object" || typeof claim.claimed !== "boolean" || !Number.isInteger(claim.granted_clips)) return errorResponse("Could not verify the processing reservation", 503, env);
+    if (!claim.claimed) return jsonResponse({ id: jobId, status: "queued", replayed: true, request_id: requestId }, 200, env);
+    if (claim.granted_clips < 1 || claim.granted_clips > 20) return errorResponse("Invalid processing reservation", 503, env);
 
-    const jobId = jobs[0].id;
-
-    // Trigger GitHub Actions workflow
+    // Trigger GitHub only after the atomic claim, using its granted budget.
     const dispatchUrl = `https://api.github.com/repos/${env.GITHUB_REPO}/actions/workflows/process-video.yml/dispatches`;
     try {
         const dispatchRes = await fetch(dispatchUrl, {
@@ -472,7 +500,10 @@ async function handleCreateJob(
                     job_id: jobId,
                     video_url: validation.url,
                     caption_style: captionStyle,
-                    max_clips: String(maxClips),
+                    caption_pace: captionPace,
+                    source_language: sourceLanguage,
+                    caption_language: captionLanguage,
+                    max_clips: String(claim.granted_clips),
                 },
             }),
         });
@@ -483,54 +514,22 @@ async function handleCreateJob(
             const errDetail = `GitHub API ${dispatchRes.status}: ${errText.slice(0, 300)}`;
             console.error("GitHub dispatch failed:", errDetail, "URL:", dispatchUrl);
 
-            await fetch(
-                `${env.SUPABASE_URL}/rest/v1/jobs?id=eq.${jobId}`,
-                {
-                    method: "PATCH",
-                    headers: {
-                        apikey: env.SUPABASE_SERVICE_KEY,
-                        Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-                        "Content-Type": "application/json",
-                        Prefer: "return=minimal",
-                    },
-                    body: JSON.stringify({
-                        status: "failed",
-                        error_message: errDetail,
-                    }),
-                }
-            );
-            // No pipeline run means no webhook, so refund the reserved slot here.
-            if (slotReserved) await refundVideoSlot(env, user.id);
+            // Atomic terminal status + refund of the reservation
+            // (fail_job_quota). No pipeline run means no settlement, so the
+            // slot must be returned here — never leaked.
+            await failJobQuota(env, jobId, errDetail);
             return errorResponse(errDetail, 500, env);
         }
     } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
-        console.error("GitHub dispatch exception:", errMsg);
-
-        // Update job status to failed if trigger throws
-        await fetch(
-            `${env.SUPABASE_URL}/rest/v1/jobs?id=eq.${jobId}`,
-            {
-                method: "PATCH",
-                headers: {
-                    apikey: env.SUPABASE_SERVICE_KEY,
-                    Authorization: `Bearer ${env.SUPABASE_SERVICE_KEY}`,
-                    "Content-Type": "application/json",
-                    Prefer: "return=minimal",
-                },
-                body: JSON.stringify({
-                    status: "failed",
-                    error_message: `Pipeline trigger failed: ${errMsg}`,
-                }),
-            }
-        );
-        if (slotReserved) await refundVideoSlot(env, user.id);
-        return errorResponse(`Pipeline trigger failed: ${errMsg}`, 500, env);
+        console.error("GitHub dispatch acceptance unknown:", errMsg);
+        return jsonResponse({ id: jobId, request_id: requestId, status: "queued", error: "Processing may have started. Check this job before retrying." }, 502, env);
     }
 
     return jsonResponse(
         {
             id: jobId,
+            request_id: requestId,
             status: "queued",
             message: "Video processing started. You'll be notified when done.",
         },

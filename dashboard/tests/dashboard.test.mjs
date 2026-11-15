@@ -101,18 +101,19 @@ test("responsive layouts and reduced-motion overrides are part of the source", (
     assert.match(css, /stroke-width: 1\.75/);
 });
 
-test("client submission requires an actual reserved slot and avoids duplicate saved projects", () => {
+test("job creation uses atomic server admission without browser quota mutations", () => {
     const page = file("src/app/dashboard/new/page.tsx");
-    assert.match(page, /if \(reserved !== true\)/);
+    assert.match(page, /fetch\("\/api\/jobs"/);
     assert.match(page, /!hasSource \|\| submitting\.current \|\| createdJobId/);
-    assert.ok(page.indexOf("bgmFile.size > 25") < page.indexOf('rpc("increment_videos_used"'));
-    assert.match(page, /reservedSlot && !jobCreated && userId/);
+    assert.doesNotMatch(page, /rpc\("(?:increment|refund)_videos_used"|from\("jobs"\)\.insert/);
+    assert.ok(page.indexOf("bgmFile.size > 25") < page.indexOf('fetch("/api/jobs"'));
 });
 
-test("server quota check accepts the last already-reserved video slot", () => {
-    const route = file("src/app/api/trigger-pipeline/route.ts");
-    assert.match(route, /if \(\(profile\.videos_used \?\? 0\) > limits\.videos\)/);
-    assert.doesNotMatch(route, /remainingVideos < 1/);
+test("retry delegates admission and status changes to the server", () => {
+    const page = file("src/app/dashboard/[jobId]/page.tsx");
+    assert.match(page, /resume: resumeRetry && !!job.checkpoint_url/);
+    assert.doesNotMatch(page, /from\("jobs"\)\.update/);
+    assert.match(page, /disabled=\{running\}/);
 });
 
 test("account deletion is honest and does not pretend sign-out deletes data", () => {

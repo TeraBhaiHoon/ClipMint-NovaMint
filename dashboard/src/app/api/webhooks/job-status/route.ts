@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { Resend } from "resend";
 
 /**
@@ -11,9 +12,15 @@ export const dynamic = "force-dynamic";
  * POST /api/webhooks/job-status
  *
  * Called by the processing pipeline when a job completes or fails.
- * - Updates clips_used in the user's profile
- * - Sends email notification via Resend
- * - Sends Discord notification via user's webhook URL
+ * - NOTIFICATION ONLY for success: a completed job's clip charge is settled
+ *   atomically by the pipeline (finalize_job_results, migration_quota_v2.sql).
+ *   This handler never charges — calling it again is structurally incapable
+ *   of double-charging because it performs no accounting writes on "done".
+ * - IDEMPOTENT REFUND SAFETY NET for failure/cancel: calls fail_job_quota,
+ *   whose quota_state CAS makes the second delivery a no-op (the pipeline's
+ *   Record-failure step refunds first; the webhook can never refund twice,
+ *   and the legacy jobs.videos_refunded marker is honoured for old jobs).
+ * - Sends email (Resend), Discord and the user's own webhook.
  *
  * Body: { job_id, status, error_message?, webhook_secret }
  */
@@ -47,8 +54,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const admin = createAdminClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+
     const jobRes = await fetch(
-      `${supabaseUrl}/rest/v1/jobs?id=eq.${job_id}&select=id,user_id,video_url,clips_count,source_type`,
+      `${supabaseUrl}/rest/v1/jobs?id=eq.${job_id}&select=id,user_id,video_url,clips_count,source_type,status,quota_state`,
       {
         headers: {
           apikey: serviceKey,
@@ -66,78 +77,35 @@ export async function POST(request: NextRequest) {
 
     const job = jobs[0];
 
-    // ── Update clips_used in user profile when job completes successfully ──
-    // Atomic RPC (see supabase/migration_quota.sql) instead of a read-modify-write.
-    if (status === "done" && job.clips_count > 0) {
-      try {
-        const rpc = await callRpc(supabaseUrl, serviceKey, "increment_clips_used", {
-          p_user_id: job.user_id,
-          p_count: job.clips_count,
-        });
-        if (!rpc.ok) {
-          console.error("increment_clips_used RPC failed:", rpc.detail);
-        } else if (rpc.data === false) {
-          console.error(`increment_clips_used refused for user ${job.user_id} (profile missing?)`);
-        } else {
-          console.log(`incremented clips_used by ${job.clips_count} for user ${job.user_id}`);
-        }
-      } catch (err) {
-        console.error("Failed to update clips_used:", err);
-      }
-    }
-
-    // ── Decrement videos_used when job fails or is cancelled ──
-    // (The user's videos_used was incremented at submission time, so we reverse
-    //  it here since the job didn't succeed.)
-    //
-    // Idempotency: the pipeline sets `jobs.status` to failed/cancelled *before*
-    // it calls this webhook, so the status cannot tell us whether we already
-    // refunded. Instead we flip `jobs.videos_refunded` with a conditional PATCH
-    // (compare-and-set): only the delivery that wins the race refunds.
+    // ── Refund safety net (failed / cancelled) ──
+    // fail_job_quota is the single atomic refund: it flips quota_state
+    // pending→refunded under CAS, honours the legacy videos_refunded marker,
+    // and returns the video slot + releases the clip hold only against the
+    // job's recorded usage window. If the pipeline already settled, this is a
+    // no-op; if the pipeline never got here, this is the recovery.
     if (status === "failed" || status === "cancelled") {
       try {
-        const claimRes = await fetch(
-          `${supabaseUrl}/rest/v1/jobs?id=eq.${job_id}&videos_refunded=eq.false`,
-          {
-            method: "PATCH",
-            headers: {
-              apikey: serviceKey,
-              Authorization: `Bearer ${serviceKey}`,
-              "Content-Type": "application/json",
-              Prefer: "return=representation",
-            },
-            body: JSON.stringify({ videos_refunded: true }),
-          }
-        );
-
-        if (!claimRes.ok) {
-          const detail = (await claimRes.text()).slice(0, 300);
-          console.error(
-            `Could not claim refund for job ${job_id} (is supabase/migration_quota.sql applied?):`,
-            claimRes.status,
-            detail
-          );
+        const { data: refunded, error: refundError } = await admin.rpc("fail_job_quota", {
+          p_job_id: job_id,
+          p_message: error_message || "Video processing failed. Please try again.",
+          p_status: status,
+        });
+        if (refundError) {
+          console.error("fail_job_quota RPC failed:", refundError.message);
+        } else if (refunded === false) {
+          console.log(`Job ${job_id} already settled — duplicate webhook delivery skipped`);
         } else {
-          const claimed = await claimRes.json();
-          if (Array.isArray(claimed) && claimed.length > 0) {
-            const rpc = await callRpc(supabaseUrl, serviceKey, "refund_videos_used", {
-              p_user_id: job.user_id,
-            });
-            if (rpc.ok && rpc.data === true) {
-              console.log(`Refunded one video slot for user ${job.user_id} (job ${status})`);
-            } else {
-              console.error("refund_videos_used RPC failed:", rpc.detail);
-            }
-          } else {
-            console.log(`Refund already recorded for job ${job_id} — skipping duplicate refund`);
-          }
+          console.log(`Refunded reservation for job ${job_id} (${status})`);
         }
       } catch (err) {
-        console.error("Failed to refund videos_used:", err);
+        console.error("Failed to refund reservation:", err);
       }
     }
+    // success: no accounting here on purpose. clip rows + charge + done were
+    // written by the pipeline's finalize_job_results transaction; anything
+    // still pending is reconciled by /api/cron/reconcile.
 
-    // ── Get user email + profile (for notification prefs) ──
+    // ── Get user email (for notification) ──
     const userRes = await fetch(
       `${supabaseUrl}/auth/v1/admin/users/${job.user_id}`,
       {
@@ -209,8 +177,6 @@ export async function POST(request: NextRequest) {
         console.warn("RESEND_API_KEY is not set — skipping email notification");
       } else {
         try {
-          // Constructed here, at the point of use, so a missing/invalid key can
-          // never throw before the quota bookkeeping above has run.
           const resend = new Resend(resendKey);
 
           if (status === "done") {
@@ -264,10 +230,6 @@ export async function POST(request: NextRequest) {
     }
 
     // ── Send user webhook (backlog 8.5) ──
-    // The user's own endpoint gets a flat JSON event when they opted in
-    // (profiles.notify_webhook + profiles.user_webhook_url). Strictly
-    // best-effort: 5 s timeout, failures logged and never thrown, so a slow
-    // or broken user endpoint cannot delay or fail the pipeline webhook.
     const webhookEvent =
       status === "done"
         ? "job.completed"
@@ -307,50 +269,6 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
-
-// ── Supabase helpers ──
-
-/**
- * Call a Postgres function via PostgREST. Returns `ok: false` with a short
- * detail string when the HTTP call fails (e.g. the migration was not applied)
- * so callers can log instead of throwing.
- */
-async function callRpc(
-  supabaseUrl: string,
-  serviceKey: string,
-  fn: string,
-  params: Record<string, unknown>
-): Promise<{ ok: boolean; data: unknown; detail: string }> {
-  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers: {
-      apikey: serviceKey,
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(params),
-  });
-
-  const text = await res.text();
-  let data: unknown = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = text;
-  }
-
-  return { ok: res.ok, data, detail: `${res.status} ${text.slice(0, 300)}` };
-}
-
-/** Escape a value before interpolating it into the notification HTML. */
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 // ── Discord Webhook ──
@@ -412,6 +330,16 @@ async function sendDiscordNotification(opts: {
       embeds: [embed],
     }),
   });
+}
+
+/** Escape a value before interpolating it into the notification HTML. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 // ── Email Templates ──

@@ -44,6 +44,7 @@ import json
 import os
 import shutil
 import subprocess
+import urllib.error
 import urllib.request
 import sys
 from pathlib import Path
@@ -99,7 +100,12 @@ def _ping_progress(done: int, total: int) -> None:
         )
         urllib.request.urlopen(req, timeout=30).read()
         print(f"  progress ping: {done}/{total} -> {progress}%")
-    except Exception as exc:  # noqa: BLE001
+    except urllib.error.HTTPError as exc:
+        if exc.code in (429, 500, 502, 503, 504):
+            print(f"  progress ping transient HTTP {exc.code} — retried on the next unit")
+        else:
+            print(f"  progress ping failed (non-transient, non-fatal): HTTP {exc.code}")
+    except Exception as exc:  # noqa: BLE001 — best-effort: never fails a render
         print(f"  progress ping failed (non-fatal): {exc}")
 
 
@@ -496,6 +502,12 @@ def main() -> int:
         return outputs
 
     results: list[dict] = []
+    # Running count of finished WORKER UNITS. One unit == one manifest entry
+    # (a master render plus its variants, sequentially) — the same unit the
+    # ping's denominator (len(manifest)) and the shard fraction expect. A
+    # per-iteration reset here made every ping report ~1/total, so dashboard
+    # progress stuck at ~71% for whole renders.
+    done_units = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(render_entry, entry): entry for entry in manifest}
         for fut in concurrent.futures.as_completed(futures):
@@ -505,7 +517,6 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 batch = [{"index": entry["index"], "variant": "9x16", "ok": False,
                           "error": f"worker crashed: {exc}"}]
-            done_count = 0
             for res in batch:
                 results.append(res)
                 label = res.get("variant", "9x16")
@@ -513,8 +524,8 @@ def main() -> int:
                     print(f"  [{res['index']}:{label}] OK {res.get('bytes', 0):,} bytes")
                 else:
                     print(f"  [{res['index']}:{label}] FAILED: {res['error']}")
-            done_count += 1
-            _ping_progress(done_count, len(manifest))
+            done_units += 1
+            _ping_progress(done_units, len(manifest))
 
     results.sort(key=lambda r: (r["index"], r.get("variant", "9x16")))
     ok = [r for r in results if r["ok"]]
