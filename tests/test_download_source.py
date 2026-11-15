@@ -106,3 +106,5 @@ def test_workflow_shares_download_path_and_saves_transcript_before_optional_clea
     assert 'failure()' in finalize['Record failure']['if']
     assert 'process-diagnostics/.current_step' in finalize['Determine outcome']['run']
     assert 'CURRENT_STEP:-unknown' in finalize['Notify completion']['run']
+    assert finalize['Notify completion']['env']['JOB_STATUS'] == '${{ env.OVERALL_STATUS }}'
+    assert finalize['Mark finalization failure']['if'] == 'failure()'

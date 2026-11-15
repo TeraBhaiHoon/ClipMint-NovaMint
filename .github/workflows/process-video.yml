@@ -1982,11 +1982,15 @@ jobs:
       # ─────────────────────────────────────────────────────────────────────
       # 14. Notifications
       # ─────────────────────────────────────────────────────────────────────
+      - name: Mark finalization failure
+        if: failure()
+        run: echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
+
       - name: Notify completion
         if: always()
         env:
           JOB_ID: ${{ inputs.job_id }}
-          JOB_STATUS: ${{ failure() && 'failed' || env.OVERALL_STATUS }}
+          JOB_STATUS: ${{ env.OVERALL_STATUS }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
