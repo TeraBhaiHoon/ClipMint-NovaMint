@@ -75,6 +75,9 @@ ok, defects = validate_captions([word("x", "bad", 100)], 1.0)
 check("non-numeric timing caught", not ok and any("non-numeric" in d for d in defects), str(defects))
 
 # ─── transcribe_providers parsing ───────────────────────────────────────────
+# Contract (post timing-honesty rework): each parser returns a (words, timed)
+# component alongside its language where applicable — `timed` is False when
+# words had to be evenly spread because the provider gave no word granularity.
 print("groq parser:")
 groq_payload = {
     "language": "hindi",
@@ -83,9 +86,10 @@ groq_payload = {
         {"word": "world", "start": 1.10, "end": 1.65, "probability": 0.88},
     ],
 }
-words, lang = tp.parse_groq_payload(groq_payload, offset_s=300.0)
+words, lang, timed = tp.parse_groq_payload(groq_payload, offset_s=300.0)
 check("groq word count", len(words) == 2, str(words))
 check("groq language mapped hindi->hi", lang == "hi")
+check("groq word-timed flag is True", timed is True)
 check("groq offset applied", words[1]["startMs"] == 301100 and words[1]["endMs"] == 301650, str(words[1]))
 check("groq canonical shape", all(set(w) == {"text", "startMs", "endMs", "timestampMs", "confidence"}
                                   for w in words) and words[0]["timestampMs"] is None)
@@ -95,11 +99,34 @@ seg_only = {
     "language": "english",
     "segments": [{"text": "one two three", "start": 10.0, "end": 16.0}],
 }
-words, lang = tp.parse_groq_payload(seg_only, offset_s=0.0)
+words, lang, timed = tp.parse_groq_payload(seg_only, offset_s=0.0)
 check("groq segments spread evenly", len(words) == 3
       and words[0]["startMs"] == 10000 and words[0]["endMs"] == 12000
       and words[2]["startMs"] == 14000 and words[2]["endMs"] == 16000, str(words))
 check("groq english->en", lang == "en")
+check("groq segment-spread is estimated (timed False)", timed is False)
+
+empty_lang, empty_timed = tp.parse_groq_payload({}, offset_s=0.0)[1:]
+check("groq missing language normalizes to und", empty_lang == tp.UNDETERMINED and empty_timed is False)
+
+malformed = {"language": "hindi", "words": [
+    {"word": "str", "start": "0.5", "end": 1.0},          # string timestamp
+    {"word": "nan", "start": float("nan"), "end": 1.0},   # non-finite
+    {"word": "back", "start": 2.0, "end": 1.0},           # inverted range
+    {"word": "good", "start": 1.0, "end": 2.0, "probability": 0.5},
+]}
+words, lang, timed = tp.parse_groq_payload(malformed, offset_s=0.0)
+check("groq malformed timestamps skip the word only",
+      [w["text"] for w in words] == ["good"] and words[0]["startMs"] == 1000 and timed is True,
+      str(words))
+
+print("language normalization:")
+check("normalize full names", tp.normalize_language("english") == "en"
+      and tp.normalize_language("Hindi") == "hi")
+check("normalize locale tags", tp.normalize_language("en-US") == "en")
+check("normalize unknown -> und", tp.normalize_language("bhojpuri") == tp.UNDETERMINED
+      and tp.normalize_language("multi") == tp.UNDETERMINED
+      and tp.normalize_language("") == tp.UNDETERMINED)
 
 print("deepgram parser:")
 dg_payload = {
@@ -111,16 +138,18 @@ dg_payload = {
         ],
     }]}]},
 }
-words = tp.parse_deepgram_payload(dg_payload, offset_s=60.0, duration_s=5.0)
+words, timed = tp.parse_deepgram_payload(dg_payload, offset_s=60.0, duration_s=5.0)
 check("deepgram word count", len(words) == 2, str(words))
 check("deepgram punctuated_word preferred", words[0]["text"] == "Hello," and words[1]["text"] == "world.")
 check("deepgram seconds->ms + offset", words[0]["startMs"] == 60010 and words[1]["endMs"] == 61100, str(words[0]))
 check("deepgram confidence kept", words[1]["confidence"] == 0.91)
+check("deepgram word-timed flag is True", timed is True)
 
 dg_fallback = {"results": {"channels": [{"alternatives": [{
     "transcript": "spread these four words please", "words": []}]}]}}
-words = tp.parse_deepgram_payload(dg_fallback, offset_s=0.0, duration_s=8.0)
+words, timed = tp.parse_deepgram_payload(dg_fallback, offset_s=0.0, duration_s=8.0)
 check("deepgram no-words spread", len(words) == 5 and words[0]["startMs"] == 0 and words[-1]["endMs"] == 8000, str(words))
+check("deepgram spread is estimated (timed False)", timed is False)
 
 print("riva/NIM parser:")
 def riva_word(text, s, e, conf=0.9):
@@ -134,20 +163,22 @@ riva_resp = types.SimpleNamespace(results=[
     types.SimpleNamespace(alternatives=[types.SimpleNamespace(
         transcript="", words=[])]),  # non-speech: skipped
 ])
-words = tp.parse_riva_response(riva_resp, offset_s=120.0, duration_s=10.0)
+words, timed = tp.parse_riva_response(riva_resp, offset_s=120.0, duration_s=10.0)
 check("riva word count (non-speech skipped)", len(words) == 2, str(words))
 check("riva offset applied", words[1]["startMs"] == 120400 and words[1]["endMs"] == 120800)
 check("riva confidence", words[0]["confidence"] == 0.9)
+check("riva word-timed flag is True", timed is True)
 
 riva_no_offsets = types.SimpleNamespace(results=[
     types.SimpleNamespace(alternatives=[types.SimpleNamespace(transcript="a b c d", words=[])]),
     types.SimpleNamespace(alternatives=[types.SimpleNamespace(transcript="e f", words=[])]),
 ])
-words = tp.parse_riva_response(riva_no_offsets, offset_s=0.0, duration_s=12.0)
+words, timed = tp.parse_riva_response(riva_no_offsets, offset_s=0.0, duration_s=12.0)
 # two segments split 12s in half; first gets a b c d across 0-6s, second e f 6-12s
 check("riva no-offset spread across segment slices",
       len(words) == 6 and words[0]["startMs"] == 0 and words[3]["endMs"] == 6000
       and words[4]["startMs"] == 6000 and words[5]["endMs"] == 12000, str(words))
+check("riva spread is estimated (timed False)", timed is False)
 
 print("lazy riva import:")
 import os
@@ -159,14 +190,19 @@ except ImportError as exc:
     check("nim skipped without key (no riva import needed)", False, f"raised {exc}")
 
 print("provider order:")
+# Contract (post timing-honesty rework): each provider fn is called with the
+# chunk context as a 4th argument and returns a 4-tuple
+# (words, language, model, word_timed). transcribe() prefers a provider that
+# produced REAL word timings; an evenly-spread estimate is used only after
+# every provider had the chance, and is reported as timing_source="estimated".
 _ORIG = (tp._transcribe_deepgram, tp._transcribe_groq, tp._transcribe_nim)
 calls = []
-def fake_dg(path, off, lang):
-    calls.append("deepgram"); return [word("x", 0, 100)], "multi", "nova-3"
-def fake_gq(path, off, lang):
-    calls.append("groq"); return [word("x", 0, 100)], "en", "turbo"
-def fake_nim(path, off, lang):
-    calls.append("nim"); return [word("x", 0, 100)], "multi", "riva"
+def fake_dg(path, off, lang, context=None):
+    calls.append("deepgram"); return [word("x", 0, 100)], "multi", "nova-3", True
+def fake_gq(path, off, lang, context=None):
+    calls.append("groq"); return [word("x", 0, 100)], "en", "turbo", True
+def fake_nim(path, off, lang, context=None):
+    calls.append("nim"); return [word("x", 0, 100)], "multi", "riva", True
 tp._transcribe_deepgram, tp._transcribe_groq, tp._transcribe_nim = fake_dg, fake_gq, fake_nim
 
 os.environ["DEEPGRAM_API_KEY"] = "x"
@@ -174,11 +210,37 @@ os.environ["GROQ_API_KEY"] = "x"
 calls.clear()
 out = tp.transcribe("f.wav", 0.0)
 check("default order groq->deepgram", calls == ["groq"], str(calls))
+check("word-timed result flags timing_source word", out["timing_source"] == "word"
+      and out["provider"] == "groq")
 
 calls.clear()
 out = tp.transcribe("f.wav", 0.0, forced_language="hi", prefer_hindi_first=True)
 check("hindi-first order deepgram->groq", calls == ["deepgram"], str(calls))
 check("forced language replaces multi", out["language"] == "hi")
+check("hindi-first timing_source word", out["timing_source"] == "word")
+
+# An estimate must never win while a word-timed provider is still available.
+def fake_gq_estimated(path, off, lang, context=None):
+    calls.append("groq"); return [word("x", 0, 100)], "en", "turbo", False
+tp._transcribe_groq = fake_gq_estimated
+calls.clear()
+out = tp.transcribe("f.wav", 0.0)
+check("estimated groq fails over to word-timed deepgram",
+      calls == ["groq", "deepgram"], str(calls))
+check("failover keeps real word timings", out["provider"] == "deepgram"
+      and out["timing_source"] == "word")
+
+def fake_dg_estimated(path, off, lang, context=None):
+    calls.append("deepgram"); return [word("x", 0, 100)], "multi", "nova-3", False
+tp._transcribe_deepgram = fake_dg_estimated
+def fake_nim_estimated(path, off, lang, context=None):
+    calls.append("nim"); return [word("x", 0, 100)], "multi", "riva", False
+tp._transcribe_nim = fake_nim_estimated
+calls.clear()
+out = tp.transcribe("f.wav", 0.0)
+check("all-estimated: whole chain probed, first estimate returned honestly",
+      calls == ["groq", "deepgram", "nim"] and out["timing_source"] == "estimated"
+      and out["provider"] == "groq", str(calls))
 
 tp._transcribe_deepgram, tp._transcribe_groq, tp._transcribe_nim = _ORIG
 os.environ.pop("GROQ_API_KEY", None)

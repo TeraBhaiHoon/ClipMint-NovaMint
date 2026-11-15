@@ -103,6 +103,11 @@ jobs:
         run: |
           npm run test:dashboard
           npm run test:homepage
+          npm run test:quota
+
+      - name: Quota SQL transaction tests
+        working-directory: scripts/quota-tests
+        run: npm ci --no-audit --no-fund && npm test
 
       # Placeholder envs: the build only needs the NEXT_PUBLIC_* names to
       # exist — real values come from Vercel at deploy time.
@@ -138,3 +143,7 @@ jobs:
       - name: TypeScript
         working-directory: remotion-captions
         run: npm run verify
+
+      - name: Caption layout tests
+        working-directory: remotion-captions
+        run: npm test

@@ -35,7 +35,6 @@ const { handleCreateJob } = module_.exports.__handles;
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 const JOB_ID_1 = "33333333-3333-4333-8333-333333333331";
-const JOB_ID_2 = "33333333-3333-4333-8333-333333333332";
 const REQUEST_ID = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
 
 const env = () => ({
@@ -70,7 +69,7 @@ const fetchLog = [];
 const rpcCalls = [];
 const ghCalls = [];
 
-function installFetch({ createResponses, claimResponses, gh, failQuotaOk = true } = {}) {
+function installFetch({ createResponses, claimResponses, gh } = {}) {
     let createN = 0;
     let claimN = 0;
     globalThis.fetch = async (url, init) => {

@@ -162,9 +162,9 @@ function loadRoute(sourcePath) {
         }
         throw new Error(`unexpected require ${name}`);
     };
-    const module = { exports: {} };
-    new Function("require", "module", "exports", code)(shim, module, module.exports);
-    return module.exports;
+    const compiledModule = { exports: {} };
+    new Function("require", "module", "exports", code)(shim, compiledModule, compiledModule.exports);
+    return compiledModule.exports;
 }
 
 const triggerRoute = loadRoute("../src/app/api/trigger-pipeline/route.ts");
@@ -409,9 +409,9 @@ const jobsBody = {
     max_clips: 5, remove_silences: true, auto_punch_in: false, bgm_mood: "calm",
 };
 
-function jobsAdmin({ rpcResult, readback = true } = {}) {
+function jobsAdmin({ rpcResult } = {}) {
     return serviceClient({
-        create_job_with_quota: async (params) => rpcResult,
+        create_job_with_quota: async () => rpcResult,
     });
 }
 

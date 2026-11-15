@@ -49,6 +49,19 @@ Still required before declaring the production issue resolved:
 
 These gates are pending, not passed. The goal remains incomplete until live verification covers them.
 
+## Approved release — live evidence
+
+The user approved **Publish and repair**. Code release `b71fe05` was pushed to the processing repository; website sync `25bdfab` deployed to Vercel production `dpl_F41WUiGbZJEqPujtU9WnAQKLdcvn` (**READY**), with the domain alias verified. The Worker deployed as version `6be04880-b1ec-474b-992e-73b44a632366`.
+
+Migration `quota_v2_atomic_job_accounting`, version `20261115151319`, was applied successfully. Live before → after:
+- Latest five-clip account: `clips_used 0 → 5`, `videos_used 1 → 1`; job remains done, ledger charged=5.
+- Other proven two-clip account: `clips_used 0 → 2`, `videos_used 1 → 1`; job remains done, ledger charged=2.
+- All 114 clip rows remain intact; no rendered clip files overwritten. Two other current-window proven undercounts were repaired monotonically.
+
+Release CI initially failed on an obsolete legacy parser test (new parser returns timing-source flag) and a new test variable name lint rule. Both are being corrected; this initial CI failure is not recorded as a pass.
+
+Outstanding verification: fresh Hindi source recognition/rendered delivery and authenticated browser flow. Quantitative WER remains unmeasured. Browser driver is not available in this session.
+
 ## Release constraints / honesty
 
 No production balances, migration or deployment changed in this round yet. Existing rendered user clips were not overwritten. Quantitative recognition accuracy is unmeasured; the offline tests prove code policy, not audio WER. Render samples prove actual captions, not a fully authenticated browser flow. The goal is not complete until uncovered gates are resolved or explicitly reported as blockers.
