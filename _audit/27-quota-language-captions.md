@@ -71,6 +71,17 @@ End-to-end acceptance:
 
 Quantitative WER remains unmeasured. Authenticated HTTP admission and upload were verified, but browser click/layout interaction was not: the browser driver is not available in this session.
 
+## Follow-up verification — browser recovery and accuracy measurement
+
+- The missing tool was diagnosed as a ZCode late-connect registration race: this old session registered its MCP tools before the healthy Node REPL host connected. A fresh root verification session regained `mcp__node_repl__js` without configuration or permission changes.
+- That fresh session successfully bootstrapped the official Browser Use client and discovered the in-app browser. It observed the live login tab, but tab load/snapshot operations timed out or returned an internal MCP error. **No authenticated clicks or screenshots have passed yet**. Further isolation is in progress; this is an operational tool failure, not proof of a ClipMint UI defect.
+- Later isolated browser calls succeeded: normal QA login field fills and Sign In click reached the authenticated dashboard, and clicking the sidebar New video link returned the form snapshot. Original output default, all nine style controls, and sidebar `1 / 5` clip usage were observed. Selection/keyboard/dialog/retry interaction acceptance is still incomplete. Full-page screenshot output was tiled and cannot count as visual layout proof.
+- Subsequent session failure was diagnosed from the runtime log as a **provider token-rate-limit business error** (`rate_limit_exceeded`), not a browser failure or user denial. Repeated session execution attempts are stopped; the successful browser tool result before the provider failure does not establish unseen follow-on actions.
+- Browser inspection found a genuine initial display mismatch: clip slider label showed 5 while remaining quota/summary showed 4. The slider and summary now share `availableClipRequest`, with a regression test; dashboard helper suite is **14 passed** and the production build passed. No new processing was submitted by the browser check.
+- Independently measured the delivered Hindi sample: **51 words, 39 containing Hindi script, 0 invalid time ranges, 0 overlapping word ranges**. These are subtitle timing/script metrics, not speech accuracy.
+- No verified human/creator transcript of the exact 18-second sample was found. ASR output and the provider's `0.9184` confidence cannot be used as reference truth or an accuracy percentage.
+- Added `scripts/measure_transcription_accuracy.py`: computes substitution/deletion/insertion WER and CER against an explicitly sourced human/creator reference, preserves Hindi marks during normalization, and refuses empty/unsupported reference input. Six new functional tests pass; combined Python suite **182 passed**. The metric tool is ready, but a real WER measurement remains blocked on independent ground truth.
+
 ## Release constraints / honesty
 
 Production balances and migration were changed only after explicit approval, as documented above. Existing rendered user clips were not overwritten. Quantitative recognition accuracy remains unmeasured: offline tests prove policy and timing behavior, and one live Hindi sample proves actual native-script delivery—not zero transcription errors. Authenticated HTTP behavior was verified, but browser interaction remains an uncovered gate.

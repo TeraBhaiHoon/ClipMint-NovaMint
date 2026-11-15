@@ -11,6 +11,11 @@ export function boundedPercent(value: number | null | undefined, total = 100): n
     return Math.min(100, Math.max(0, Math.round(((value ?? 0) / total) * 100)));
 }
 
+export function availableClipRequest(requested: number, remaining: number | null): number {
+    const amount = Number.isFinite(requested) ? Math.min(20, Math.max(1, Math.floor(requested))) : 1;
+    return remaining === null ? amount : Math.min(amount, Math.max(0, Math.floor(remaining)));
+}
+
 export function videoTitle(job: Pick<Job, "source_title" | "video_filename" | "video_url" | "id">): string {
     return job.source_title?.trim() || job.video_filename?.trim() || job.video_url?.trim() || `Video ${job.id.slice(0, 8)}`;
 }

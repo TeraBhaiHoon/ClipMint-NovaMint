@@ -21,6 +21,17 @@ test("usage percentages are safe for zero, invalid and over-limit counters", () 
     assert.equal(helpers.boundedPercent(3, 0), 0);
 });
 
+test("clip slider and summary share the current available maximum", () => {
+    assert.equal(helpers.availableClipRequest(5, 4), 4);
+    assert.equal(helpers.availableClipRequest(5, 0), 0);
+    assert.equal(helpers.availableClipRequest(5, null), 5);
+    assert.equal(helpers.availableClipRequest(50, 100), 20);
+    assert.equal(helpers.availableClipRequest(2.9, 4), 2);
+    const page = file("src/app/dashboard/new/page.tsx");
+    assert.match(page, /output htmlFor="max-clips">\{displayedMaxClips\}/);
+    assert.match(page, /Up to \$\{displayedMaxClips\} short clips/);
+});
+
 test("titles prefer platform title, filename, link and finally project identifier", () => {
     const job = { source_title: " Podcast title ", video_filename: "podcast.mp4", video_url: "https://youtube.com/watch?v=x", id: "12345678-abcd" };
     assert.equal(helpers.videoTitle(job), "Podcast title");
