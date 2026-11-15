@@ -28,6 +28,7 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+_audit/retry-*.log
 
 # Vercel
 .vercel

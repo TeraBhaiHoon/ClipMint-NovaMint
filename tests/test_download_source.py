@@ -108,3 +108,5 @@ def test_workflow_shares_download_path_and_saves_transcript_before_optional_clea
     assert 'CURRENT_STEP:-unknown' in finalize['Notify completion']['run']
     assert finalize['Notify completion']['env']['JOB_STATUS'] == '${{ env.OVERALL_STATUS }}'
     assert finalize['Mark finalization failure']['if'] == 'failure()'
+    for name in ['Mark: uploading', 'Upload to Google Drive', 'Publish clips to R2 delivery cache', 'Save results to Supabase', 'Clean up source upload']:
+        assert finalize[name]['if'] == "env.OVERALL_STATUS == 'success'"

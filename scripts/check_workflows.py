@@ -82,6 +82,15 @@ def check_workflow(path: Path) -> list[str]:
             if uses and "@" not in uses:
                 problems.append(f"{path.name} [{job_name}] '{name}': action '{uses}' is not version-pinned")
 
+            # GitHub permits status functions in step conditions, not env/with
+            # expressions. Bash/YAML parsing alone misses this dispatch blocker.
+            for field in ("env", "with"):
+                values = step.get(field) or {}
+                if isinstance(values, dict):
+                    for value in values.values():
+                        if isinstance(value, str) and re.search(r"\b(?:failure|success|cancelled|always)\s*\(", value):
+                            problems.append(f"{path.name} [{job_name}] '{name}': status function is not supported in {field}; use a step if condition")
+
             run = step.get("run")
             if not run:
                 continue

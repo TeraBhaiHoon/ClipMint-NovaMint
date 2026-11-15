@@ -314,7 +314,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: downloading"
         if: steps.resolve.outputs.resumed != 'true'
-        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status downloading --progress 5
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status downloading --progress 5 --best-effort
 
       - name: Download source video
         timeout-minutes: 50
@@ -422,7 +422,7 @@ jobs:
 
       - name: "Mark: transcribing"
         if: steps.resolve.outputs.resumed != 'true'
-        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status transcribing --progress 20
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status transcribing --progress 20 --best-effort
 
       # ─────────────────────────────────────────────────────────────────────
       # 5. Transcription — provider chain Groq → Deepgram → NIM (BUILD 1)
@@ -738,7 +738,7 @@ jobs:
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: analyzing"
         if: steps.resolve.outputs.viral_ready != 'true' && inputs.job_mode != 'captions'
-        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status analyzing --progress 40
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status analyzing --progress 40 --best-effort
 
       - name: Detect viral moments
         if: steps.resolve.outputs.viral_ready != 'true' && inputs.job_mode != 'captions'
@@ -1067,7 +1067,7 @@ jobs:
       # 10. Prepare clips: cut → vertical reframe → loudness → captions
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: clipping"
-        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status clipping --progress 55
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status clipping --progress 55 --best-effort
 
       - name: Prepare vertical clips
         env:
@@ -1098,7 +1098,7 @@ jobs:
       # 11. Render captions (parallel; failures are reported, never hidden)
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: captioning"
-        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status captioning --progress 70
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status captioning --progress 70 --best-effort
 
       - name: Fetch custom BGM
         id: bgm
@@ -1575,9 +1575,11 @@ jobs:
       # 12. Upload
       # ─────────────────────────────────────────────────────────────────────
       - name: "Mark: uploading"
-        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status uploading --progress 88
+        if: env.OVERALL_STATUS == 'success'
+        run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status uploading --progress 88 --best-effort
 
       - name: Upload to Google Drive
+        if: env.OVERALL_STATUS == 'success'
         env:
           GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
           JOB_ID: ${{ inputs.job_id }}
@@ -1659,6 +1661,7 @@ jobs:
       # from the Drive archive on demand. The rendered files are still LOCAL
       # at this point, so they upload straight from disk — no Drive round-trip.
       - name: Publish clips to R2 delivery cache
+        if: env.OVERALL_STATUS == 'success'
         continue-on-error: true
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -1765,6 +1768,7 @@ jobs:
       # 13. Record results
       # ─────────────────────────────────────────────────────────────────────
       - name: Save results to Supabase
+        if: env.OVERALL_STATUS == 'success'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -1935,6 +1939,7 @@ jobs:
       # works without re-uploading) and the bucket lifecycle evicts it after
       # 7 days regardless.
       - name: Clean up source upload
+        if: env.OVERALL_STATUS == 'success'
         continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

@@ -27,10 +27,14 @@ Job: `095547b0-37c9-4f8f-9aaf-74cf1ee0de41`.
 - Groq's public API reference was retrieved and confirms `prompt` as the transcription field: https://console.groq.com/docs/api-reference
 - yt-dlp research used official EJS guidance, client implementation/release notes and PO-token guide. The guide's client table can lag current extractor code: https://github.com/yt-dlp/yt-dlp/wiki/EJS and https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide
 
-## Not verified / release gate
+## Release and approved retry results
 
-**No corrected real GitHub processing run has been executed. No provider keys, customers' media, or real job records were used in local tests. No commit/push or workflow dispatch has been performed for this repair.**
+The user approved publishing these fixes and one retry of the affected job. Repairs were pushed as `f64bdf6`; GitHub then rejected dispatch because `failure()` was used in an unsupported step environment expression. This was corrected in `408bec0` by a dedicated `if: failure()` status step. Both CI runs passed.
 
-YouTube media 403 recovery is a resilience repair, not a proven cure. A fresh runner must verify an actual media download (not `--simulate`). If media remains blocked across a healthy fresh WARP connection, investigate YouTube's current proof-of-origin requirement before adding any provider/plugin; do not restore cookies or claim that WARP alone guarantees access.
+The one approved processing retry, [43691933030](https://github.com/TeraBhaiHoon/ClipMint-NovaMint/actions/runs/43691933030), **failed before downloading**: Supabase PATCH status calls timed out three times at “Mark: downloading”. The finalizer also exposed an unconditional “Mark: uploading” running after process failure. Therefore no actual download, transcription, rendered clip or final output was verified in this retry.
 
-The existing diagnostic probe uses simulated extraction; that alone cannot prove the Googlevideo media download works. Releasing these repairs and retrying the affected job are the remaining explicit actions. A successful end-to-end result requires a completed processing/render/finalize run and real output clips, not only green local tests.
+Follow-up repairs: progress-only status updates can defer transient network/5xx/429 outages (`--best-effort`) while auth errors and all final data/status writes remain strict; uploading/publishing/saving/cleanup are gated on successful upstream outcome; checker now rejects status functions in unsupported env/with expressions. Supabase management reports ACTIVE_HEALTHY and its public endpoint responded locally in 768ms, which does not prove runner connectivity.
+
+Current local gates: **103 pipeline tests passed**, all 10 workflows passed syntax checks. No further processing retry is authorized or started. Raw downloaded failure logs remain local and are ignored by Git.
+
+**End-to-end processing remains unverified.** The new YouTube path was never reached by this retry. A further approved run must prove actual media download, transcription, render, finalization and output clips; neither green CI nor the existing simulated probe is sufficient.

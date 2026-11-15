@@ -31,8 +31,12 @@ from typing import Any
 
 import requests
 
-TIMEOUT = 30
+TIMEOUT = (10, 30)
 RETRIES = 3
+
+
+class DatabaseUnavailable(RuntimeError):
+    """Transient network/server failures; progress updates can safely defer."""
 
 
 def _env(name: str) -> str:
@@ -70,13 +74,14 @@ class Supabase:
                     timeout=TIMEOUT,
                     **kwargs,
                 )
-                if resp.status_code < 500:
+                if resp.status_code < 500 and resp.status_code != 429:
                     return resp
                 last = RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
             except requests.RequestException as exc:  # network hiccup
                 last = exc
-            time.sleep(2 ** attempt)
-        raise RuntimeError(f"Supabase {method} {path} failed after {RETRIES} tries: {last}")
+            if attempt + 1 < RETRIES:
+                time.sleep(2 ** attempt)
+        raise DatabaseUnavailable(f"Supabase {method} {path} failed after {RETRIES} tries: {last}")
 
     # -- jobs --------------------------------------------------------------
     def get_job(self, job_id: str) -> dict[str, Any]:
@@ -170,6 +175,7 @@ def main() -> None:
     p.add_argument("--job-id", required=True)
     p.add_argument("--status", required=True)
     p.add_argument("--progress", type=int, default=None)
+    p.add_argument("--best-effort", action="store_true", help="Defer transient progress-write outages only; auth and final writes remain strict")
 
     p = sub.add_parser("set-error")
     p.add_argument("--job-id", required=True)
@@ -193,8 +199,13 @@ def main() -> None:
     db = Supabase()
 
     if args.cmd == "set-status":
-        db.set_status(args.job_id, args.status, args.progress)
-        print(f"OK status={args.status} progress={args.progress}")
+        try:
+            db.set_status(args.job_id, args.status, args.progress)
+            print(f"OK status={args.status} progress={args.progress}")
+        except DatabaseUnavailable as exc:
+            if not args.best_effort or args.status in ("done", "failed", "cancelled"):
+                raise
+            print(f"STATUS_DEFERRED status={args.status}: {exc}")
     elif args.cmd == "set-error":
         db.set_error(args.job_id, args.message, args.status)
         print(f"OK error recorded ({args.status})")
