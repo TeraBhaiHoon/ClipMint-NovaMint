@@ -1,459 +1,126 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { ArrowUpRight, BarChart3, CalendarDays, Captions, Clapperboard, Film, Info, Star, TrendingUp } from "lucide-react";
 import { createClient } from "@/lib/supabase";
 import type { Clip, Job } from "@/lib/types";
-import {
-    BarChart3, TrendingUp, Film, Calendar,
-    Star, Hash, Sparkles, Play,
-} from "lucide-react";
+import { boundedPercent, clipSeconds, dailyCounts, formatDuration, periodStart } from "@/lib/dashboard";
+import { useDashboard } from "../_components/dashboard-provider";
+import { Button, EmptyState, LoadingState, Metrics, Notice, PageHeader, SectionHeading } from "../_components/ui";
 
-interface Stats {
-    totalVideos: number;
-    totalClips: number;
-    avgViralScore: number;
-    topClips: Clip[];
-    clipsByDay: Record<string, number>;
-    clipsByStyle: Record<string, number>;
-    heatmap: Record<string, number>;
-}
-
-type TimeRange = "7d" | "30d" | "90d" | "all";
-
-function getDaysAgo(days: number): Date {
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    d.setHours(0, 0, 0, 0);
-    return d;
-}
-
-function formatDate(d: Date): string {
-    return d.toISOString().split("T")[0];
-}
-
-/* ─── Mini Donut Chart ─── */
-function StyleDonut({ data }: { data: Record<string, number> }) {
-    const entries = Object.entries(data).sort((a, b) => b[1] - a[1]);
-    const total = entries.reduce((s, [, v]) => s + v, 0);
-    if (total === 0) return null;
-
-    const COLORS = [
-        "var(--accent-primary)", "var(--accent-green)", "var(--accent-orange)",
-        "var(--accent-cyan)", "var(--accent-red)", "var(--accent-secondary)",
-        "#4ADE80", "#A36600", "#0A3706",
-    ];
-
-    const size = 140;
-    const strokeWidth = 18;
-    const radius = (size - strokeWidth) / 2;
-    const circumference = 2 * Math.PI * radius;
-
-    // Precompute arc geometry in a plain loop: a render-scope for-loop is
-    // synchronous and closure-free, unlike mutating a captured variable
-    // inside a .map callback (which the compiler lint rightly rejects).
-    const arcs: { style: string; color: string; dash: number; offset: number }[] = [];
-    let running = 0;
-    for (let i = 0; i < entries.length; i++) {
-        const dash = (entries[i][1] / total) * circumference;
-        arcs.push({ style: entries[i][0], color: COLORS[i % COLORS.length], dash, offset: running });
-        running += dash;
-    }
-
-    return (
-        <div className="flex items-center gap-6 flex-wrap">
-            <div className="relative inline-flex items-center justify-center">
-                <svg width={size} height={size} className="-rotate-90">
-                    {arcs.map((arc) => (
-                        <circle
-                            key={arc.style}
-                            cx={size / 2} cy={size / 2} r={radius}
-                            fill="none" stroke={arc.color}
-                            strokeWidth={strokeWidth}
-                            strokeDasharray={`${arc.dash} ${circumference - arc.dash}`}
-                            strokeDashoffset={-arc.offset}
-                            strokeLinecap="butt"
-                            className="transition-all duration-500"
-                        />
-                    ))}
-                </svg>
-                <span className="absolute text-lg font-extrabold text-ink-50">
-                    {total}
-                </span>
-            </div>
-            <div className="flex flex-col gap-1.5 flex-1 min-w-[150px]">
-                {entries.slice(0, 6).map(([style, count], i) => (
-                    <div key={style} className="flex items-center gap-2 text-xs">
-                        <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
-                        <span className="text-ink-200 font-medium capitalize">{style}</span>
-                        <span className="text-ink-400 ml-auto font-mono">
-                            {count} ({Math.round((count / total) * 100)}%)
-                        </span>
-                    </div>
-                ))}
-            </div>
-        </div>
-    );
-}
-
-/* ─── Activity Heatmap (GitHub-style) ─── */
-function ActivityHeatmap({ data }: { data: Record<string, number> }) {
-    const today = new Date();
-    const days: { date: string; count: number; dayName: string }[] = [];
-    for (let i = 29; i >= 0; i--) {
-        const d = new Date(today);
-        d.setDate(d.getDate() - i);
-        const key = formatDate(d);
-        days.push({ date: key, count: data[key] || 0, dayName: d.toLocaleDateString("en", { weekday: "short" }) });
-    }
-
-    const maxCount = Math.max(...days.map(d => d.count), 1);
-
-    return (
-        <div>
-            <div 
-                className="grid gap-1 mb-2.5" 
-                style={{ gridTemplateColumns: "repeat(15, 1fr)" }}
-            >
-                {days.map((day) => {
-                    const intensity = day.count / maxCount;
-                    const bg = day.count === 0
-                        ? "var(--bg-sunken)"
-                        : `rgba(45, 194, 4, ${0.22 + intensity * 0.78})`;
-                    return (
-                        <div
-                            key={day.date}
-                            title={`${day.date}: ${day.count} clip${day.count !== 1 ? "s" : ""}`}
-                            className="aspect-square rounded-sm cursor-pointer transition-all duration-200 min-w-0 hover:scale-110 hover:shadow-[0_0_8px_rgba(45,194,4,0.4)] hover:z-10"
-                            style={{
-                                backgroundColor: bg,
-                            }}
-                        />
-                    );
-                })}
-            </div>
-            <div className="flex justify-between text-[10px] text-ink-400 mt-1.5 font-medium">
-                <span>30 days ago</span>
-                <div className="flex items-center gap-1.5">
-                    <span>Less</span>
-                    {[0, 0.25, 0.5, 0.75, 1].map((v) => (
-                        <span key={v} className="w-2.5 h-2.5 rounded-sm border border-[var(--border-faint)]" style={{
-                            backgroundColor: v === 0 ? "var(--bg-sunken)" : `rgba(45, 194, 4, ${0.22 + v * 0.78})`,
-                        }} />
-                    ))}
-                    <span>More</span>
-                </div>
-            </div>
-        </div>
-    );
-}
+type Range = "7" | "30" | "90" | "all";
+type AnalyticsClip = Clip & { jobs: { caption_style: string } | null };
+const COLORS = ["#2f7d32", "#78b84c", "#bbcfa0", "#37665c", "#77988a", "#53643e", "#c0b878", "#637966", "#a6c59d"];
 
 export default function AnalyticsPage() {
-    const supabase = createClient();
-    const [stats, setStats] = useState<Stats | null>(null);
+    const supabase = useMemo(() => createClient(), []);
+    const { account, loading: accountLoading, refreshProfile } = useDashboard();
+    const [range, setRange] = useState<Range>("30");
+    const [jobs, setJobs] = useState<Job[]>([]);
+    const [clips, setClips] = useState<AnalyticsClip[]>([]);
     const [loading, setLoading] = useState(true);
-    const [timeRange, setTimeRange] = useState<TimeRange>("30d");
-
-    async function loadStats() {
-        setLoading(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
-
-        // Date filter
-        let sinceDate: Date | null = null;
-        if (timeRange === "7d") sinceDate = getDaysAgo(7);
-        else if (timeRange === "30d") sinceDate = getDaysAgo(30);
-        else if (timeRange === "90d") sinceDate = getDaysAgo(90);
-
-        // Total videos (within range)
-        let jobQuery = supabase.from("jobs").select("*").eq("user_id", user.id);
-        if (sinceDate) jobQuery = jobQuery.gte("created_at", sinceDate.toISOString());
-        const { data: jobsData } = await jobQuery;
-        const jobs = (jobsData || []) as Job[];
-
-        // All clips (within range)
-        let clipQuery = supabase.from("clips").select("*").eq("user_id", user.id);
-        if (sinceDate) clipQuery = clipQuery.gte("created_at", sinceDate.toISOString());
-        const { data: clipsData } = await clipQuery;
-        const allClips = (clipsData || []) as Clip[];
-
-        // Top clips (by viral score)
-        const topClips = [...allClips].sort((a, b) => (b.viral_score ?? 0) - (a.viral_score ?? 0)).slice(0, 5);
-
-        // Average viral score
-        const scoresWithValues = allClips.filter((c) => c.viral_score != null);
-        const avgScore = scoresWithValues.length > 0
-            ? Math.round(scoresWithValues.reduce((sum, c) => sum + (c.viral_score ?? 0), 0) / scoresWithValues.length)
-            : 0;
-
-        // Clips grouped by day (for bar chart)
-        const clipsByDay: Record<string, number> = {};
-        allClips.forEach((clip) => {
-            const day = formatDate(new Date(clip.created_at));
-            clipsByDay[day] = (clipsByDay[day] || 0) + 1;
-        });
-
-        // Clips by caption style (for donut)
-        const clipsByStyle: Record<string, number> = {};
-        jobs.forEach((job) => {
-            const style = job.caption_style || "unknown";
-            clipsByStyle[style] = (clipsByStyle[style] || 0) + (job.clips_count || 0);
-        });
-
-        // 30-day heatmap
-        const heatmap: Record<string, number> = {};
-        allClips.forEach((clip) => {
-            const day = formatDate(new Date(clip.created_at));
-            heatmap[day] = (heatmap[day] || 0) + 1;
-        });
-
-        setStats({
-            totalVideos: jobs.length,
-            totalClips: allClips.length,
-            avgViralScore: avgScore,
-            topClips,
-            clipsByDay,
-            clipsByStyle,
-            heatmap,
-        });
-        setLoading(false);
-    }
+    const [error, setError] = useState<string | null>(null);
+    const [retry, setRetry] = useState(0);
+    const [today] = useState(() => new Date());
 
     useEffect(() => {
-        // Defer one frame: the loader's sync prefix would otherwise set state
-        // synchronously inside the effect (cascading-render pattern).
-        const raf = requestAnimationFrame(() => { void loadStats(); });
-        return () => cancelAnimationFrame(raf);
-    }, [timeRange]);
-
-    /* Build chart bars from clipsByDay data */
-    function renderChart() {
-        if (!stats) return null;
-
-        const days = timeRange === "7d" ? 7 : timeRange === "30d" ? 30 : timeRange === "90d" ? 90 : 60;
-        const bars: { date: string; count: number; label: string }[] = [];
-        for (let i = days - 1; i >= 0; i--) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
-            const key = formatDate(d);
-            bars.push({
-                date: key,
-                count: stats.clipsByDay[key] || 0,
-                label: d.toLocaleDateString("en", { month: "short", day: "numeric" }),
-            });
+        if (!account) return;
+        let disposed = false;
+        const controller = new AbortController();
+        async function load() {
+            setLoading(true);
+            setError(null);
+            try {
+                const collectedJobs: Job[] = [];
+                const collectedClips: AnalyticsClip[] = [];
+                const since = range === "all" ? null : periodStart(Number(range), today).toISOString();
+                // Paginate rather than silently capping an account's history at 1,000 rows.
+                for (const table of ["jobs", "clips"] as const) {
+                    for (let offset = 0; !disposed; offset += 1000) {
+                        let query = supabase.from(table).select(table === "clips" ? "*, jobs(caption_style)" : "*").eq("user_id", account!.id).order("created_at", { ascending: false }).order("id").range(offset, offset + 999).abortSignal(controller.signal);
+                        if (since) query = query.gte("created_at", since);
+                        const { data, error: queryError } = await query;
+                        if (queryError) throw queryError;
+                        const rows = data || [];
+                        if (table === "jobs") collectedJobs.push(...rows as unknown as Job[]);
+                        else collectedClips.push(...rows as unknown as AnalyticsClip[]);
+                        if (rows.length < 1000) break;
+                    }
+                }
+                if (!disposed) { setJobs(collectedJobs); setClips(collectedClips); }
+            } catch {
+                if (!disposed) setError("Analytics couldn’t be loaded. Please try again.");
+            } finally { if (!disposed) setLoading(false); }
         }
+        void load();
+        return () => { disposed = true; controller.abort(); };
+    }, [account, range, retry, supabase, today]);
 
-        const maxCount = Math.max(...bars.map((b) => b.count), 1);
-
-        return (
-            <div className="flex flex-col gap-2">
-                <div className={`h-48 flex items-end px-1 ${days > 30 ? "gap-0.5" : "gap-1"}`}>
-                    {bars.map((bar) => {
-                        const height = bar.count === 0 ? 3 : Math.max(8, (bar.count / maxCount) * 100);
-                        return (
-                            <div
-                                key={bar.date}
-                                title={`${bar.label}: ${bar.count} clip${bar.count !== 1 ? "s" : ""}`}
-                                className="flex-1 rounded-t cursor-pointer transition-all duration-500 hover:opacity-100 min-w-[2px]"
-                                style={{
-                                    height: `${height}%`,
-                                    background: bar.count > 0 ? "linear-gradient(180deg, var(--mint-600) 0%, var(--mint-800) 100%)" : "var(--bg-sunken)",
-                                    opacity: bar.count > 0 ? 0.7 + (bar.count / maxCount) * 0.3 : 0.3,
-                                }}
-                            />
-                        );
-                    })}
-                </div>
-                <div className="flex justify-between text-[10px] text-ink-400 mt-1.5 font-medium">
-                    <span>{bars[0]?.label}</span>
-                    <span>{bars[Math.floor(bars.length / 2)]?.label}</span>
-                    <span>{bars[bars.length - 1]?.label}</span>
-                </div>
-            </div>
-        );
+    const scored = clips.filter((clip) => clip.viral_score != null);
+    const average = scored.length ? Math.round(scored.reduce((sum, clip) => sum + (clip.viral_score || 0), 0) / scored.length) : null;
+    const topClips = [...scored].sort((a, b) => (b.viral_score || 0) - (a.viral_score || 0)).slice(0, 5);
+    const chartDays = range === "all" ? 90 : Number(range);
+    const bars = dailyCounts(clips, chartDays, today);
+    const highest = Math.max(...bars.map((bar) => bar.count), 1);
+    const chartTotal = bars.reduce((sum, bar) => sum + bar.count, 0);
+    const calendarDays = Math.min(chartDays, 30);
+    const calendar = dailyCounts(clips, calendarDays, today);
+    const styles = new Map<string, number>();
+    clips.forEach((clip) => { const style = clip.jobs?.caption_style || "Unknown"; styles.set(style, (styles.get(style) || 0) + 1); });
+    const distribution = [...styles.entries()].sort((a, b) => b[1] - a[1]);
+    const slices: { style: string; count: number; color: string; from: number; to: number }[] = [];
+    let angle = 0;
+    for (let index = 0; index < distribution.length; index++) {
+        const [style, count] = distribution[index];
+        const start = angle;
+        angle += (count / Math.max(1, clips.length)) * 360;
+        slices.push({ style, count, color: COLORS[index % COLORS.length], from: start, to: angle });
     }
 
-    const s = stats;
-
-    const statCards = s ? [
-        { label: "Total Videos", value: s.totalVideos, icon: Film, color: "var(--accent-primary)", bg: "rgba(57,229,8,0.12)" },
-        { label: "Clips Generated", value: s.totalClips, icon: Play, color: "var(--accent-green)", bg: "rgba(16,185,129,0.12)" },
-        { label: "Avg Viral Score", value: s.avgViralScore > 0 ? s.avgViralScore : "—", icon: TrendingUp, color: "var(--accent-orange)", bg: "rgba(245,158,11,0.12)" },
-        { label: "Top Score", value: s.topClips.length > 0 ? (s.topClips[0].viral_score ?? "—") : "—", icon: Star, color: "var(--accent-cyan)", bg: "rgba(6,182,212,0.12)" },
-    ] : [];
-
-    return (
-        <div>
-            {/* ─── Header + Time Range ─── */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-1">
-                        Analytics
-                    </h1>
-                    <p className="text-sm text-ink-400">
-                        Track your content performance and usage
-                    </p>
-                </div>
-                <div className="tab-nav mb-0">
-                    {(["7d", "30d", "90d", "all"] as TimeRange[]).map((range) => (
-                        <button
-                            key={range}
-                            className={`tab-item text-xs px-3.5 py-1.5 ${timeRange === range ? "active" : ""}`}
-                            onClick={() => setTimeRange(range)}
-                        >
-                            {range === "all" ? "All" : range}
-                        </button>
-                    ))}
-                </div>
-            </div>
-
-            {loading ? (
-                <div>
-                    <div className="dash-grid-4 mb-6">
-                        {[1, 2, 3, 4].map((i) => <div key={i} className="skeleton h-24 rounded-2xl" />)}
-                    </div>
-                    <div className="skeleton h-64 rounded-2xl mb-6" />
-                    <div className="dash-grid-2">
-                        <div className="skeleton h-60 rounded-2xl" />
-                        <div className="skeleton h-60 rounded-2xl" />
-                    </div>
-                </div>
-            ) : (
-                <>
-                    {/* ─── Stat Cards ─── */}
-                    <div className="dash-grid-4 mb-6">
-                        {statCards.map((stat) => (
-                            <div key={stat.label} className="stat-card">
-                                <div className="flex justify-between items-center mb-3">
-                                    <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">{stat.label}</span>
-                                    <div className="stat-icon-bg border border-[var(--border-subtle)]" style={{ backgroundColor: stat.bg }}>
-                                        <stat.icon size={18} style={{ color: stat.color }} />
-                                    </div>
-                                </div>
-                                <div className="text-3xl font-bold tracking-tight text-ink-50">{stat.value}</div>
+    return <div className="studio-page">
+        <PageHeader eyebrow="Workspace insights" title="Analytics" description="See what you’re creating, the styles you use, and the moments AI rates highest."
+            actions={<div className="studio-segmented studio-period-picker" role="group" aria-label="Analytics period">{(["7", "30", "90", "all"] as Range[]).map((value) => <button key={value} aria-pressed={range === value} onClick={() => setRange(value)}>{value === "all" ? "All time" : `${value} days`}</button>)}</div>} />
+        {!account && !accountLoading ? <Notice tone="error" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Refresh account</Button>}>Your account is temporarily unavailable.</Notice> : error ? <Notice tone="error" action={<Button variant="secondary" onClick={() => setRetry((value) => value + 1)}>Try again</Button>}>{error}</Notice> : <>
+            <Metrics loading={loading} items={[
+                { label: "Videos added", value: jobs.length, icon: Film },
+                { label: "Clips created", value: clips.length, icon: Clapperboard },
+                { label: "Average AI score", value: average ?? "—", icon: TrendingUp },
+                { label: "Highest AI score", value: topClips[0]?.viral_score ?? "—", icon: Star },
+            ]} />
+            {loading ? <div className="studio-panel"><LoadingState label="Loading analytics" rows={4} /></div> : <>
+                <div className="studio-analytics-main">
+                    <section className="studio-panel studio-chart-panel">
+                        <SectionHeading title="Clips over time" description={range === "all" ? "Last 90 days · summary above includes all time" : `Daily output over the last ${range} days`} icon={BarChart3} action={<span className="studio-chart-total">{chartTotal}<small>clips</small></span>} />
+                        {chartTotal === 0 ? <EmptyState icon={BarChart3} title="No clips in this period" description="Choose a wider date range or create a video to start seeing activity." /> : <>
+                            <div className="studio-bar-chart" role="img" aria-label={`${chartTotal} clips created across ${chartDays} days. The busiest day had ${highest} clips.`}>
+                                <div className="studio-chart-grid" aria-hidden="true"><span>{highest}</span><span>{Math.ceil(highest / 2)}</span><span>0</span></div>
+                                <div className="studio-chart-bars">{bars.map((bar) => <div key={bar.key} className="studio-chart-column" title={`${bar.label}: ${bar.count} clips`}><span style={{ height: `${bar.count ? Math.max(3, bar.count / highest * 100) : 0}%` }} /></div>)}</div>
                             </div>
-                        ))}
-                    </div>
-
-                    {/* ─── Activity Chart ─── */}
-                    <div className="glass-card p-6 md:p-8 mb-6">
-                        <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
-                            <BarChart3 size={18} className="text-mint-400" />
-                            Clips Activity
-                        </h3>
-                        {s && s.totalClips === 0 ? (
-                            <div className="text-center py-10 text-ink-400">
-                                <BarChart3 size={36} className="mx-auto mb-3 opacity-40" />
-                                <p className="text-sm">No data yet. Submit your first video to see analytics.</p>
-                            </div>
-                        ) : (
-                            renderChart()
-                        )}
-                    </div>
-
-                    {/* ─── Usage Breakdown + Heatmap ─── */}
-                    <div className="dash-grid-2 mb-6">
-                        {/* Caption Style Distribution */}
-                        <div className="glass-card p-6 md:p-8">
-                            <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
-                                <Hash size={18} className="text-mint-400" />
-                                Style Distribution
-                            </h3>
-                            {s && Object.keys(s.clipsByStyle).length === 0 ? (
-                                <div className="text-center py-6 text-ink-400 text-xs">
-                                    No data yet
-                                </div>
-                            ) : (
-                                s && <StyleDonut data={s.clipsByStyle} />
-                            )}
+                            <div className="studio-chart-axis" aria-hidden="true"><span>{bars[0].label}</span><span>{bars[Math.floor(chartDays / 2)].label}</span><span>{bars[chartDays - 1].label}</span></div>
+                            <details className="studio-chart-data"><summary>View daily counts</summary><div><table><caption className="studio-sr-only">Daily clip counts</caption><thead><tr><th scope="col">Day</th><th scope="col">Clips</th></tr></thead><tbody>{bars.map((bar) => <tr key={bar.key}><th scope="row">{bar.label}</th><td>{bar.count}</td></tr>)}</tbody></table></div></details>
+                        </>}
+                    </section>
+                    <section className="studio-panel"><SectionHeading title="Caption styles" description="Share of clips in the selected period" icon={Captions} />
+                        {!distribution.length ? <EmptyState icon={Captions} title="No styles yet" description="Caption styles will appear after your first clips are ready." /> : <div className="studio-style-breakdown">
+                            <div className="studio-style-donut" role="img" aria-label={`${clips.length} clips across ${distribution.length} caption styles`} style={{ background: `conic-gradient(${slices.map((slice) => `${slice.color} ${slice.from}deg ${slice.to}deg`).join(",")})` }}><div><strong>{clips.length}</strong><span>clips</span></div></div>
+                            <ul className="studio-chart-legend">{slices.map((slice) => <li key={slice.style}><i style={{ background: slice.color }} /><span>{slice.style}</span><strong>{slice.count}</strong><small>{boundedPercent(slice.count, clips.length)}%</small></li>)}</ul>
+                        </div>}
+                    </section>
+                </div>
+                <div className="studio-analytics-bottom">
+                    <section className="studio-panel"><SectionHeading title="Top-rated moments" description="AI estimates—not social views or engagement" icon={Star} />
+                        {!topClips.length ? <EmptyState icon={Star} title="No rated clips yet" description="When your clips are analyzed, their highest AI scores will appear here." /> : <ol className="studio-ranked-clips">{topClips.map((clip, index) => <li key={clip.id}><Link href={`/dashboard/${clip.job_id}`}><span className="studio-rank">{String(index + 1).padStart(2, "0")}</span><span className="studio-ranked-info"><strong>{clip.title || clip.filename}</strong><small>{formatDuration(clipSeconds(clip))} · {clip.jobs?.caption_style || "Captioned clip"}</small></span><span className="studio-score">{clip.viral_score}<small>/100</small></span><ArrowUpRight size={16} aria-hidden="true" /></Link></li>)}</ol>}
+                    </section>
+                    <section className="studio-panel"><SectionHeading title="Activity calendar" description={`Clip creation over the last ${calendarDays} days`} icon={CalendarDays} />
+                        <div className="studio-activity-calendar" role="img" aria-label={`${calendar.filter((day) => day.count > 0).length} active days in the last ${calendarDays} days`}>
+                            {calendar.map((day) => <span key={day.key} title={`${day.label}: ${day.count} clips`} data-level={day.count === 0 ? "0" : day.count >= highest / 2 ? "2" : "1"}>{day.day}</span>)}
                         </div>
-
-                        {/* 30-Day Heatmap */}
-                        <div className="glass-card p-6 md:p-8">
-                            <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
-                                <Calendar size={18} className="text-mint-400" />
-                                Activity Calendar
-                            </h3>
-                            {s && <ActivityHeatmap data={s.heatmap} />}
-                        </div>
-                    </div>
-
-                    {/* ─── Top Viral Clips Leaderboard ─── */}
-                    <div className="glass-card p-6 md:p-8">
-                        <h3 className="text-base font-bold text-ink-100 mb-5 flex items-center gap-2.5">
-                            <Sparkles size={18} className="text-mint-400" />
-                            Top Performing Clips
-                        </h3>
-                        {s && s.topClips.length === 0 ? (
-                            <div className="text-center py-6 text-ink-400">
-                                <p className="text-sm">No clips yet. Your top performers will appear here.</p>
-                            </div>
-                        ) : (
-                            <div className="flex flex-col gap-2.5">
-                                {s?.topClips.map((clip, i) => (
-                                    <div
-                                        key={clip.id}
-                                        className="flex items-center gap-3.5 px-4.5 py-3.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] transition-all duration-300 hover:border-mint-500/35 hover:translate-x-1 animate-fade-in-up"
-                                        style={{ animationDelay: `${i * 0.06}s` }}
-                                    >
-                                        {/* Rank */}
-                                        <div 
-                                            className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-black flex-shrink-0"
-                                            style={{
-                                                background: i === 0 ? "rgba(255,215,0,0.18)" : i === 1 ? "rgba(148,163,184,0.18)" : i === 2 ? "rgba(205,127,50,0.15)" : "var(--bg-sunken)",
-                                                color: i === 0 ? "#A36600" : i === 1 ? "#64748b" : i === 2 ? "#A36600" : "var(--text-muted)",
-                                            }}
-                                        >
-                                            #{i + 1}
-                                        </div>
-
-                                        {/* Thumbnail */}
-                                        <div className="w-11 h-11 rounded-lg flex-shrink-0 overflow-hidden bg-[var(--bg-inset)] border border-[var(--border-subtle)] flex items-center justify-center">
-                                            {clip.thumbnail_url ? (
-                                                <img src={clip.thumbnail_url} alt="" className="w-full h-full object-cover" />
-                                            ) : (
-                                                <Film size={18} className="text-ink-400/40" />
-                                            )}
-                                        </div>
-
-                                        {/* Info */}
-                                        <div className="flex-1 min-w-0">
-                                            <div className="text-sm font-semibold text-ink-100 mb-0.5 whitespace-nowrap overflow-hidden text-ellipsis">
-                                                {clip.title || `Clip ${clip.clip_index + 1}`}
-                                            </div>
-                                            <div className="flex items-center gap-2 text-xs text-ink-400">
-                                                {clip.duration_seconds && <span>{Math.round(clip.duration_seconds)}s</span>}
-                                            </div>
-                                        </div>
-
-                                        {/* Score bar */}
-                                        {clip.viral_score != null && (
-                                            <div className="flex items-center gap-2.5 flex-shrink-0">
-                                                <div className="w-20 h-1.5 rounded-full bg-[var(--bg-inset)] overflow-hidden">
-                                                    <div 
-                                                        className="h-full rounded-full transition-[width] duration-700 ease-out"
-                                                        style={{
-                                                            width: `${clip.viral_score}%`,
-                                                            backgroundColor: clip.viral_score >= 80 ? "#10b981" : clip.viral_score >= 50 ? "#f59e0b" : "#ef4444",
-                                                        }} 
-                                                    />
-                                                </div>
-                                                <span 
-                                                    className="text-xs font-black min-w-8 text-right"
-                                                    style={{
-                                                        color: clip.viral_score >= 80 ? "#10b981" : clip.viral_score >= 50 ? "#f59e0b" : "#ef4444",
-                                                    }}
-                                                >
-                                                    {clip.viral_score}
-                                                </span>
-                                            </div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div>
-                        )}
-                    </div>
-                </>
-            )}
-        </div>
-    );
+                        <div className="studio-calendar-legend"><span>{calendar[0].label} — {calendar[calendar.length - 1].label}</span><span><i />Active day</span></div>
+                        <p className="studio-analytics-note"><Info size={16} aria-hidden="true" />These are creation statistics. ClipMint doesn’t track social-platform performance.</p>
+                    </section>
+                </div>
+            </>}
+        </>}
+    </div>;
 }

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import { IconArrowRight } from "./Icons";
+import { ArrowRight } from "lucide-react";
 
 /**
  * Auth-aware primary CTA. Avoids skeleton flashes: it renders the honest
@@ -41,7 +41,7 @@ export default function CtaButtons({ size = "md" }: { size?: "md" | "lg" }) {
     return (
       <Link href="/dashboard" className={`cm-btn-primary ${cls}`}>
         Go to Dashboard
-        <IconArrowRight className="w-[17px] h-[17px]" />
+        <ArrowRight size={17} strokeWidth={1.75} aria-hidden="true" />
       </Link>
     );
   }
@@ -49,7 +49,7 @@ export default function CtaButtons({ size = "md" }: { size?: "md" | "lg" }) {
   return (
     <Link href="/login" className={`cm-btn-primary ${cls}`}>
       Start free — no card
-      <IconArrowRight className="w-[17px] h-[17px]" />
+      <ArrowRight size={17} strokeWidth={1.75} aria-hidden="true" />
     </Link>
   );
 }

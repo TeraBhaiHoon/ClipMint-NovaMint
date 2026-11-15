@@ -146,8 +146,7 @@ export async function POST(request: NextRequest) {
     // Pro after expiry — they are restored on the next purchase).
     const limits = effectiveLimits(profile);
 
-    const remainingVideos = Math.max(0, limits.videos - (profile.videos_used ?? 0));
-    if (remainingVideos < 1) {
+    if ((profile.videos_used ?? 0) > limits.videos) {
         const message = `You've reached your limit of ${limits.videos} video(s). Please upgrade.`;
         await failJob(quotaClient, job.id, message);
         return NextResponse.json({ error: message }, { status: 402 });

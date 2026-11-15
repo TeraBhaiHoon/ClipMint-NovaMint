@@ -1,633 +1,217 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Captions, Check, ChevronRight, CloudUpload, FileVideo, FolderOpen, Link2, Music2, Scissors, SlidersHorizontal, Sparkles, Upload, Wand2, X } from "lucide-react";
 import { createClient } from "@/lib/supabase";
-import {
-    Upload, Link2, ArrowRight, Sparkles, Info, Loader2,
-    Check, Zap, AlertCircle, Scissors, Captions, Wand2,
-} from "lucide-react";
 import { CAPTION_STYLES, effectiveLimits, type CaptionStyle } from "@/lib/types";
+import { readCaptionPreference } from "@/lib/dashboard";
 import { validateVideoUrl } from "@/lib/validateUrl";
+import { useDashboard } from "../_components/dashboard-provider";
+import { Button, Choice, Notice, PageHeader, SectionHeading, Toggle } from "../_components/ui";
 
-const STEPS = [
-    { num: 1, label: "Source" },
-    { num: 2, label: "Style" },
-    { num: 3, label: "Config" },
-];
-
-/** Caption pacing: page size + gap between caption pages. */
-const CAPTION_PACES = [
+const PACES = [
     { value: "fast", label: "Fast", hint: "3 words · snappy" },
-    { value: "balanced", label: "Balanced", hint: "4 words · default" },
+    { value: "balanced", label: "Balanced", hint: "4 words · natural" },
     { value: "slow", label: "Slow", hint: "5 words · relaxed" },
 ] as const;
-
-type CaptionPace = (typeof CAPTION_PACES)[number]["value"];
-
-/** What the pipeline should do: cut viral clips, or caption the whole video. */
-type JobMode = "clips" | "captions";
-
-/** Source videos are uploaded DIRECTLY to the owner's Cloudflare R2 bucket
- *  (presigned PUT — Supabase Storage is not in the media path at all).
- *  2 GB is the practical ceiling for a single browser PUT (no resume) and
- *  leaves headroom on the processing runner's disk; the pipeline deletes the
- *  source from the bucket as soon as the clips are ready. */
+const MUSIC = [
+    { value: "auto", label: "AI selection" }, { value: "energetic", label: "Energetic" },
+    { value: "calm", label: "Calm" }, { value: "corporate", label: "Corporate" },
+    { value: "inspiring", label: "Inspiring" }, { value: "none", label: "No music" },
+    { value: "custom", label: "Upload a track" },
+] as const;
+type Pace = typeof PACES[number]["value"];
+type Music = typeof MUSIC[number]["value"];
 const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
-const VIDEO_ACCEPT =
-    "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
+const VIDEO_ACCEPT = "video/mp4,video/quicktime,video/x-m4v,video/webm,.mp4,.mov,.m4v,.webm";
 
 export default function NewVideoPage() {
     const router = useRouter();
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
+    const { account, profile, refreshProfile } = useDashboard();
+    const [sourceType, setSourceType] = useState<"url" | "file" | "drive">("url");
     const [videoUrl, setVideoUrl] = useState("");
     const [videoFile, setVideoFile] = useState<File | null>(null);
     const [captionStyle, setCaptionStyle] = useState<CaptionStyle>("hormozi");
-    const [captionPace, setCaptionPace] = useState<CaptionPace>("balanced");
-    const [maxClips, setMaxClips] = useState(10);
-    // Job mode: "clips" cuts viral moments; "captions" captions the whole video
-    // (with optional auto-editing: silence jump-cuts + punch-in zooms).
-    const [jobMode, setJobMode] = useState<JobMode>("clips");
+    const [captionPace, setCaptionPace] = useState<Pace>("balanced");
+    const [maxClips, setMaxClips] = useState(5);
+    const [jobMode, setJobMode] = useState<"clips" | "captions">("clips");
     const [removeSilences, setRemoveSilences] = useState(true);
     const [autoPunchIn, setAutoPunchIn] = useState(true);
-    // BGM choice: "auto" = AI mood pick, a mood name, "none", or "custom" with
-    // an uploaded track (stored in Supabase Storage, URL saved on the job).
-    const [bgmChoice, setBgmChoice] = useState<"auto" | "energetic" | "calm" | "corporate" | "inspiring" | "none" | "custom">("auto");
+    const [bgmChoice, setBgmChoice] = useState<Music>("auto");
     const [bgmFile, setBgmFile] = useState<File | null>(null);
-    const BGM_CHOICES: { value: typeof bgmChoice; label: string }[] = [
-        { value: "auto", label: "Auto (AI mood)" },
-        { value: "energetic", label: "Energetic" },
-        { value: "calm", label: "Calm" },
-        { value: "corporate", label: "Corporate" },
-        { value: "inspiring", label: "Inspiring" },
-        { value: "none", label: "No BGM" },
-        { value: "custom", label: "My track" },
-    ];
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [uploadPct, setUploadPct] = useState<number | null>(null);
     const [error, setError] = useState<string | null>(null);
-    const [sourceType, setSourceType] = useState<"url" | "file" | "drive">("url");
-    const [currentStep, setCurrentStep] = useState(1);
+    const [createdJobId, setCreatedJobId] = useState<string | null>(null);
+    const [dragging, setDragging] = useState(false);
+    const fileInput = useRef<HTMLInputElement>(null);
+    const errorRef = useRef<HTMLDivElement>(null);
+    const preferenceLoaded = useRef<string | null>(null);
+    const submitting = useRef(false);
 
-    const hasSource = sourceType === "file" ? Boolean(videoFile) : Boolean(videoUrl.trim());
+    useEffect(() => {
+        if (!account || preferenceLoaded.current === account.id) return;
+        const style = readCaptionPreference(account.id);
+        const frame = requestAnimationFrame(() => {
+            preferenceLoaded.current = account.id;
+            setCaptionStyle(style);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [account]);
+    useEffect(() => { if (error) errorRef.current?.focus(); }, [error]);
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!hasSource) return;
+    const hasSource = sourceType === "file" ? !!videoFile : !!videoUrl.trim();
+    const remaining = profile ? Math.max(0, effectiveLimits(profile).clips - profile.clips_used) : null;
+    const styleLabel = CAPTION_STYLES.find((style) => style.value === captionStyle)?.label || "Hormozi";
 
+    function selectFile(file: File | null) {
+        setError(null);
+        if (file && !/\.(mp4|mov|m4v|webm)$/i.test(file.name)) {
+            setError("Choose an MP4, MOV, M4V, or WebM video.");
+            return;
+        }
+        setVideoFile(file);
+        if (file && file.size > MAX_UPLOAD_BYTES) setError("This video is over 2 GB. Use a YouTube or Google Drive link for larger files.");
+    }
+
+    async function handleSubmit(event: React.FormEvent) {
+        event.preventDefault();
+        if (!hasSource || submitting.current || createdJobId) return;
+        submitting.current = true;
         setIsSubmitting(true);
         setError(null);
-
-        // ── Resolve the source to a URL the pipeline can fetch ──
-        let normalizedUrl: string | null = null;
-        let videoStoragePath: string | null = null;
-
-        if (sourceType === "file") {
-            if (!videoFile) { setIsSubmitting(false); return; }
-            if (videoFile.size > MAX_UPLOAD_BYTES) {
-                setError("That video is over the 2 GB upload limit. For very large files, paste a YouTube or Drive link instead.");
-                setIsSubmitting(false);
-                return;
-            }
-            // (upload happens after the quota checks below, so a failed upload
-            //  never burns a video slot)
-        } else {
-            // Client-side validation for instant feedback. The server validates
-            // the *stored* URL again before dispatching — that is the security boundary.
-            const validation = validateVideoUrl(videoUrl);
-            if (!validation.ok) {
-                setError(validation.reason);
-                setIsSubmitting(false);
-                return;
-            }
-            normalizedUrl = validation.url;
-        }
-
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) { setError("You must be logged in."); setIsSubmitting(false); return; }
-
-        // Roll the monthly usage window first (no-op unless due), then read the
-        // plan + expiry too — effectiveLimits needs both or paid plans would
-        // silently gate at Free limits here.
-        await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
-
-        const { data: profile, error: profileError } = await supabase
-            .from("profiles")
-            .select("plan, current_period_end, clips_used, clips_limit, videos_used, videos_limit")
-            .eq("id", user.id)
-            .single();
-
-        if (profileError || !profile) {
-            // A failed profile fetch used to skip every limit check — fail loudly instead.
-            console.error("Could not load profile limits:", profileError?.message);
-            setError("Could not verify your plan limits. Please refresh the page and try again.");
-            setIsSubmitting(false); return;
-        }
-
-        const limits = effectiveLimits(profile);
-        if (profile.videos_used >= limits.videos) {
-            setError(`You've reached your limit of ${limits.videos} video(s). Please upgrade.`);
-            setIsSubmitting(false); return;
-        }
-        if (profile.clips_used >= limits.clips) {
-            setError(`You've reached your limit of ${limits.clips} clip(s). Please upgrade.`);
-            setIsSubmitting(false); return;
-        }
-        const remaining = Math.max(0, limits.clips - profile.clips_used);
-        if (remaining <= 0) { setError("No clips remaining. Please upgrade."); setIsSubmitting(false); return; }
-
-        // Clamp *and use* the clamped value below — setting state alone was dead code.
-        const effectiveMaxClips = Math.min(maxClips, remaining);
-        if (effectiveMaxClips !== maxClips) setMaxClips(effectiveMaxClips);
-
-        // ── Upload the source video straight to the R2 cache ──
-        // The presign route issues a server-generated key (own folder), the
-        // browser PUTs directly to R2 — Vercel functions cannot proxy large
-        // bodies. The key lands on the job row; the dispatch route mints a
-        // fresh presigned READ URL on every run.
-        if (sourceType === "file" && videoFile) {
-            const presignRes = await fetch("/api/uploads/presign", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ filename: videoFile.name, size: videoFile.size }),
-            });
-            const presign = await presignRes.json().catch(() => null);
-            if (!presignRes.ok || !presign?.url || !presign?.key) {
-                setError(presign?.error || "Could not start the upload. Please try again.");
-                setIsSubmitting(false);
-                return;
-            }
-            const uploaded = await new Promise<boolean>((resolve) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open("PUT", presign.url);
-                xhr.upload.onprogress = (e) => {
-                    if (e.lengthComputable) setUploadPct(Math.round((e.loaded / e.total) * 100));
-                };
-                xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
-                xhr.onerror = () => resolve(false);
-                xhr.send(videoFile);
-            });
-            setUploadPct(null);
-            if (!uploaded) {
-                setError("Video upload failed. Check your connection and try again.");
-                setIsSubmitting(false);
-                return;
-            }
-            videoStoragePath = presign.key as string;
-        }
-
-        if (!normalizedUrl && !videoStoragePath) { setIsSubmitting(false); return; }
-
-        // Reserve a video slot atomically before creating anything, so two tabs
-        // (or a retry storm) cannot push videos_used past the limit.
+        setCreatedJobId(null);
         let reservedSlot = false;
-        const { data: reserved, error: reserveError } = await supabase.rpc("increment_videos_used", {
-            p_user_id: user.id,
-        });
-        if (reserveError) {
-            // RPC missing (migration not applied) or transient failure: log loudly
-            // and continue — the trigger route still enforces the clip quota.
-            console.error("increment_videos_used RPC failed:", reserveError.message);
-        } else if (reserved === false) {
-            setError(`You've reached your limit of ${limits.videos} video(s). Please upgrade.`);
-            setIsSubmitting(false); return;
-        } else {
-            reservedSlot = true;
-        }
-
-        // Upload a user-supplied BGM track (if any) BEFORE the job row exists,
-        // keyed by the user id so RLS keeps folders private-per-owner.
-        let customBgmUrl: string | null = null;
-        if (bgmChoice === "custom" && bgmFile) {
-            if (bgmFile.size > 25 * 1024 * 1024) {
-                setError("Your BGM track is over 25 MB. Please upload a smaller file.");
-                setIsSubmitting(false); return;
+        let userId: string | null = null;
+        let jobCreated = false;
+        try {
+            let normalizedUrl: string | null = null;
+            let videoStoragePath: string | null = null;
+            if (sourceType === "file") {
+                if (!videoFile || videoFile.size > MAX_UPLOAD_BYTES) throw new Error("Choose a video under 2 GB or use a video link.");
+            } else {
+                const validation = validateVideoUrl(videoUrl);
+                if (!validation.ok) throw new Error(validation.reason);
+                normalizedUrl = validation.url;
             }
-            const ext = (bgmFile.name.split(".").pop() || "mp3").toLowerCase();
-            const path = `${user.id}/bgm-${Date.now()}.${ext}`;
-            const { error: upErr } = await supabase.storage
-                .from("bgm-uploads")
-                .upload(path, bgmFile, { contentType: bgmFile.type || "audio/mpeg" });
-            if (upErr) {
-                setError(`BGM upload failed: ${upErr.message}`);
-                setIsSubmitting(false); return;
-            }
-            customBgmUrl = supabase.storage.from("bgm-uploads").getPublicUrl(path).data.publicUrl;
-        }
-        const jobRow: Record<string, unknown> = {
-            user_id: user.id, video_url: normalizedUrl,
-            video_filename: videoFile?.name ?? null,
-            source_type: sourceType === "url" ? "url" : sourceType === "drive" ? "drive" : "upload",
-            caption_style: captionStyle, max_clips: effectiveMaxClips, status: "queued", progress: 0,
-            job_mode: jobMode,
-            // Auto-edit toggles only apply to whole-video captions mode.
-            remove_silences: jobMode === "captions" ? removeSilences : false,
-            auto_punch_in: jobMode === "captions" ? autoPunchIn : false,
-        };
-        if (videoStoragePath) jobRow.video_storage_path = videoStoragePath;
-        // The mood choice travels through the job row the same way the render
-        // reads it: "auto" leaves it to the AI; "none" and named moods override.
-        if (bgmChoice !== "auto" && bgmChoice !== "custom") jobRow.bgm_mood = bgmChoice;
-        if (bgmChoice === "none") jobRow.bgm_mood = "none";
-        if (customBgmUrl) jobRow.custom_bgm_url = customBgmUrl;
+            if (bgmChoice === "custom" && !bgmFile) throw new Error("Choose a music file or select another music option.");
+            if (bgmChoice === "custom" && bgmFile && bgmFile.size > 25 * 1024 * 1024) throw new Error("Your music track is over 25 MB. Choose a smaller file.");
 
-        const { data, error: insertError } = await supabase.from("jobs").insert(jobRow).select("id").single();
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user) throw new Error("Please sign in again before creating a video.");
+            userId = user.id;
+            const { error: rollError } = await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
+            if (rollError) throw new Error("Couldn’t check your current usage. Please try again.");
+            const { data: currentProfile, error: profileError } = await supabase.from("profiles").select("plan, current_period_end, clips_used, videos_used").eq("id", user.id).single();
+            if (profileError || !currentProfile) throw new Error("Couldn’t verify your plan limits. Please try again.");
+            const limits = effectiveLimits(currentProfile);
+            if (currentProfile.videos_used >= limits.videos) throw new Error(`You’ve used your ${limits.videos} videos for this period. View your plan in Settings → Billing.`);
+            const clipsLeft = Math.max(0, limits.clips - currentProfile.clips_used);
+            if (!clipsLeft) throw new Error("No clips remain in this period. View your plan in Settings → Billing.");
+            const effectiveMaxClips = Math.min(jobMode === "captions" ? 1 : maxClips, clipsLeft);
 
-        if (insertError) {
-            // Give the reserved slot back if the job could not be created.
-            if (reservedSlot) await supabase.rpc("refund_videos_used", { p_user_id: user.id });
-            setError(insertError.message); setIsSubmitting(false); return;
-        }
-
-        if (data) {
-            try {
-                const res = await fetch("/api/trigger-pipeline", {
-                    method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ job_id: data.id, caption_pace: captionPace }),
+            if (sourceType === "file" && videoFile) {
+                const response = await fetch("/api/uploads/presign", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: videoFile.name, size: videoFile.size }) });
+                const presign = await response.json().catch(() => null);
+                if (!response.ok || !presign?.url || !presign?.key) throw new Error(presign?.error || "Couldn’t start your upload. Please try again.");
+                setUploadPct(0);
+                const uploaded = await new Promise<boolean>((resolve) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open("PUT", presign.url);
+                    xhr.timeout = 30 * 60 * 1000;
+                    xhr.upload.onprogress = (progress) => { if (progress.lengthComputable) setUploadPct(Math.round(progress.loaded / progress.total * 100)); };
+                    xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300);
+                    xhr.onerror = xhr.ontimeout = xhr.onabort = () => resolve(false);
+                    xhr.send(videoFile);
                 });
-                if (!res.ok) {
-                    const payload = await res.json().catch(() => null);
-                    setError(payload?.error || "Could not start processing. Please try again.");
-                    setIsSubmitting(false);
-                    return;
-                }
-            } catch (err) {
-                console.warn("Trigger failed:", err);
-                setError("Could not start processing. Please check your connection and retry from the job page.");
-                setIsSubmitting(false);
-                return;
+                setUploadPct(null);
+                if (!uploaded) throw new Error("Upload failed. Check your connection and try again.");
+                videoStoragePath = presign.key;
             }
-            router.push(`/dashboard/${data.id}`);
+
+            let customBgmUrl: string | null = null;
+            if (bgmChoice === "custom" && bgmFile) {
+                const extension = (bgmFile.name.split(".").pop() || "mp3").toLowerCase();
+                const path = `${user.id}/bgm-${Date.now()}.${extension}`;
+                const { error: musicError } = await supabase.storage.from("bgm-uploads").upload(path, bgmFile, { contentType: bgmFile.type || "audio/mpeg" });
+                if (musicError) throw new Error("Your music file couldn’t be uploaded. Please try again.");
+                customBgmUrl = supabase.storage.from("bgm-uploads").getPublicUrl(path).data.publicUrl;
+            }
+
+            const { data: reserved, error: reserveError } = await supabase.rpc("increment_videos_used", { p_user_id: user.id });
+            if (reserveError) throw new Error("Couldn’t reserve a video slot. Please try again.");
+            if (reserved !== true) throw new Error("You’ve reached your video limit or a slot couldn’t be reserved. Please try again.");
+            reservedSlot = true;
+            const row: Record<string, unknown> = {
+                user_id: user.id, video_url: normalizedUrl, video_filename: sourceType === "file" ? videoFile?.name : null,
+                source_type: sourceType === "file" ? "upload" : sourceType, caption_style: captionStyle,
+                max_clips: effectiveMaxClips, status: "queued", progress: 0, job_mode: jobMode,
+                remove_silences: jobMode === "captions" ? removeSilences : false,
+                auto_punch_in: jobMode === "captions" ? autoPunchIn : false,
+            };
+            if (videoStoragePath) row.video_storage_path = videoStoragePath;
+            if (bgmChoice !== "auto" && bgmChoice !== "custom") row.bgm_mood = bgmChoice;
+            if (customBgmUrl) row.custom_bgm_url = customBgmUrl;
+            const { data: job, error: insertError } = await supabase.from("jobs").insert(row).select("id").single();
+            if (insertError || !job) throw new Error("Your video project couldn’t be created. Please try again.");
+            jobCreated = true;
+            setCreatedJobId(job.id);
+            const response = await fetch("/api/trigger-pipeline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job_id: job.id, caption_pace: captionPace }) });
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null);
+                throw new Error(payload?.error || "Your project was saved, but processing didn’t start. Open it below to retry.");
+            }
+            void refreshProfile();
+            router.push(`/dashboard/${job.id}`);
+        } catch (cause) {
+            if (reservedSlot && !jobCreated && userId) await supabase.rpc("refund_videos_used", { p_user_id: userId });
+            setError(cause instanceof Error ? cause.message : "Something went wrong. Please try again.");
+        } finally {
+            setUploadPct(null);
+            submitting.current = false;
+            setIsSubmitting(false);
         }
-    };
+    }
 
-    return (
-        <div className="max-w-2xl mx-auto">
-            {/* ─── Step Progress ─── */}
-            <div className="flex items-center justify-between gap-2 mb-8">
-                {STEPS.map((step, i) => (
-                    <div key={step.num} className="flex items-center flex-1 last:flex-initial">
-                        <div className="flex items-center gap-2.5 flex-shrink-0">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
-                                currentStep >= step.num 
-                                    ? "bg-mint-500 text-ink-50 shadow-[0_0_12px_rgba(45,194,4,0.3)]" 
-                                    : "bg-[var(--bg-inset)] text-ink-400 border border-[var(--border-subtle)]"
-                            }`}>
-                                {currentStep > step.num ? <Check size={14} /> : step.num}
-                            </div>
-                            <span className={`text-xs font-semibold ${currentStep >= step.num ? "text-ink-50" : "text-ink-400"}`}>
-                                {step.label}
-                            </span>
+    return <div className="studio-page">
+        <PageHeader eyebrow="Create something worth sharing" title="New video" description="Bring the video. Choose the look. We’ll handle the edit." />
+        <form onSubmit={handleSubmit} className="studio-create-layout">
+            <fieldset disabled={isSubmitting} className="studio-create-fields">
+                <section className="studio-panel" id="source"><SectionHeading title="01 · Add your video" description="Paste a link or upload a file to get started." icon={CloudUpload} />
+                    <div className="studio-segmented studio-source-tabs" role="group" aria-label="Video source">{([{ value: "url", label: "Video link", icon: Link2 }, { value: "file", label: "Upload file", icon: Upload }, { value: "drive", label: "Google Drive", icon: FolderOpen }] as const).map(({ value, label, icon: Icon }) => <button type="button" key={value} aria-pressed={sourceType === value} onClick={() => { setSourceType(value); setError(null); }}><Icon size={17} aria-hidden="true" />{label}</button>)}</div>
+                    {sourceType === "file" ? <div className="studio-field">
+                        <div className={`studio-dropzone ${dragging ? "is-dragging" : ""}`} onDragOver={(e) => { e.preventDefault(); if (!isSubmitting) setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e) => { e.preventDefault(); setDragging(false); if (!isSubmitting) selectFile(e.dataTransfer.files[0] || null); }}>
+                            <input ref={fileInput} id="video-upload" type="file" accept={VIDEO_ACCEPT} className="studio-upload-native" onChange={(e) => selectFile(e.target.files?.[0] || null)} aria-label="Choose a video file" />
+                            {videoFile ? <><FileVideo size={28} aria-hidden="true" /><strong>{videoFile.name}</strong><p>{(videoFile.size / 1024 / 1024).toFixed(1)} MB · Click to replace</p></> : <><CloudUpload size={30} aria-hidden="true" /><strong>Drop your video here</strong><p>or click to browse files</p><span>MP4, MOV, M4V, WebM · up to 2 GB</span></>}
                         </div>
-                        {i < STEPS.length - 1 && (
-                            <div className={`flex-1 h-0.5 mx-3 rounded-full transition-all duration-300 ${currentStep > step.num ? "bg-mint-500" : "bg-ink-800"}`} />
-                        )}
-                    </div>
-                ))}
-            </div>
-
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-ink-50 flex items-center gap-2">
-                <Zap size={24} className="text-mint-400" />
-                Create New Video
-            </h1>
-            <p className="text-sm text-ink-400 mb-8">
-                Upload a video and get viral clips, or caption the whole thing with pro auto-editing
-            </p>
-
-            <form onSubmit={handleSubmit}>
-                {/* ─── Source Type Tabs ─── */}
-                <div className="tab-nav mb-6">
-                    {[
-                        { value: "url" as const, label: "Paste URL", icon: <Link2 size={15} /> },
-                        { value: "file" as const, label: "Upload Video", icon: <Upload size={15} /> },
-                        { value: "drive" as const, label: "Via Drive", icon: <Upload size={15} /> },
-                    ].map((tab) => (
-                        <button
-                            key={tab.value} type="button"
-                            className={`tab-item ${sourceType === tab.value ? "active" : ""}`}
-                            onClick={() => { setSourceType(tab.value); setCurrentStep(1); }}
-                        >
-                            {tab.icon} {tab.label}
-                        </button>
-                    ))}
-                </div>
-
-                {/* ─── URL Input ─── */}
-                {sourceType === "url" && (
-                    <div className="mb-6">
-                        <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">Video URL</label>
-                        <input
-                            type="url" value={videoUrl}
-                            onChange={(e) => { setVideoUrl(e.target.value); if (e.target.value.trim()) setCurrentStep(2); }}
-                            placeholder="https://youtube.com/watch?v=... or Instagram/Facebook URL"
-                            className="input-field" required
-                        />
-                        <div className="flex items-center gap-1.5 mt-2.5 text-xs text-ink-400">
-                            <Info size={12} /> Supports YouTube, Instagram, Facebook, and direct MP4 links
-                        </div>
-                    </div>
-                )}
-
-                {/* ─── Direct file upload ─── */}
-                {sourceType === "file" && (
-                    <div className="mb-6">
-                        <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">
-                            Upload your video
-                        </label>
-                        <label
-                            className={`glass-card p-8 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all text-center ${
-                                videoFile ? "border-mint-500/40 bg-mint-500/5" : "hover:border-[var(--border-strong)]"
-                            }`}
-                        >
-                            <input
-                                type="file"
-                                accept={VIDEO_ACCEPT}
-                                className="hidden"
-                                onChange={(e) => {
-                                    const f = e.target.files?.[0] ?? null;
-                                    setVideoFile(f);
-                                    if (f) setCurrentStep(2);
-                                }}
-                            />
-                            {videoFile ? (
-                                <>
-                                    <Check size={22} className="text-mint-400" />
-                                    <span className="text-sm font-bold text-ink-50">{videoFile.name}</span>
-                                    <span className={`text-xs ${videoFile.size > MAX_UPLOAD_BYTES ? "text-red-400" : "text-ink-400"}`}>
-                                        {(videoFile.size / 1024 / 1024).toFixed(1)} MB
-                                        {videoFile.size > MAX_UPLOAD_BYTES && " — over the 2 GB limit"}
-                                    </span>
-                                    <span className="text-[10px] text-ink-400">Click to choose a different file</span>
-                                </>
-                            ) : (
-                                <>
-                                    <Upload size={22} className="text-mint-400" />
-                                    <span className="text-sm font-bold text-ink-100">Click to choose a video</span>
-                                    <span className="text-xs text-ink-400">MP4, MOV, M4V or WebM · up to 2 GB</span>
-                                    <span className="text-[10px] text-ink-400">Stored privately, deleted automatically once your clips are ready</span>
-                                </>
-                            )}
-                        </label>
-                    </div>
-                )}
-
-                {/* ─── Upload via Drive ─── */}
-                {sourceType === "drive" && (
-                    <div className="mb-6">
-                        <label className="block text-xs font-bold text-ink-200 mb-2 uppercase tracking-wider">
-                            Upload via Google Drive
-                        </label>
-                        <div className="glass-card p-5 mb-4">
-                            <div className="flex flex-col gap-4">
-                                {[
-                                    { n: 1, t: "Upload to Google Drive", d: "Upload your video file to your Google Drive account" },
-                                    { n: 2, t: 'Share with "Anyone with the link"', d: 'Right-click → Share → Change to "Anyone with the link" → Copy link' },
-                                    { n: 3, t: "Paste the link below", d: "Paste your Google Drive share link and we'll handle the rest" },
-                                ].map((s) => (
-                                    <div key={s.n} className="flex items-start gap-3">
-                                        <div className="w-6 h-6 rounded-full bg-mint-500/10 border border-mint-500/20 flex items-center justify-center flex-shrink-0 text-xs font-bold text-mint-400">{s.n}</div>
-                                        <div>
-                                            <div className="text-xs font-bold text-ink-100 mb-0.5">{s.t}</div>
-                                            <div className="text-xs text-ink-400 leading-relaxed">{s.d}</div>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                        <input
-                            type="url" value={videoUrl}
-                            onChange={(e) => { setVideoUrl(e.target.value); if (e.target.value.trim()) setCurrentStep(2); }}
-                            placeholder="https://drive.google.com/file/d/..." className="input-field" required
-                        />
-                    </div>
-                )}
-
-                {/* ─── What to produce ─── */}
-                <div className="mb-6">
-                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">
-                        What should ClipMint make?
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {([
-                            {
-                                value: "clips" as const,
-                                icon: <Scissors size={15} />,
-                                title: "Viral clips",
-                                hint: "AI finds the best moments and cuts 9:16 clips",
-                            },
-                            {
-                                value: "captions" as const,
-                                icon: <Captions size={15} />,
-                                title: "Full video captions",
-                                hint: "One captioned video of the whole upload, auto-edited",
-                            },
-                        ] as const).map((mode) => (
-                            <button
-                                key={mode.value} type="button"
-                                onClick={() => { setJobMode(mode.value); setCurrentStep(3); }}
-                                className={`glass-card p-4 text-left cursor-pointer transition-all ${
-                                    jobMode === mode.value
-                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(45,194,4,0.12)]"
-                                        : "hover:border-[var(--border-subtle)]"
-                                }`}
-                            >
-                                <div className="flex items-center justify-between mb-1">
-                                    <span className={`text-xs font-bold flex items-center gap-1.5 ${jobMode === mode.value ? "text-mint-400" : "text-ink-200"}`}>
-                                        {mode.icon} {mode.title}
-                                    </span>
-                                    {jobMode === mode.value && <Check size={14} className="text-mint-400" />}
-                                </div>
-                                <span className="text-[10px] text-ink-400 leading-tight block">{mode.hint}</span>
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Auto-editing — whole-video captions mode only */}
-                    {jobMode === "captions" && (
-                        <div className="glass-card p-4 mt-3 space-y-3">
-                            <div className="text-[10px] font-bold text-ink-300 uppercase tracking-wider flex items-center gap-1.5">
-                                <Wand2 size={12} className="text-mint-400" /> Auto-editing
-                            </div>
-                            {([
-                                {
-                                    checked: removeSilences,
-                                    set: setRemoveSilences,
-                                    title: "Cut out dead air",
-                                    hint: "Removes silences and long pauses, so the pace stays tight",
-                                },
-                                {
-                                    checked: autoPunchIn,
-                                    title: "Dynamic punch-ins",
-                                    set: setAutoPunchIn,
-                                    hint: "Subtle zoom on sentence starts — the classic editor look",
-                                },
-                            ] as const).map((opt) => (
-                                <label key={opt.title} className="flex items-start gap-3 cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={opt.checked}
-                                        onChange={(e) => opt.set(e.target.checked)}
-                                        className="mt-0.5 w-4 h-4 accent-[#39E508] cursor-pointer"
-                                    />
-                                    <span>
-                                        <span className="block text-xs font-bold text-ink-100">{opt.title}</span>
-                                        <span className="block text-[10px] text-ink-400 leading-relaxed">{opt.hint}</span>
-                                    </span>
-                                </label>
-                            ))}
-                        </div>
-                    )}
-                </div>
-
-                {/* ─── Background Music Picker ─── */}
-                <div className="mb-6">
-                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">
-                        Background Music <span className="text-ink-400 normal-case font-medium">(SFX always on)</span>
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                        {BGM_CHOICES.map((c) => (
-                            <button
-                                key={c.value} type="button"
-                                onClick={() => { setBgmChoice(c.value); if (c.value !== "custom") setBgmFile(null); }}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
-                                    bgmChoice === c.value
-                                        ? "border-mint-500 bg-mint-500/10 text-mint-400"
-                                        : "border-[var(--border-subtle)] text-ink-300 hover:border-[var(--border-strong)]"
-                                }`}
-                            >
-                                {c.label}
-                            </button>
-                        ))}
-                    </div>
-                    {bgmChoice === "custom" && (
-                        <div className="mt-3">
-                            <input
-                                type="file"
-                                accept="audio/mpeg,audio/mp3,audio/wav,audio/ogg,.mp3,.wav,.ogg"
-                                onChange={(e) => setBgmFile(e.target.files?.[0] ?? null)}
-                                className="input-field file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0
-                                           file:bg-mint-500/10 file:text-mint-400 file:text-xs file:font-bold
-                                           text-ink-300 text-xs"
-                            />
-                            {bgmFile && (
-                                <p className="text-xs text-ink-400 mt-1.5">
-                                    {bgmFile.name} · {(bgmFile.size / 1024 / 1024).toFixed(1)} MB
-                                    {bgmFile.size > 25 * 1024 * 1024 && (
-                                        <span className="text-red-400"> — over the 25 MB limit</span>
-                                    )}
-                                </p>
-                            )}
-                        </div>
-                    )}
-                </div>
-
-                {/* ─── Caption Style Picker ─── */}
-                <div className="mb-6">
-                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">Caption Style</label>
-                    <div className="dash-grid-3">
-                        {CAPTION_STYLES.map((style) => (
-                            <button
-                                key={style.value} type="button"
-                                onClick={() => { setCaptionStyle(style.value); setCurrentStep(3); }}
-                                className={`glass-card p-4 text-left cursor-pointer transition-all ${
-                                    captionStyle === style.value 
-                                        ? "border-mint-500 bg-mint-500/10 shadow-[0_0_15px_rgba(45,194,4,0.12)]" 
-                                        : "hover:border-[var(--border-subtle)]"
-                                }`}
-                            >
-                                <div className="flex items-center justify-between mb-1">
-                                    <span className={`text-xs font-bold ${captionStyle === style.value ? "text-mint-400" : "text-ink-200"}`}>
-                                        {style.label}
-                                    </span>
-                                    {captionStyle === style.value && <Check size={14} className="text-mint-400" />}
-                                </div>
-                                <span className="text-[10px] text-ink-400 leading-tight block">{style.description}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                {/* ─── Caption Pace ─── */}
-                <div className="mb-6">
-                    <label className="block text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">Caption Pace</label>
-                    <div className="grid grid-cols-3 gap-2.5">
-                        {CAPTION_PACES.map((pace) => (
-                            <button
-                                key={pace.value} type="button"
-                                onClick={() => setCaptionPace(pace.value)}
-                                className={`glass-card p-3 text-center cursor-pointer transition-all ${
-                                    captionPace === pace.value
-                                        ? "border-mint-500 bg-mint-500/10"
-                                        : "hover:border-[var(--border-subtle)]"
-                                }`}
-                            >
-                                <span className={`block text-xs font-bold ${captionPace === pace.value ? "text-mint-400" : "text-ink-200"}`}>
-                                    {pace.label}
-                                </span>
-                                <span className="block text-[10px] text-ink-400 mt-0.5">{pace.hint}</span>
-                            </button>
-                        ))}
-                    </div>
-                </div>
-
-                {/* ─── Max Clips (viral-clips mode only) ─── */}
-                {jobMode === "clips" && (
-                    <div className="mb-8">
-                        <label className="flex justify-between items-center text-xs font-bold text-ink-200 mb-2.5 uppercase tracking-wider">
-                            <span>Max Clips</span>
-                            <span className="text-mint-400 text-sm font-extrabold">{maxClips}</span>
-                        </label>
-                        <input
-                            type="range"
-                            min={1} max={20}
-                            value={maxClips}
-                            onChange={(e) => setMaxClips(Number(e.target.value))}
-                            style={{
-                                background: `linear-gradient(to right, #39E508 0%, #39E508 ${((maxClips - 1) / 19) * 100}%, rgba(11, 18, 13, 0.10) ${((maxClips - 1) / 19) * 100}%, rgba(11, 18, 13, 0.10) 100%)`,
-                            }}
-                            className="custom-range"
-                        />
-                        <div className="flex justify-between text-[10px] text-ink-400 mt-1.5 font-medium">
-                            <span>1 clip</span><span>20 clips</span>
-                        </div>
-                    </div>
-                )}
-
-                {/* ─── Error ─── */}
-                {error && (
-                    <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-[#ef4444] text-xs font-semibold mb-5 flex items-center gap-2 animate-scale-in">
-                        <AlertCircle size={14} className="flex-shrink-0" />
-                        <span>{error}</span>
-                    </div>
-                )}
-
-                {/* ─── Submit ─── */}
-                <button
-                    type="submit" 
-                    className="btn-primary w-full justify-center py-3.5 text-sm font-semibold shadow-lg"
-                    disabled={isSubmitting || !hasSource}
-                >
-                    {isSubmitting ? (
-                        uploadPct !== null
-                            ? <><Loader2 size={18} className="animate-spin" /> Uploading {uploadPct}%…</>
-                            : <><Loader2 size={18} className="animate-spin" /> Processing...</>
-                    ) : (
-                        <><Sparkles size={18} /> Start Processing <ArrowRight size={18} /></>
-                    )}
-                </button>
-
-                {/* ─── Info ─── */}
-                <div className="glass-card p-4.5 mt-5 flex gap-3">
-                    <Info size={18} className="text-mint-400 flex-shrink-0 mt-0.5" />
-                    <div>
-                        <div className="text-xs font-bold text-ink-100 mb-1">How long does it take?</div>
-                        <p className="text-xs text-ink-400 leading-relaxed">
-                            Processing typically takes 5-15 minutes. ClipMint transcribes your audio, writes the captions,
-                            auto-edits the pacing, and renders the finished video.
-                        </p>
-                    </div>
-                </div>
-            </form>
-        </div>
-    );
+                        {videoFile && <Button variant="ghost" className="studio-remove-file" onClick={() => { selectFile(null); if (fileInput.current) fileInput.current.value = ""; }}><X size={15} aria-hidden="true" />Remove file</Button>}
+                        <p className="studio-field-hint">Your source upload is private and removed after successful processing.</p>
+                    </div> : <div className="studio-field"><label htmlFor="video-url">{sourceType === "drive" ? "Google Drive share link" : "Video URL"}</label><input id="video-url" className="studio-input" type="url" value={videoUrl} onChange={(e) => setVideoUrl(e.target.value)} placeholder={sourceType === "drive" ? "https://drive.google.com/file/d/…" : "https://youtube.com/watch?v=…"} aria-describedby="source-hint" required />
+                        <p className="studio-field-hint" id="source-hint">{sourceType === "drive" ? 'In Drive, choose Share → General access → “Anyone with the link”, then copy the link.' : "YouTube, Instagram, Facebook, or a direct video link."}</p>
+                    </div>}
+                    <div className="studio-field studio-create-output"><span className="studio-field-label">What would you like to make?</span><div className="studio-choice-grid studio-choice-grid--two" role="group" aria-label="Output mode"><Choice selected={jobMode === "clips"} title="Short clips" description="AI picks the best moments and cuts vertical clips." icon={Scissors} onClick={() => setJobMode("clips")} /><Choice selected={jobMode === "captions"} title="Full video captions" description="Caption and auto-edit your entire video." icon={Captions} onClick={() => setJobMode("captions")} /></div></div>
+                </section>
+                <section className="studio-panel" id="captions"><SectionHeading title="02 · Choose your captions" description="Select a style and reading pace. You can change the look for each project." icon={Captions} />
+                    <div className="studio-choice-grid studio-caption-choices" role="group" aria-label="Caption style">{CAPTION_STYLES.map((style) => <Choice key={style.value} title={style.label} description={style.description} selected={captionStyle === style.value} onClick={() => setCaptionStyle(style.value)}><span className={`studio-caption-sample studio-caption-sample--${style.value}`} aria-hidden="true">Make it <em>count.</em></span></Choice>)}</div>
+                    <div className="studio-field studio-create-pace"><span className="studio-field-label">Reading pace</span><div className="studio-choice-grid" role="group" aria-label="Caption pace">{PACES.map((pace) => <Choice key={pace.value} selected={captionPace === pace.value} title={pace.label} description={pace.hint} onClick={() => setCaptionPace(pace.value)} />)}</div></div>
+                </section>
+                <section className="studio-panel" id="output"><SectionHeading title="03 · Fine-tune the output" description="Set the length of your batch and the sound of your video." icon={SlidersHorizontal} />
+                    {jobMode === "clips" && <div className="studio-field studio-clip-amount"><div className="studio-usage-caption"><label htmlFor="max-clips">Maximum clips</label><output htmlFor="max-clips">{maxClips} clips</output></div><input id="max-clips" type="range" min="1" max="20" value={maxClips} onChange={(e) => setMaxClips(Number(e.target.value))} className="studio-range" /><p className="studio-field-hint">Up to {maxClips} clips, depending on the source and your remaining quota.</p></div>}
+                    {jobMode === "captions" && <div className="studio-auto-edit"><h3><Wand2 size={17} aria-hidden="true" />Auto-editing</h3><Toggle label="Remove pauses" description="Cut long silences to keep the video moving." checked={removeSilences} onChange={setRemoveSilences} /><Toggle label="Dynamic punch-ins" description="Add subtle zooms at the start of a sentence." checked={autoPunchIn} onChange={setAutoPunchIn} /></div>}
+                    <div className="studio-field"><label htmlFor="background-music">Background music</label><select id="background-music" className="studio-select" value={bgmChoice} onChange={(e) => { setBgmChoice(e.target.value as Music); setBgmFile(null); }}>{MUSIC.map((music) => <option key={music.value} value={music.value}>{music.label}</option>)}</select><p className="studio-field-hint">Music is mixed beneath speech. Sound effects remain enabled.</p></div>
+                    {bgmChoice === "custom" && <div className="studio-field studio-custom-track"><label htmlFor="music-file">Your music track</label><input id="music-file" type="file" className="studio-input" accept="audio/mpeg,audio/wav,audio/ogg,.mp3,.wav,.ogg" onChange={(e) => setBgmFile(e.target.files?.[0] || null)} required /><p className="studio-field-hint">MP3, WAV or OGG · up to 25 MB. Use a track you have permission to use.</p></div>}
+                </section>
+            </fieldset>
+            <aside className="studio-create-summary" aria-label="Video configuration summary"><div className="studio-panel">
+                <div className="studio-summary-title"><Sparkles size={18} aria-hidden="true" /><h2>Your next video</h2></div>
+                <div className={`studio-caption-preview studio-caption-sample--${captionStyle}`}><span className="studio-preview-label">Caption style preview</span><p>Make every<br /><em>moment count.</em></p><span className="studio-preview-footer">{styleLabel} · {PACES.find((pace) => pace.value === captionPace)?.label}</span></div>
+                <dl className="studio-summary-list"><div><dt>Source</dt><dd>{!hasSource ? "Not added yet" : sourceType === "file" ? "Uploaded video" : sourceType === "drive" ? "Google Drive" : "Video link"}</dd></div><div><dt>Output</dt><dd>{jobMode === "clips" ? `Up to ${remaining === null ? maxClips : Math.min(maxClips, remaining)} short clips` : "1 full video"}</dd></div><div><dt>Music</dt><dd>{MUSIC.find((music) => music.value === bgmChoice)?.label}</dd></div>{remaining !== null && <div><dt>Clips available</dt><dd>{remaining}</dd></div>}</dl>
+                <div ref={errorRef} tabIndex={-1}>{error && <Notice tone="error">{error}{createdJobId && <a href={`/dashboard/${createdJobId}`} className="studio-text-link"> Open saved project</a>}</Notice>}</div>
+                <Button type="submit" busy={isSubmitting} disabled={!hasSource || !!createdJobId || (sourceType === "file" && (videoFile?.size || 0) > MAX_UPLOAD_BYTES)} className="studio-create-submit">{isSubmitting ? uploadPct !== null ? `Uploading ${uploadPct}%…` : "Starting your video…" : "Create video"}{!isSubmitting && <ChevronRight size={17} aria-hidden="true" />}</Button>
+                <p className="studio-summary-hint"><Check size={14} aria-hidden="true" />Your settings are saved with this project.</p>
+            </div><p className="studio-create-timing"><Music2 size={17} aria-hidden="true" /><span>Most videos take 5–15 minutes. Longer sources and busy periods may take more time.</span></p></aside>
+        </form>
+    </div>;
 }

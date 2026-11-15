@@ -1,343 +1,116 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
-import { createClient } from "@/lib/supabase";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { ArrowDownUp, ArrowRight, CheckCircle2, Clapperboard, Clock3, Film, FolderOpen, Plus, RefreshCw, Search, X } from "lucide-react";
+import { createClient } from "@/lib/supabase";
 import type { Job, JobStatus } from "@/lib/types";
-import { JOB_STATUS_LABELS } from "@/lib/types";
-import {
-    Film,
-    Search,
-    Filter,
-    Plus,
-    Clock,
-    CheckCircle2,
-    Clapperboard,
-    ChevronDown,
-    X,
-    TrendingUp,
-} from "lucide-react";
+import { boundedPercent, formatDate, isJobRunning, sourceLabel, videoTitle } from "@/lib/dashboard";
+import { useDashboard } from "./_components/dashboard-provider";
+import { Button, EmptyState, LoadingState, Metrics, Notice, PageHeader, StatusBadge } from "./_components/ui";
 
-type FilterOption = JobStatus | "all" | "processing";
-
-/** Polling fallback cadence while at least one job is still running. */
-const JOBS_POLL_MS = 8000;
-const TERMINAL_STATUSES: JobStatus[] = ["done", "failed", "cancelled"];
-
-function isTerminalStatus(status: JobStatus): boolean {
-    return TERMINAL_STATUSES.includes(status);
-}
-
-const FILTER_OPTIONS: { value: FilterOption; label: string; color: string }[] = [
-    { value: "all", label: "All Jobs", color: "var(--text-secondary)" },
-    { value: "queued", label: "Queued", color: "#6B7280" },
-    { value: "processing", label: "Processing", color: "#F59E0B" },
-    { value: "done", label: "Completed", color: "#10B981" },
-    { value: "failed", label: "Failed", color: "#EF4444" },
+type Filter = "all" | "processing" | "done" | "failed" | "queued" | "cancelled";
+const FILTERS: { value: Filter; label: string }[] = [
+    { value: "all", label: "All videos" }, { value: "processing", label: "Processing" },
+    { value: "queued", label: "Queued" }, { value: "done", label: "Completed" },
+    { value: "failed", label: "Failed" }, { value: "cancelled", label: "Cancelled" },
 ];
 
-function getGreeting(): string {
-    const h = new Date().getHours();
-    if (h < 12) return "Good morning";
-    if (h < 17) return "Good afternoon";
-    return "Good evening";
-}
-
-function timeAgo(date: string): string {
-    const seconds = Math.floor((Date.now() - new Date(date).getTime()) / 1000);
-    if (seconds < 60) return "just now";
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    return new Date(date).toLocaleDateString();
-}
-
 export default function JobsPage() {
-    const supabase = createClient();
+    const supabase = useMemo(() => createClient(), []);
+    const { account, profile, loading: accountLoading, refreshProfile } = useDashboard();
     const [jobs, setJobs] = useState<Job[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
     const [search, setSearch] = useState("");
-    const [statusFilter, setStatusFilter] = useState<FilterOption>("all");
-    const [showFilterDropdown, setShowFilterDropdown] = useState(false);
-    const [userName, setUserName] = useState("");
-    const filterRef = useRef<HTMLDivElement>(null);
-    const inFlightRef = useRef(false);
+    const [filter, setFilter] = useState<Filter>("all");
+    const [sort, setSort] = useState("newest");
     const jobsRef = useRef<Job[]>([]);
+    const inFlight = useRef(false);
+    const mounted = useRef(false);
 
-    // Keep a ref of the latest jobs so the polling interval can decide cheaply.
-    useEffect(() => { jobsRef.current = jobs; }, [jobs]);
+    const loadJobs = useCallback(async () => {
+        if (!account || inFlight.current) return;
+        inFlight.current = true;
+        try {
+            const { data, error: queryError } = await supabase.from("jobs").select("*").eq("user_id", account.id).order("created_at", { ascending: false });
+            if (queryError) throw queryError;
+            if (!mounted.current) return;
+            const next = (data || []) as Job[];
+            jobsRef.current = next;
+            setJobs(next);
+            setError(null);
+        } catch {
+            if (mounted.current) setError("Your videos couldn’t be loaded. Your work is safe—please try again.");
+        } finally {
+            inFlight.current = false;
+            if (mounted.current) { setLoading(false); setRefreshing(false); }
+        }
+    }, [account, supabase]);
 
     useEffect(() => {
-        let disposed = false;
-        let timer: ReturnType<typeof setInterval> | null = null;
+        mounted.current = true;
+        if (!account) return () => { mounted.current = false; };
+        void loadJobs();
+        const timer = setInterval(() => {
+            if (document.visibilityState === "visible" && jobsRef.current.some((job) => isJobRunning(job.status))) void loadJobs();
+        }, 8000);
+        const channel = supabase.channel(`workspace-jobs-${account.id}`).on("postgres_changes", {
+            event: "*", schema: "public", table: "jobs", filter: `user_id=eq.${account.id}`,
+        }, () => { void loadJobs(); void refreshProfile(); }).subscribe();
+        return () => { mounted.current = false; clearInterval(timer); void supabase.removeChannel(channel); };
+    }, [account, loadJobs, refreshProfile, supabase]);
 
-        async function loadJobs() {
-            if (inFlightRef.current) return; // never overlap requests
-            inFlightRef.current = true;
-            try {
-                const { data: { user } } = await supabase.auth.getUser();
-                if (!user || disposed) return;
+    const visibleJobs = useMemo(() => jobs.filter((job) => {
+        if (filter === "processing" ? !isJobRunning(job.status) : filter !== "all" && job.status !== filter) return false;
+        const query = search.trim().toLowerCase();
+        return !query || [videoTitle(job), job.video_url, job.caption_style].some((value) => value?.toLowerCase().includes(query));
+    }).sort((a, b) => sort === "oldest" ? Date.parse(a.created_at) - Date.parse(b.created_at) : sort === "clips" ? b.clips_count - a.clips_count : Date.parse(b.created_at) - Date.parse(a.created_at)), [jobs, filter, search, sort]);
 
-                // Load name for greeting
-                const { data: profile } = await supabase.from("profiles").select("full_name").eq("id", user.id).single();
-                if (profile?.full_name && !disposed) setUserName(profile.full_name.split(" ")[0]);
+    const pending = accountLoading || (loading && !!account);
+    const running = jobs.filter((job) => isJobRunning(job.status)).length;
+    const completed = jobs.filter((job) => job.status === "done").length;
+    const clips = jobs.reduce((count, job) => count + (job.clips_count || 0), 0);
+    const name = profile?.full_name?.trim().split(/\s+/)[0];
+    const clearFilters = () => { setSearch(""); setFilter("all"); };
 
-                const { data, error } = await supabase
-                    .from("jobs")
-                    .select("*")
-                    .eq("user_id", user.id)
-                    .order("created_at", { ascending: false });
-
-                if (disposed) return;
-                if (data && !error) setJobs(data as Job[]);
-            } finally {
-                inFlightRef.current = false;
-                if (!disposed) setLoading(false);
-            }
-        }
-        loadJobs();
-
-        // Polling fallback: only while at least one job is non-terminal.
-        timer = setInterval(() => {
-            if (!jobsRef.current.some((j) => !isTerminalStatus(j.status))) return;
-            loadJobs();
-        }, JOBS_POLL_MS);
-
-        const channel = supabase
-            .channel("jobs-changes")
-            .on("postgres_changes", { event: "*", schema: "public", table: "jobs" }, (payload) => {
-                if (payload.eventType === "INSERT") {
-                    const inserted = payload.new as Job;
-                    // The polling fallback may already have this row — dedupe by id.
-                    setJobs((prev) => (prev.some((j) => j.id === inserted.id) ? prev : [inserted, ...prev]));
-                } else if (payload.eventType === "UPDATE") {
-                    setJobs((prev) => prev.map((j) => j.id === (payload.new as Job).id ? (payload.new as Job) : j));
-                }
-            })
-            .subscribe();
-
-        return () => {
-            disposed = true;
-            if (timer) clearInterval(timer);
-            supabase.removeChannel(channel);
-        };
-    }, []);
-
-    useEffect(() => {
-        function handleClickOutside(e: MouseEvent) {
-            if (filterRef.current && !filterRef.current.contains(e.target as Node)) setShowFilterDropdown(false);
-        }
-        document.addEventListener("mousedown", handleClickOutside);
-        return () => document.removeEventListener("mousedown", handleClickOutside);
-    }, []);
-
-    const PROCESSING_STATUSES: JobStatus[] = ["downloading", "transcribing", "analyzing", "clipping", "captioning", "uploading"];
-
-    const filteredJobs = jobs.filter((j) => {
-        if (statusFilter !== "all") {
-            if (statusFilter === "processing") {
-                if (!PROCESSING_STATUSES.includes(j.status)) return false;
-            } else {
-                if (j.status !== statusFilter) return false;
-            }
-        }
-        if (search) {
-            const q = search.toLowerCase();
-            return (j.video_url || "").toLowerCase().includes(q) || j.caption_style.toLowerCase().includes(q) || (j.video_filename || "").toLowerCase().includes(q);
-        }
-        return true;
-    });
-
-    const totalJobs = jobs.length;
-    const processing = jobs.filter((j) => !["done", "failed", "queued", "cancelled"].includes(j.status)).length;
-    const completed = jobs.filter((j) => j.status === "done").length;
-    const totalClips = jobs.reduce((sum, j) => sum + (j.clips_count || 0), 0);
-
-    const activeFilterLabel = FILTER_OPTIONS.find((f) => f.value === statusFilter);
-
-    const statCards = [
-        { label: "Total Jobs", value: totalJobs, icon: Film, color: "var(--accent-primary)", bg: "rgba(57,229,8,0.12)" },
-        { label: "Processing", value: processing, icon: Clock, color: "#F59E0B", bg: "rgba(245,158,11,0.12)" },
-        { label: "Completed", value: completed, icon: CheckCircle2, color: "#10B981", bg: "rgba(16,185,129,0.12)" },
-        { label: "Clips Generated", value: totalClips, icon: Clapperboard, color: "#06B6D4", bg: "rgba(6,182,212,0.12)" },
-    ];
-
-    return (
-        <div>
-            {/* ─── Welcome Header ─── */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight mb-1 text-ink-50">
-                        {getGreeting()}{userName ? `, ${userName}` : ""} 👋
-                    </h1>
-                    <p className="text-sm text-ink-400">
-                        Here&apos;s what&apos;s happening with your content today
-                    </p>
-                </div>
-                <Link href="/dashboard/new" className="btn-primary py-2.5 px-5 text-sm font-semibold flex items-center gap-2 shadow-lg">
-                    <Plus size={16} /> New Video
-                </Link>
+    return <div className="studio-page">
+        <PageHeader eyebrow={name ? `Your workspace, ${name}` : "Your workspace"} title="My videos" description="From one long video to your next great clip. All your projects, in one place."
+            actions={<Link href="/dashboard/new" className="studio-button studio-button--primary"><Plus size={18} aria-hidden="true" />New video</Link>} />
+        <Metrics loading={pending} items={[
+            { label: "Total videos", value: jobs.length, icon: Film },
+            { label: "In progress", value: running, icon: Clock3 },
+            { label: "Completed", value: completed, icon: CheckCircle2 },
+            { label: "Clips created", value: clips, icon: Clapperboard },
+        ]} />
+        <section className="studio-library" aria-labelledby="library-title">
+            <div className="studio-library-heading"><div><h2 id="library-title">Video library</h2><span>{pending ? "Loading your projects…" : `${jobs.length} project${jobs.length === 1 ? "" : "s"}`}</span></div>
+                <Button variant="ghost" className="studio-icon-button" aria-label="Refresh videos" title="Refresh videos" busy={refreshing} onClick={() => { setRefreshing(true); void loadJobs(); }} disabled={pending || !account}><RefreshCw size={17} aria-hidden="true" /></Button>
             </div>
-
-            {/* ─── Stat Cards ─── */}
-            <div className="dash-grid-4 mb-8">
-                {statCards.map((stat) => (
-                    <div key={stat.label} className="stat-card">
-                        <div className="flex justify-between items-center mb-3">
-                            <span className="text-xs text-ink-400 font-semibold uppercase tracking-wider">{stat.label}</span>
-                            <div className="stat-icon-bg border border-[var(--border-subtle)]" style={{ backgroundColor: stat.bg }}>
-                                <stat.icon size={18} style={{ color: stat.color }} />
-                            </div>
-                        </div>
-                        <div className="text-3xl font-bold tracking-tight text-ink-50 mb-1">
-                            {loading ? <div className="skeleton h-8 w-16" /> : stat.value}
-                        </div>
-                        {!loading && stat.label === "Completed" && totalJobs > 0 && (
-                            <div className="flex items-center gap-1.5 text-xs text-[#10b981] font-semibold">
-                                <TrendingUp size={12} /> {Math.round((completed / totalJobs) * 100)}% success rate
-                            </div>
-                        )}
-                    </div>
-                ))}
-            </div>
-
-            {/* ─── Search + Filter ─── */}
-            <div className="flex flex-col sm:flex-row gap-3 mb-6">
-                <div className="flex-1 relative">
-                    <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-400" />
-                    <input 
-                        className="input-field pl-11! py-3" 
-                        placeholder="Search jobs..." 
-                        value={search} 
-                        onChange={(e) => setSearch(e.target.value)} 
-                    />
+            <div className="studio-library-toolbar">
+                <div className="studio-filter-tabs" role="group" aria-label="Filter videos">
+                    {FILTERS.map((item) => <button key={item.value} type="button" aria-pressed={filter === item.value} onClick={() => setFilter(item.value)}>{item.label}{item.value === "processing" && running > 0 && <span>{running}</span>}</button>)}
                 </div>
-                <div ref={filterRef} className="relative">
-                    <button
-                        className={`btn-secondary w-full sm:w-auto px-4 py-3 text-xs font-semibold justify-center gap-2 h-full ${statusFilter !== "all" ? "border-mint-500 bg-mint-500/10 text-ink-50" : ""}`}
-                        onClick={() => setShowFilterDropdown(!showFilterDropdown)}
-                    >
-                        <Filter size={14} />
-                        {statusFilter === "all" ? "Filter" : activeFilterLabel?.label}
-                        {statusFilter !== "all" ? (
-                            <X size={12} className="cursor-pointer ml-1 text-ink-400 hover:text-ink-50 transition-colors" onClick={(e) => { e.stopPropagation(); setStatusFilter("all"); setShowFilterDropdown(false); }} />
-                        ) : <ChevronDown size={12} />}
-                    </button>
-                    {showFilterDropdown && (
-                        <div className="absolute top-[calc(100%+6px)] right-0 min-w-[180px] bg-[var(--bg-inset)] border border-[var(--border-subtle)] rounded-xl p-1.5 z-50 shadow-2xl animate-scale-in">
-                            {FILTER_OPTIONS.map((opt) => (
-                                <button
-                                    key={opt.value}
-                                    onClick={() => { setStatusFilter(opt.value); setShowFilterDropdown(false); }}
-                                    className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border-none text-left cursor-pointer text-xs transition-all font-medium ${statusFilter === opt.value ? "bg-mint-500/15 text-ink-50" : "bg-transparent text-ink-300 hover:bg-[rgba(11,18,13,0.05)] hover:text-ink-100"}`}
-                                >
-                                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: opt.color }} />
-                                    {opt.label}
-                                </button>
-                            ))}
-                        </div>
-                    )}
+                <div className="studio-library-tools">
+                    <label className="studio-search"><span className="studio-sr-only">Search videos</span><Search size={17} aria-hidden="true" /><input type="search" className="studio-input" placeholder="Search videos…" value={search} onChange={(e) => setSearch(e.target.value)} />{search && <Button variant="ghost" className="studio-icon-button" aria-label="Clear search" onClick={() => setSearch("")}><X size={16} aria-hidden="true" /></Button>}</label>
+                    <label className="studio-sort"><ArrowDownUp size={16} aria-hidden="true" /><span className="studio-sr-only">Sort videos</span><select value={sort} onChange={(e) => setSort(e.target.value)}><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="clips">Most clips</option></select></label>
                 </div>
             </div>
-
-            {/* ─── Jobs List ─── */}
-            {loading ? (
-                <div className="flex flex-col gap-3">
-                    {[1, 2, 3, 4].map((i) => (
-                        <div key={i} className="skeleton h-20 rounded-2xl" />
-                    ))}
-                </div>
-            ) : filteredJobs.length === 0 ? (
-                <div className="glass-card flex flex-col items-center justify-center text-center py-20 px-6 max-w-lg mx-auto">
-                    <div className="w-20 h-20 rounded-2xl bg-mint-500/10 border border-mint-500/20 flex items-center justify-center mb-6 shadow-inner mx-auto">
-                        <Film size={44} className="text-mint-400 animate-pulse-glow" />
-                    </div>
-                    <h3 className="text-lg font-bold text-ink-100 mb-2">
-                        {statusFilter !== "all" ? "No matching jobs" : "No jobs yet"}
-                    </h3>
-                    <p className="text-sm text-ink-300 max-w-xs mb-6 leading-relaxed">
-                        {statusFilter !== "all" ? "Try a different filter or clear your search" : "Upload your first video to get started"}
-                    </p>
-                    {statusFilter === "all" && (
-                        <Link href="/dashboard/new" className="btn-primary flex items-center gap-2 shadow-lg text-sm font-semibold">
-                            <Plus size={16} /> Upload Video
-                        </Link>
-                    )}
-                </div>
-            ) : (
-                <div className="flex flex-col gap-3">
-                    {filteredJobs.map((job, i) => {
-                        const statusInfo = JOB_STATUS_LABELS[job.status];
-                        const isProcessing = !["done", "failed", "queued", "cancelled"].includes(job.status);
-                        return (
-                            <Link
-                                key={job.id}
-                                href={`/dashboard/${job.id}`}
-                                className="glass-card p-4 flex items-center gap-4 no-underline text-inherit animate-fade-in-up hover:border-mint-500/35"
-                                style={{
-                                    animationDelay: `${i * 0.04}s`,
-                                }}
-                            >
-                                {/* Thumbnail placeholder */}
-                                <div className="w-12 h-12 rounded-xl flex-shrink-0 bg-mint-500/5 flex items-center justify-center border border-[var(--border-subtle)]">
-                                    <Film size={20} className="text-ink-400/60" />
-                                </div>
-
-                                {/* Info */}
-                                <div className="flex-1 min-w-0">
-                                    <div className="text-sm font-semibold text-ink-100 mb-1 whitespace-nowrap overflow-hidden text-ellipsis">
-                                        {job.video_filename || job.video_url || "Untitled"}
-                                    </div>
-                                    <div className="flex items-center gap-2 text-xs text-ink-400">
-                                        <span>{job.caption_style}</span>
-                                        <span className="opacity-30">•</span>
-                                        <span>{timeAgo(job.created_at)}</span>
-                                        {job.clips_count > 0 && (
-                                            <>
-                                                <span className="opacity-30">•</span>
-                                                <span className="text-[#10b981] font-semibold">{job.clips_count} clips</span>
-                                            </>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Progress ring or status */}
-                                <div className="flex items-center gap-3.5 flex-shrink-0">
-                                    {isProcessing && (
-                                        <div className="relative w-9 h-9">
-                                            <svg width="36" height="36" className="-rotate-90">
-                                                <circle cx="18" cy="18" r="14" fill="none" stroke="var(--bg-sunken)" strokeWidth="3" />
-                                                <circle
-                                                    cx="18" cy="18" r="14" fill="none" stroke="var(--accent-primary)" strokeWidth="3"
-                                                    strokeDasharray={2 * Math.PI * 14} strokeDashoffset={2 * Math.PI * 14 * (1 - (job.progress || 0) / 100)}
-                                                    strokeLinecap="round" style={{ transition: "stroke-dashoffset 0.5s ease" }}
-                                                />
-                                            </svg>
-                                            <span className="absolute inset-0 flex items-center justify-center text-[9px] font-bold text-ink-100">
-                                                {job.progress}%
-                                            </span>
-                                        </div>
-                                    )}
-                                    <span 
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold border"
-                                        style={{
-                                            color: statusInfo.color,
-                                            backgroundColor: `${statusInfo.color}15`,
-                                            borderColor: `${statusInfo.color}25`,
-                                        }}
-                                    >
-                                        {isProcessing && <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: statusInfo.color }} />}
-                                        {statusInfo.label}
-                                    </span>
-                                </div>
-                            </Link>
-                        );
-                    })}
-                </div>
-            )}
-        </div>
-    );
+            {error && <div className="studio-library-notice"><Notice tone="error" action={<Button variant="secondary" onClick={() => void loadJobs()}>Try again</Button>}>{error}</Notice></div>}
+            {pending ? <LoadingState rows={4} label="Loading videos" /> : !account ? <EmptyState title="Account unavailable" description="Refresh your account details to view your videos." action={<Button variant="secondary" onClick={() => void refreshProfile()}>Refresh account</Button>} /> : !error && visibleJobs.length === 0 ? <EmptyState icon={search || filter !== "all" ? Search : FolderOpen} title={search || filter !== "all" ? "No matching videos" : "Your first clip starts here"} description={search || filter !== "all" ? "Try another search or clear the filters to see all your videos." : "Add a video link or upload a file. We’ll turn the best moments into captioned clips."} action={search || filter !== "all" ? <Button variant="secondary" onClick={clearFilters}>Clear filters</Button> : <Link href="/dashboard/new" className="studio-button studio-button--primary"><Plus size={17} aria-hidden="true" />Create your first video</Link>} /> : <>
+                <div className="studio-video-columns" aria-hidden="true"><span>Video</span><span>Status</span><span>Clips</span><span>Created</span><span /></div>
+                <ul className="studio-video-list" aria-label="Your videos">{visibleJobs.map((job) => <li key={job.id}>
+                    <Link href={`/dashboard/${job.id}`} className="studio-video-row">
+                        <div className="studio-video-info"><span className={`studio-video-symbol ${job.status === "done" ? "is-complete" : ""}`}><Film size={22} aria-hidden="true" /></span><div><h3>{videoTitle(job)}</h3><p>{sourceLabel(job)}<span aria-hidden="true">·</span>{job.caption_style.charAt(0).toUpperCase() + job.caption_style.slice(1)}<span className="studio-video-date-mobile"> · {formatDate(job.created_at)}</span></p></div></div>
+                        <div className="studio-video-status"><StatusBadge status={job.status as JobStatus} />{isJobRunning(job.status) && job.status !== "queued" && <span className="studio-row-progress">{boundedPercent(job.progress)}%</span>}</div>
+                        <span className="studio-video-count">{job.clips_count || "—"}<span className="studio-video-count-label"> clips</span></span>
+                        <time className="studio-video-date" dateTime={job.created_at}>{formatDate(job.created_at)}</time>
+                        <ArrowRight size={17} className="studio-video-arrow" aria-hidden="true" />
+                    </Link>
+                </li>)}</ul>
+                {visibleJobs.length > 0 && <div className="studio-library-footer">Showing {visibleJobs.length} of {jobs.length} videos<span>Updates automatically while processing</span></div>}
+            </>}
+        </section>
+    </div>;
 }

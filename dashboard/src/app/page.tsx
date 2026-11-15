@@ -1,450 +1,87 @@
+import Image from "next/image";
 import Link from "next/link";
-import { PLAN_LIMITS, CAPTION_STYLES, type Plan } from "@/lib/types";
-import Navbar from "./components/Navbar";
-import Footer from "./components/Footer";
-import ScrollProgress from "./components/ScrollProgress";
-import { HeroGroup, HeroItem } from "./components/HeroMotion";
-import { SectionReveal, StaggerGroup, StaggerItem } from "./components/SectionReveal";
-import SectionHeading from "./components/SectionHeading";
-import ShowcaseCarousel from "./components/ShowcaseCarousel";
-import HowItWorks from "./components/HowItWorks";
-import FeatureBento from "./components/FeatureBento";
-import StyleMarquee from "./components/StyleMarquee";
-import CountUp from "./components/CountUp";
-import FaqAccordion, { type FaqItem } from "./components/FaqAccordion";
+import { ArrowDown, ArrowRight, AudioLines, Captions, Check, CheckCircle2, ChevronRight, Film, Focus, Link2, Scissors, ShieldCheck, Sparkles, Upload } from "lucide-react";
+import { CAPTION_STYLES, PLAN_LIMITS, type Plan } from "@/lib/types";
+import HomeNavigation from "./components/HomeNavigation";
+import { CaptionStudioPreview, HomeDemoVideo } from "./components/HomePreview";
 import CtaButtons from "./components/CtaButtons";
-import PhonePreview from "./components/PhonePreview";
-import {
-  IconSpark,
-  IconPlay,
-  IconCheck,
-  IconArrowRight,
-  IconUpload,
-  IconMaximize,
-  IconFilm,
-  IconCut,
-  IconLock,
-  IconClock,
-} from "./components/Icons";
+import "./home.css";
 
-/* ─── FAQ — real questions, honest answers ─── */
-const FAQS: FaqItem[] = [
-  {
-    q: "Do I need a credit card to start?",
-    a: "No. The free plan gives you 5 clips a month with no card required. You only pay if and when you upgrade — the watermark policy and every plan limit are listed on the pricing page.",
-  },
-  {
-    q: "Which platforms are the clips formatted for?",
-    a: "Every clip renders at 9:16 (1080×1920) for Instagram Reels, YouTube Shorts and TikTok, with titles, hashtags and thumbnails attached per platform.",
-  },
-  {
-    q: "How long can my video be?",
-    a: "Files up to 2 GB are supported — MP4, MOV or WebM. You can also paste a YouTube, Instagram or Google Drive link instead of uploading. Most videos finish processing in 5–15 minutes.",
-  },
-  {
-    q: "Which languages are supported? What about Hindi?",
-    a: "Transcription covers English and handles mixed Hinglish speech. Caption text renders in Latin-script languages. If your content is mostly in another language, test it on the free plan first — no card needed.",
-  },
-  {
-    q: "Is there a watermark?",
-    a: "Free-plan clips carry a small ClipMint watermark. All paid plans render watermark-free — stated up front on the pricing page, not discovered after checkout.",
-  },
-  {
-    q: "What's the refund policy?",
-    a: "A 7-day refund window from the date of purchase. If the service doesn't meet your expectations, email ClipMint.Billing@gmail.com and we'll process it.",
-  },
+const FAQS = [
+    { question: "Can I try ClipMint without paying?", answer: "Yes. The Free plan includes 5 clips and 2 videos per 30-day usage window. No card is needed to start. Free clips carry a ClipMint watermark; paid plans remove it." },
+    { question: "What kind of videos can I use?", answer: "Podcasts, interviews, vlogs, lessons, and other videos with spoken content are good starting points. Upload an MP4, MOV, M4V, or WebM file up to 2 GB, or use a YouTube, Instagram, Facebook, or Google Drive link." },
+    { question: "How long does processing take?", answer: "Most videos take around 5–15 minutes. Longer sources and busy periods can take more time. You can check progress in your workspace without keeping the page open." },
+    { question: "Can I caption the entire video instead?", answer: "Yes. Choose Full video captions when creating a project. You can also enable pause removal and dynamic punch-ins for that mode." },
+    { question: "Does my plan renew automatically?", answer: "No. Paid plans use one-time payments. A monthly pass provides 30 days of access; annual pricing is also available. When the pass expires, Free limits apply, and your existing clips stay in your library." },
+    { question: "What is the refund policy?", answer: "There is a 7-day refund window from the date of purchase. Contact ClipMint.Billing@gmail.com if the service does not meet your expectations. The full policy is linked below." },
 ];
-
-/* ─── Pricing — derived from PLAN_LIMITS (paise → rupees), never hardcoded ─── */
-type PlanCard = {
-  key: Plan;
-  name: string;
-  price: string;
-  period: string;
-  tagline: string;
-  features: string[];
-  highlighted: boolean;
-  cta: string;
+const STEPS = [
+    { number: "01", title: "Bring your video.", description: "Paste a link or upload a file. Choose short clips or captions for the full video.", icon: Upload },
+    { number: "02", title: "Choose your look.", description: "Pick a caption style, reading pace, and background music. Make each project feel like you.", icon: Captions },
+    { number: "03", title: "Download. Post. Repeat.", description: "Your finished clips land in your workspace, alongside captions, hashtags, and thumbnails.", icon: Film },
+];
+const PLAN_CONTENT: Record<Plan, { description: string; features: string[]; cta: string; href: string }> = {
+    free: { description: "Get a feel for your next workflow.", features: ["Try the clipping workflow", "ClipMint watermark", "No payment to start"], cta: "Start free", href: "/login" },
+    creator: { description: "For a steady flow of new content.", features: ["Watermark-free clips", "All caption styles", "API access"], cta: "Explore Creator", href: "/pricing" },
+    pro: { description: "More clips for a bigger content library.", features: ["Watermark-free clips", "All caption styles", "API access"], cta: "Explore Pro", href: "/pricing" },
+    agency: { description: "For high-volume content workflows.", features: ["High-volume clip quota", "Watermark-free clips", "API access"], cta: "Talk to us", href: "/contact" },
 };
-
-const inr = (paise: number) => `₹${(paise / 100).toLocaleString("en-IN")}`;
-
-const PLANS: PlanCard[] = [
-  {
-    key: "free",
-    name: PLAN_LIMITS.free.label,
-    price: inr(PLAN_LIMITS.free.monthlyPrice),
-    period: "forever",
-    tagline: "See it work before you pay.",
-    features: [
-      `${PLAN_LIMITS.free.clips} clips/month`,
-      `${PLAN_LIMITS.free.videos} videos/month`,
-      "720p output",
-      "ClipMint watermark",
-      "3 caption styles",
-    ],
-    highlighted: false,
-    cta: "Start free",
-  },
-  {
-    key: "creator",
-    name: PLAN_LIMITS.creator.label,
-    price: inr(PLAN_LIMITS.creator.monthlyPrice),
-    period: "/month",
-    tagline: "For creators posting every day.",
-    features: [
-      `${PLAN_LIMITS.creator.clips} clips/month`,
-      `${PLAN_LIMITS.creator.videos} videos/month`,
-      "1080p output",
-      "No watermark",
-      "All 9 caption styles",
-      "Priority processing",
-      "API access",
-      "Email support",
-    ],
-    highlighted: true,
-    cta: "Start free trial",
-  },
-  {
-    key: "pro",
-    name: PLAN_LIMITS.pro.label,
-    price: inr(PLAN_LIMITS.pro.monthlyPrice),
-    period: "/month",
-    tagline: "Max resolution, no limits you'll hit.",
-    features: [
-      `${PLAN_LIMITS.pro.clips} clips/month`,
-      `${PLAN_LIMITS.pro.videos} videos/month`,
-      "4K output",
-      "Priority processing",
-      "API access",
-    ],
-    highlighted: false,
-    cta: "Get started",
-  },
-  {
-    key: "agency",
-    name: PLAN_LIMITS.agency.label,
-    price: inr(PLAN_LIMITS.agency.monthlyPrice),
-    period: "/month",
-    tagline: "White-label, teams, and pipelines.",
-    features: [
-      "Unlimited clips",
-      "Unlimited videos",
-      "White-label",
-      "Team accounts",
-      "n8n integration",
-    ],
-    highlighted: false,
-    cta: "Contact sales",
-  },
+const FOOTER_LINKS = [
+    { label: "Product", links: [{ label: "Features", href: "/features" }, { label: "Pricing", href: "/pricing" }, { label: "API keys", href: "/dashboard/api-keys" }] },
+    { label: "Company", links: [{ label: "About ClipMint", href: "/about" }, { label: "Contact", href: "/contact" }] },
+    { label: "The details", links: [{ label: "Privacy", href: "/privacy-policy" }, { label: "Terms", href: "/terms" }, { label: "Refund policy", href: "/refund-policy" }] },
 ];
 
-/* ─── Pipeline spec — real capabilities, stated as numbers ─── */
-const SPECS = [
-  {
-    icon: IconUpload,
-    label: "Input",
-    value: "MP4 · MOV · WebM, up to 2 GB — or paste a YouTube, Instagram or Google Drive link.",
-  },
-  {
-    icon: IconMaximize,
-    label: "Output",
-    value: "9:16 · 1080×1920 face-tracked vertical, loudness-normalised to −14 LUFS.",
-  },
-  {
-    icon: IconFilm,
-    label: "Modes",
-    value: "Viral clips from your energy peaks, or caption the whole video — chosen per job.",
-  },
-  {
-    icon: IconCut,
-    label: "Auto-editing",
-    value: "Silence cuts, punch-ins on the speaker, and boundaries snapped to speech pauses.",
-  },
-  {
-    icon: IconLock,
-    label: "Delivery",
-    value: "Finished clips delivered over private R2 links, with titles, hashtags and thumbnails attached.",
-  },
-  {
-    icon: IconClock,
-    label: "Speed",
-    value: "Most long videos finish processing in 5–15 minutes.",
-  },
-];
-
-/* ═══ Main page — server component, client islands only where needed ═══ */
 export default function HomePage() {
-  return (
-    <main className="overflow-x-clip min-h-screen bg-ink-950 text-ink-50">
-      <Navbar />
-      <ScrollProgress />
-
-      {/* ═══ 1 · HERO — layered ink, staggered entrance ═══ */}
-      <section className="relative overflow-hidden px-6 pt-36 pb-16 md:pt-44 md:pb-24">
-        <div aria-hidden="true" className="hero-dots absolute inset-0" />
-        <div aria-hidden="true" className="hero-orb orb-mint" style={{ width: 560, height: 560, top: -180, right: -140 }} />
-        <div aria-hidden="true" className="hero-orb orb-warm" style={{ width: 480, height: 480, bottom: -200, left: -160 }} />
-
-        <HeroGroup className="relative max-w-6xl mx-auto grid lg:grid-cols-[1.05fr_0.95fr] gap-14 lg:gap-10 items-center w-full">
-          <div className="flex flex-col items-center lg:items-start text-center lg:text-left gap-6">
-            <HeroItem index={0}>
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-mint-500/10 border border-mint-500/25 text-xs font-semibold text-mint-300">
-                <IconSpark className="w-3.5 h-3.5" />
-                Now in open beta · Free plan, no card
-              </div>
-            </HeroItem>
-
-            <HeroItem index={1}>
-              <h1 className="text-[var(--fs-hero)] font-bold leading-[0.98] tracking-[-0.03em] text-ink-50">
-                Ek video. <span className="grad-mint-text">Das clips.</span>
-              </h1>
-              <p className="mt-5 text-[clamp(21px,2.8vw,34px)] font-semibold tracking-[-0.02em] text-ink-300 leading-snug">
-                Cut, captioned, <span className="text-ink-50">platform-ready.</span>
-              </p>
-            </HeroItem>
-
-            <HeroItem index={2}>
-              <p className="text-[var(--fs-lg)] text-ink-300 leading-[1.6] max-w-xl">
-                Upload a podcast, vlog or lecture. ClipMint finds the moments
-                worth posting and adds animated captions that look studio-made —
-                in minutes.
-              </p>
-            </HeroItem>
-
-            <HeroItem index={3}>
-              <div className="flex flex-col sm:flex-row gap-3.5 w-full sm:w-auto mt-1">
-                <CtaButtons size="lg" />
-                <a href="#how-it-works" className="cm-btn-ghost py-4 px-9 text-base">
-                  <IconPlay className="w-[17px] h-[17px]" />
-                  See how it works
-                </a>
-              </div>
-            </HeroItem>
-
-            <HeroItem index={4}>
-              <p className="text-[13px] font-medium text-ink-500">
-                MP4 · MOV · WebM · up to 2 GB · YouTube / Instagram / Drive links
-              </p>
-            </HeroItem>
-          </div>
-
-          <HeroItem index={2} className="flex justify-center lg:justify-end">
-            <PhonePreview />
-          </HeroItem>
-        </HeroGroup>
-      </section>
-
-      {/* ═══ 2 · PLATFORM STRIP — capability claim, not adoption claim ═══ */}
-      <SectionReveal className="py-10 border-y border-[var(--border-faint)] bg-[var(--bg-void)]">
-        <div className="max-w-5xl mx-auto px-6 text-center">
-          <p className="cm-eyebrow text-ink-500 mb-6">Made for Reels, Shorts &amp; TikTok</p>
-          <div className="flex flex-wrap justify-center items-center gap-x-8 gap-y-3">
-            {["Instagram Reels", "YouTube Shorts", "TikTok"].map((platform, i) => (
-              <div key={platform} className="flex items-center gap-8">
-                {i > 0 && <span className="hidden sm:block w-1 h-1 rounded-full bg-mint-500 shrink-0" aria-hidden="true" />}
-                <span className="text-lg md:text-2xl font-[family-name:var(--font-display)] font-bold tracking-tight text-ink-200">
-                  {platform}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </SectionReveal>
-
-      {/* ═══ 3 · THE SHOWCASE — finished clips, the centerpiece ═══ */}
-      <SectionReveal className="py-24 sm:py-32 px-6 relative overflow-hidden">
-        <div
-          aria-hidden="true"
-          className="absolute -left-40 top-20 w-[460px] h-[460px] rounded-full pointer-events-none"
-          style={{ background: "radial-gradient(circle, rgba(57,229,8,0.07), transparent 70%)", filter: "blur(60px)" }}
-        />
-        <div id="showcase" className="relative max-w-[1180px] mx-auto scroll-mt-28">
-          <SectionHeading
-            kicker="The showcase"
-            title={<>Finished clips. <span className="grad-mint-text">Straight out of rendering.</span></>}
-            subtitle="First card: a real ClipMint render — Sintel © Blender Foundation (CC-BY). Drag to browse, hover to play. Add your own clips in public/showcase/ — see the README there."
-          />
-          <ShowcaseCarousel />
-        </div>
-      </SectionReveal>
-
-      {/* ═══ 4 · UNDER THE HOOD — the spec, stated plainly ═══ */}
-      <SectionReveal className="py-24 sm:py-32 px-6 bg-[var(--bg-void)] border-y border-[var(--border-faint)]">
-        <div id="pipeline" className="max-w-4xl mx-auto scroll-mt-28">
-          <SectionHeading
-            kicker="Under the hood"
-            title={<>The spec, <span className="grad-mint-text">in the open.</span></>}
-            subtitle="Everything the render engine actually does — numbers, not adjectives."
-          />
-          <div className="cm-card">
-            <dl className="divide-y divide-[var(--border-faint)] px-6 sm:px-8 py-2">
-              {SPECS.map((spec) => {
-                const Icon = spec.icon;
-                return (
-                  <div
-                    key={spec.label}
-                    className="grid grid-cols-1 sm:grid-cols-[210px_1fr] gap-y-1.5 sm:gap-x-8 sm:items-baseline py-5"
-                  >
-                    <dt className="flex items-center gap-2.5 font-[family-name:var(--font-mono)] text-xs uppercase tracking-[0.12em] text-ink-400 pt-0.5">
-                      <Icon className="w-4 h-4 text-mint-400 shrink-0" />
-                      {spec.label}
-                    </dt>
-                    <dd className="text-[15px] text-ink-200 leading-relaxed">{spec.value}</dd>
-                  </div>
-                );
-              })}
-            </dl>
-          </div>
-        </div>
-      </SectionReveal>
-
-      {/* ═══ 5 · HOW IT WORKS — scroll-drawn rail ═══ */}
-      <HowItWorks />
-
-      {/* ═══ 6 · CAPTION STYLES — the one loop + counters ═══ */}
-      <SectionReveal className="py-24 sm:py-32 px-6">
-        <div id="styles" className="max-w-6xl mx-auto scroll-mt-28">
-          <SectionHeading
-            kicker="Caption engine"
-            title={<>Captions that <span className="grad-mint-text">do the talking.</span></>}
-            subtitle="Nine animated styles rendered with Remotion — the same engine that paints your clips, mint highlights included."
-          />
-
-          <StyleMarquee />
-
-          {/* Real figures only */}
-          <div className="grid grid-cols-3 gap-6 max-w-2xl mx-auto text-center border-y border-[var(--border-faint)] py-7 mb-14">
-            <div>
-              <CountUp value="9" className="stat-num text-2xl sm:text-3xl" />
-              <div className="cm-eyebrow text-ink-500 mt-2">Caption styles</div>
-            </div>
-            <div>
-              <CountUp value="1080×1920" className="stat-num text-2xl sm:text-3xl" />
-              <div className="cm-eyebrow text-ink-500 mt-2">Face-tracked output</div>
-            </div>
-            <div>
-              <CountUp value="−14 LUFS" className="stat-num text-2xl sm:text-3xl grad-mint-text" />
-              <div className="cm-eyebrow text-ink-500 mt-2">Loudness target</div>
-            </div>
-          </div>
-
-          {/* Style registry */}
-          <StaggerGroup className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {CAPTION_STYLES.map((style) => (
-              <StaggerItem key={style.value}>
-                <div className="cm-card px-6 py-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm font-semibold text-ink-50">{style.label}</span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-mint-500 shrink-0" aria-hidden="true" />
-                  </div>
-                  <p className="mt-2 text-[13px] leading-snug text-ink-400">{style.description}</p>
-                </div>
-              </StaggerItem>
-            ))}
-          </StaggerGroup>
-        </div>
-      </SectionReveal>
-
-      {/* ═══ 7 · FEATURE BENTO ═══ */}
-      <FeatureBento />
-
-      {/* ═══ 8 · PRICING — from PLAN_LIMITS, nothing hardcoded ═══ */}
-      <SectionReveal className="py-24 sm:py-32 px-6">
-        <div id="pricing" className="max-w-6xl mx-auto scroll-mt-28">
-          <SectionHeading
-            kicker="Pricing"
-            title={<>Simple pricing. <span className="grad-mint-text">Stated up front.</span></>}
-            subtitle="Start free. Every limit, the watermark policy and the 7-day refund window are listed right here — nothing hidden below the fold."
-          />
-
-          <StaggerGroup className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 items-stretch">
-            {PLANS.map((plan) => (
-              <StaggerItem key={plan.key} className="h-full">
-                <div
-                  className="cm-card relative p-7 flex flex-col h-full"
-                  style={
-                    plan.highlighted
-                      ? { borderColor: "rgba(57,229,8,0.55)", boxShadow: "var(--shadow-accent), var(--shadow-lift)" }
-                      : undefined
-                  }
-                >
-                  <div className="flex flex-col gap-1 mb-6">
-                    {/* Badge inline next to the plan name (in flow — .cm-card
-                        has overflow:hidden, which clipped the old absolute
-                        -top-3 badge in half), so every card's title sits at
-                        the same height. text-ink-50 = dark on the bright mint. */}
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-lg font-semibold text-ink-50">{plan.name}</h3>
-                      {plan.highlighted && (
-                        <span className="bg-mint-500 text-ink-50 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-[0.12em] leading-none">
-                          Popular
-                        </span>
-                      )}
+    return <div className="home-page" data-zcode-design="clipmint-home">
+        <a className="home-skip" href="#home-content">Skip to content</a>
+        <HomeNavigation />
+        <main id="home-content">
+            <section className="home-hero">
+                <div className="home-container home-hero-grid">
+                    <div className="home-hero-copy">
+                        <p className="home-eyebrow"><span className="home-status-dot" />Less editing. More creating.</p>
+                        <h1>Ek video.<br /><span>More stories.</span></h1>
+                        <p className="home-hero-subtitle">Your best moments.<br />Ready for the feed.</p>
+                        <p className="home-hero-description">Turn your podcasts, interviews, and long videos into captioned clips. ClipMint finds the moments. You make them yours.</p>
+                        <div className="home-hero-actions"><CtaButtons size="lg" /><a className="home-button home-button--outline" href="#showcase">See the output<ArrowDown size={17} aria-hidden="true" /></a></div>
+                        <p className="home-hero-assurance"><CheckCircle2 size={16} aria-hidden="true" />5 clips free · no credit card · upgrade when you’re ready</p>
                     </div>
-                    <p className="text-[13px] text-ink-500">{plan.tagline}</p>
-                  </div>
-                  <div className="flex items-baseline gap-1.5 mb-6">
-                    <span className="stat-num text-[36px] leading-none">{plan.price}</span>
-                    <span className="text-xs text-ink-500">{plan.period}</span>
-                  </div>
-                  <ul className="list-none flex flex-col gap-2.5 mb-8 flex-1">
-                    {plan.features.map((feature) => (
-                      <li key={feature} className="flex items-start gap-2.5 text-sm text-ink-300">
-                        <IconCheck className="w-4 h-4 text-mint-400 mt-0.5 shrink-0" />
-                        <span>{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <Link
-                    href="/login"
-                    className={`${plan.highlighted ? "cm-btn-primary" : "cm-btn-ghost"} w-full justify-center py-3 text-sm`}
-                  >
-                    {plan.cta}
-                    <IconArrowRight className="w-4 h-4" />
-                  </Link>
+                    <div className="home-hero-visual"><CaptionStudioPreview /><div className="home-visual-caption"><span><span className="home-live-dot" />A look that feels like you</span><a href="#styles">Explore the styles<ChevronRight size={14} aria-hidden="true" /></a></div></div>
                 </div>
-              </StaggerItem>
-            ))}
-          </StaggerGroup>
+                <div className="home-container home-platform-strip"><span>One edit. Three places to share.</span><div><strong>Instagram Reels</strong><i aria-hidden="true" /><strong>YouTube Shorts</strong><i aria-hidden="true" /><strong>TikTok</strong></div></div>
+            </section>
 
-          <p className="text-center text-[13px] text-ink-500 mt-8">
-            Prices in INR, billed monthly. Annual billing and the full comparison table live on the{" "}
-            <Link href="/pricing" className="text-mint-300 underline decoration-mint-500/40 underline-offset-4 hover:text-mint-200">
-              pricing page
-            </Link>
-            .
-          </p>
-        </div>
-      </SectionReveal>
+            <section id="showcase" className="home-section home-output">
+                <div className="home-container home-output-grid">
+                    <div className="home-output-copy"><p className="home-eyebrow">The output, not the promise</p><h2>Made to leave<br /><span>the editing room.</span></h2><p className="home-section-description">A real vertical render, ready to watch. No pretend showcase cards—just an example of the format your clips are made for.</p><ul className="home-output-details"><li><Focus size={20} aria-hidden="true" /><div><strong>Built for vertical screens</strong><span>A 9:16 frame for the short-form feed.</span></div></li><li><Captions size={20} aria-hidden="true" /><div><strong>Captions with character</strong><span>Choose the style and pace for your content.</span></div></li><li><AudioLines size={20} aria-hidden="true" /><div><strong>Speech stays the star</strong><span>Music is mixed beneath the voice.</span></div></li></ul><p className="home-demo-disclaimer">The sample uses licensed Sintel footage to demonstrate the rendered format. The interactive hero above is a caption-style illustration, not a customer result.</p></div>
+                    <HomeDemoVideo />
+                </div>
+            </section>
 
-      {/* ═══ 9 · FAQ — honest answers to real questions ═══ */}
-      <SectionReveal className="py-24 sm:py-32 px-6 bg-[var(--bg-void)] border-y border-[var(--border-faint)]">
-        <div id="faq" className="max-w-2xl mx-auto scroll-mt-28">
-          <SectionHeading
-            kicker="FAQ"
-            title={<>Straight <span className="grad-mint-text">answers.</span></>}
-            subtitle="We won't invent testimonials — the product has no users yet. So the answers below are the whole pitch: formats, limits, watermark policy and the refund window, in the open."
-          />
-          <FaqAccordion items={FAQS} />
-        </div>
-      </SectionReveal>
+            <section id="features" className="home-section home-features">
+                <div className="home-container"><div className="home-section-heading home-section-heading--split"><div><p className="home-eyebrow">Keep the good parts</p><h2>Less timeline.<br /><span>More storytelling.</span></h2></div><p className="home-section-description">A focused workflow from a long recording to a library of moments worth sharing.</p></div>
+                    <div className="home-feature-layout">
+                        <article className="home-feature-main"><span className="home-feature-icon"><Scissors size={25} aria-hidden="true" /></span><div><p className="home-eyebrow">Find the moment</p><h3>There’s a good clip<br />in that long video.</h3><p>AI reviews your transcript for hooks, payoffs, and energy. Clip boundaries snap to natural speech pauses.</p></div><div className="home-moment-strip" aria-label="Illustration of selected video moments"><span /><span /><span className="is-chosen"><Check size={16} aria-hidden="true" />The moment</span><span /><span /></div><small>Illustrated selection · not a live analysis</small></article>
+                        <div className="home-feature-side"><article><Focus size={22} aria-hidden="true" /><h3>Keep the speaker in frame.</h3><p>Face-tracked vertical framing puts the person, not the empty space, at the center.</p></article><article><Captions size={22} aria-hidden="true" /><h3>Give every word a look.</h3><p>Nine caption styles, from bold highlights to quiet, minimal text.</p></article></div>
+                        <div className="home-feature-footer"><article><Link2 size={20} aria-hidden="true" /><div><h3>Link it or drop it.</h3><p>YouTube, Drive, or an upload up to 2 GB.</p></div></article><article><ShieldCheck size={20} aria-hidden="true" /><div><h3>Your work, in your workspace.</h3><p>Download your clips through private delivery links.</p></div></article><article><Sparkles size={20} aria-hidden="true" /><div><h3>One video, fully captioned.</h3><p>Prefer the whole recording? There’s a mode for that.</p></div></article></div>
+                    </div>
+                </div>
+            </section>
 
-      {/* ═══ 10 · FINAL CTA ═══ */}
-      <SectionReveal className="py-16 sm:py-24 px-6">
-        <div className="cta-panel max-w-4xl mx-auto px-8 py-14 md:px-14 md:py-16 text-center flex flex-col items-center gap-5">
-          <IconSpark className="w-7 h-7 text-mint-400" />
-          <h2 className="text-[clamp(28px,4vw,44px)] font-bold tracking-[-0.02em] leading-[1.08] text-ink-50">
-            Shuru karo. <span className="grad-mint-text">Free hai.</span>
-          </h2>
-          <p className="text-ink-300 text-base leading-[1.6] max-w-md">
-            5 clips a month, free forever. Upgrade when it earns its keep.
-          </p>
-          <CtaButtons size="lg" />
-        </div>
-      </SectionReveal>
+            <section id="how-it-works" className="home-section home-workflow"><div className="home-container"><div className="home-section-heading"><p className="home-eyebrow">From video to ready</p><h2>Three steps.<br className="home-mobile-break" /> One less thing to do.</h2></div><ol className="home-steps">{STEPS.map((step) => <li key={step.number}><div className="home-step-top"><span>{step.number}</span><step.icon size={22} aria-hidden="true" /></div><h3>{step.title}</h3><p>{step.description}</p></li>)}</ol><div className="home-workflow-note"><span>Most videos take 5–15 minutes. Longer sources can take more time.</span><Link href="/login">Try it with your video<ArrowRight size={16} aria-hidden="true" /></Link></div></div></section>
 
-      <Footer />
-    </main>
-  );
+            <section id="styles" className="home-section home-styles"><div className="home-container home-styles-layout"><div><p className="home-eyebrow">Caption personality</p><h2>Same story.<br /><span>Your signature.</span></h2><p className="home-section-description">Bold, soft, snappy, or understated. Pick the caption style that belongs with your content.</p><Link href="/dashboard/new" className="home-button home-button--outline">Choose your look<ArrowRight size={17} aria-hidden="true" /></Link></div><div className="home-style-grid">{CAPTION_STYLES.map((style) => <article key={style.value}><span className={`home-style-sample home-style-sample--${style.value}`} aria-hidden="true">Make it <em>count.</em></span><h3>{style.label}</h3><p>{style.description}</p></article>)}</div></div></section>
+
+            <section id="pricing" className="home-section home-pricing"><div className="home-container"><div className="home-section-heading home-section-heading--split"><div><p className="home-eyebrow">Start small. Make more.</p><h2>Room for your<br /><span>next chapter.</span></h2></div><div><p className="home-section-description">Try the workflow for free. Paid passes are one-time purchases—no automatic renewal.</p><Link className="home-inline-link" href="/pricing">Full plan comparison<ArrowRight size={16} aria-hidden="true" /></Link></div></div><div className="home-plans">{(["free", "creator", "pro", "agency"] as Plan[]).map((key) => {
+                    const plan = PLAN_LIMITS[key]; const copy = PLAN_CONTENT[key];
+                    return <article className={`home-plan ${key === "creator" ? "home-plan--featured" : ""}`} key={key}><div className="home-plan-title"><h3>{plan.label}</h3>{key === "creator" && <span>Popular</span>}</div><p className="home-plan-description">{copy.description}</p><div className="home-plan-price"><strong>₹{(plan.monthlyPrice / 100).toLocaleString("en-IN")}</strong><span>{key === "free" ? "free forever" : "per 30-day pass"}</span></div><ul><li><Check size={16} aria-hidden="true" /><span>{plan.clips.toLocaleString("en-IN")} clips per period</span></li><li><Check size={16} aria-hidden="true" /><span>{plan.videos.toLocaleString("en-IN")} videos per period</span></li>{copy.features.map((feature) => <li key={feature}><Check size={16} aria-hidden="true" /><span>{feature}</span></li>)}</ul><Link href={copy.href} className={`home-button ${key === "creator" ? "home-button--primary" : "home-button--outline"}`}>{copy.cta}<ArrowRight size={16} aria-hidden="true" /></Link></article>;
+                })}</div><p className="home-pricing-note">Prices in INR. Annual options and the 7-day refund policy are explained on the <Link href="/pricing">pricing page</Link>.</p></div></section>
+
+            <section id="faq" className="home-section home-faq"><div className="home-container home-faq-layout"><div><p className="home-eyebrow">A few good questions</p><h2>Clear answers.<br /><span>No fine-print hunt.</span></h2><p className="home-section-description">Still have a question?<br /><Link href="/contact">Talk to us<ArrowRight size={16} aria-hidden="true" /></Link></p></div><div className="home-faq-list">{FAQS.map((faq) => <details key={faq.question}><summary>{faq.question}<span aria-hidden="true">+</span></summary><p>{faq.answer}</p></details>)}</div></div></section>
+
+            <section className="home-closing"><div className="home-container home-closing-inner"><div><p className="home-eyebrow">You’ve already done the recording.</p><h2>Let’s make it<br />worth sharing.</h2><p>Start with 5 free clips. No card. No pressure.</p></div><div className="home-closing-action"><CtaButtons size="lg" /><span>Your next clip starts with one video.</span></div></div></section>
+        </main>
+        <footer className="home-footer"><div className="home-container"><div className="home-footer-main"><div className="home-footer-brand"><Link href="/" className="home-wordmark"><Image src="/logo-cm-128.png" alt="" width={32} height={32} /><span>ClipMint<span className="home-brand-dot">.</span></span></Link><p>Good moments deserve<br />a second life.</p><a href="mailto:ClipMint.Support@gmail.com">ClipMint.Support@gmail.com</a></div>{FOOTER_LINKS.map((column) => <div className="home-footer-column" key={column.label}><h2>{column.label}</h2><ul>{column.links.map((link) => <li key={link.href}><Link href={link.href}>{link.label}</Link></li>)}</ul></div>)}</div><div className="home-footer-bottom"><span>© 2026 NovaMint Networks</span><span>Made in India. Made for your next story.</span></div></div></footer>
+    </div>;
 }

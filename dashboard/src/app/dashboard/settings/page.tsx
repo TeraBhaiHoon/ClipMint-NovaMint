@@ -1,637 +1,192 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createClient } from "@/lib/supabase";
-import { useRouter } from "next/navigation";
-import type { Profile, Payment } from "@/lib/types";
-import { CAPTION_STYLES, PLAN_LIMITS, effectivePlanKey, type CaptionStyle } from "@/lib/types";
-import {
-    User, Bell, CreditCard, ShieldAlert, Save, Loader2,
-    ExternalLink, Check, Crown, Sparkles, AlertTriangle,
-    Trash2, Lock, ArrowUpRight, Calendar,
-    Receipt, Zap,
-} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { ArrowUpRight, Bell, CreditCard, ExternalLink, LockKeyhole, Mail, ReceiptText, Save, ShieldCheck, UserRound } from "lucide-react";
+import { createClient } from "@/lib/supabase";
+import { CAPTION_STYLES, PLAN_LIMITS, effectivePlanKey, isPlanExpired, type CaptionStyle, type Payment } from "@/lib/types";
+import { captionPreferenceKey, formatDate, readCaptionPreference } from "@/lib/dashboard";
+import { useDashboard } from "../_components/dashboard-provider";
+import { Button, Choice, EmptyState, LoadingState, Notice, PageHeader, SectionHeading, Toggle, UsageMeter } from "../_components/ui";
 
-type SettingsTab = "profile" | "notifications" | "billing" | "security";
-
-const TABS: { key: SettingsTab; label: string; icon: React.ElementType }[] = [
-    { key: "profile", label: "Profile", icon: User },
+type Tab = "profile" | "notifications" | "billing" | "security";
+const TABS = [
+    { key: "profile", label: "Profile", icon: UserRound },
     { key: "notifications", label: "Notifications", icon: Bell },
-    { key: "billing", label: "Billing", icon: CreditCard },
-    { key: "security", label: "Security", icon: ShieldAlert },
-];
+    { key: "billing", label: "Plan & billing", icon: CreditCard },
+    { key: "security", label: "Security", icon: ShieldCheck },
+] as const;
+const NOTIFICATIONS = [
+    { key: "notify_discord", label: "Discord notifications", description: "Send job updates to your Discord webhook." },
+    { key: "notify_email", label: "Email notifications", description: "Receive job updates at your account email." },
+    { key: "notify_job_complete", label: "Processing completed", description: "Let me know when my clips are ready." },
+    { key: "notify_job_failed", label: "Processing failed", description: "Let me know if a video needs attention." },
+    { key: "notify_weekly_report", label: "Weekly summary", description: "Not available yet. Your saved preference is retained for future support." },
+] as const;
+type Preferences = Record<typeof NOTIFICATIONS[number]["key"], boolean>;
+const INITIAL: Preferences = { notify_discord: true, notify_email: false, notify_job_complete: true, notify_job_failed: true, notify_weekly_report: false };
 
 export default function SettingsPage() {
-    const supabase = createClient();
-    const router = useRouter();
-    const [profile, setProfile] = useState<Profile | null>(null);
-    const [payments, setPayments] = useState<Payment[]>([]);
-    const [email, setEmail] = useState("");
+    const supabase = useMemo(() => createClient(), []);
+    const { account, profile, loading, error: accountError, refreshProfile } = useDashboard();
+    const [tab, setTab] = useState<Tab>("profile");
     const [fullName, setFullName] = useState("");
-    const [defaultStyle, setDefaultStyle] = useState<CaptionStyle>("hormozi");
-    const [notifications, setNotifications] = useState({
-        discord: true,
-        email: false,
-        jobComplete: true,
-        jobFailed: true,
-        weeklyReport: false,
-    });
-    const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
-    const [loading, setLoading] = useState(true);
+    const [style, setStyle] = useState<CaptionStyle>("hormozi");
+    const [preferences, setPreferences] = useState(INITIAL);
+    const [webhook, setWebhook] = useState("");
+    const [initialized, setInitialized] = useState<string | null>(null);
+    const [dirty, setDirty] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
-    const [toast, setToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
-    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-    const [deleteInput, setDeleteInput] = useState("");
-    const [deleting, setDeleting] = useState(false);
-    // Captured once per mount: render must stay pure, and a page that stays
-    // open across an expiry boundary re-checking on the next visit is fine.
-    const [nowMs] = useState(() => Date.now());
+    const [message, setMessage] = useState<{ tone: "error" | "success"; text: string } | null>(null);
+    const [payments, setPayments] = useState<Payment[]>([]);
+    const [paymentLoading, setPaymentLoading] = useState(true);
+    const [paymentError, setPaymentError] = useState(false);
+    const [paymentRetry, setPaymentRetry] = useState(0);
+    const [resetPending, setResetPending] = useState(false);
+    const [resetSent, setResetSent] = useState(false);
+    const tabsRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        const readTab = () => {
+            const requested = new URLSearchParams(window.location.search).get("tab");
+            if (TABS.some((item) => item.key === requested)) setTab(requested as Tab);
+        };
+        readTab();
+        window.addEventListener("popstate", readTab);
+        return () => window.removeEventListener("popstate", readTab);
+    }, []);
+
+    useEffect(() => {
+        if (!profile || initialized === profile.id) return;
+        const frame = requestAnimationFrame(() => {
+            setFullName(profile.full_name || "");
+            setStyle(readCaptionPreference(profile.id));
+            setWebhook(profile.discord_webhook_url || "");
+            setPreferences({
+                notify_discord: profile.notify_discord ?? true,
+                notify_email: profile.notify_email ?? false,
+                notify_job_complete: profile.notify_job_complete ?? true,
+                notify_job_failed: profile.notify_job_failed ?? true,
+                notify_weekly_report: profile.notify_weekly_report ?? false,
+            });
+            setInitialized(profile.id);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [initialized, profile]);
+
+    useEffect(() => {
+        if (!account || tab !== "billing") return;
+        let disposed = false;
         async function load() {
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) return;
-
-            setEmail(user.email ?? "");
-
-            // Roll the monthly usage window first (no-op unless due) so the
-            // plan card shows current-month usage, not a stale lifetime count.
-            await supabase.rpc("roll_usage_period_if_due", { p_user_id: user.id });
-
-            const { data } = await supabase.from("profiles").select("*").eq("id", user.id).single();
-            if (data) {
-                const p = data as Profile;
-                setProfile(p);
-                setFullName(p.full_name ?? "");
-                setNotifications({
-                    discord: p.notify_discord ?? true,
-                    email: p.notify_email ?? false,
-                    jobComplete: p.notify_job_complete ?? true,
-                    jobFailed: p.notify_job_failed ?? true,
-                    weeklyReport: p.notify_weekly_report ?? false,
-                });
-                setDiscordWebhookUrl(p.discord_webhook_url ?? "");
-            }
-
-            // Load payment history
-            const { data: paymentData } = await supabase
-                .from("payments")
-                .select("*")
-                .eq("user_id", user.id)
-                .order("created_at", { ascending: false })
-                .limit(10);
-
-            if (paymentData) {
-                setPayments(paymentData as Payment[]);
-            }
-
-            setLoading(false);
+            setPaymentLoading(true);
+            setPaymentError(false);
+            try {
+                const { data, error } = await supabase.from("payments").select("*").eq("user_id", account!.id).order("created_at", { ascending: false }).limit(20);
+                if (error) throw error;
+                if (!disposed) setPayments((data || []) as Payment[]);
+            } catch { if (!disposed) setPaymentError(true); }
+            finally { if (!disposed) setPaymentLoading(false); }
         }
-        load();
-    }, [supabase]);
+        void load();
+        return () => { disposed = true; };
+    }, [account, paymentRetry, supabase, tab]);
 
-    function showToast(type: "success" | "error", message: string) {
-        setToast({ type, message });
-        setTimeout(() => setToast(null), 3000);
+    function changeTab(next: Tab) {
+        setTab(next);
+        setMessage(null);
+        const url = new URL(window.location.href);
+        url.searchParams.set("tab", next);
+        window.history.replaceState(null, "", url);
     }
 
-    const handleSave = async () => {
-        if (!profile) return;
+    async function save(event: React.FormEvent) {
+        event.preventDefault();
+        if (!profile || saving) return;
         setSaving(true);
-
-        if (notifications.discord && discordWebhookUrl.trim()) {
-            if (!discordWebhookUrl.startsWith("https://discord.com/api/webhooks/") &&
-                !discordWebhookUrl.startsWith("https://discordapp.com/api/webhooks/")) {
-                showToast("error", "Invalid Discord webhook URL");
-                setSaving(false);
-                return;
-            }
-        }
-
-        const { error: updateError } = await supabase
-            .from("profiles")
-            .update({
-                full_name: fullName.trim(),
-                notify_discord: notifications.discord,
-                notify_email: notifications.email,
-                notify_job_complete: notifications.jobComplete,
-                notify_job_failed: notifications.jobFailed,
-                notify_weekly_report: notifications.weeklyReport,
-                discord_webhook_url: discordWebhookUrl.trim() || null,
-            })
-            .eq("id", profile.id);
-
-        if (updateError) {
-            console.error("Profile update error:", updateError.message);
-            showToast("error", "Could not save your settings. Please try again.");
-        } else {
-            showToast("success", "Settings saved successfully");
-        }
-        setSaving(false);
-    };
-
-
-    const handleDeleteAccount = async () => {
-        if (deleteInput !== "DELETE") return;
-        setDeleting(true);
-        await supabase.auth.signOut();
-        router.push("/login");
-    };
-
-    if (loading) {
-        return (
-            <div className="max-w-2xl mx-auto">
-                <div className="skeleton h-8 w-44 rounded-lg mb-2" />
-                <div className="skeleton h-4 w-72 rounded-md mb-8" />
-                <div className="skeleton h-12 w-full rounded-xl mb-6" />
-                <div className="skeleton h-80 w-full rounded-2xl" />
-            </div>
-        );
+        setMessage(null);
+        try {
+            if (preferences.notify_discord && webhook.trim() && !/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(webhook.trim())) throw new Error("Enter a valid Discord webhook URL before saving.");
+            const { error } = await supabase.from("profiles").update({
+                full_name: fullName.trim(), ...preferences, discord_webhook_url: webhook.trim() || null,
+            }).eq("id", profile.id);
+            if (error) throw new Error("Your settings couldn’t be saved. Please try again.");
+            let localSaved = true;
+            try { localStorage.setItem(captionPreferenceKey(profile.id), style); } catch { localSaved = false; }
+            setDirty(false);
+            setMessage({ tone: localSaved ? "success" : "error", text: localSaved ? "Settings saved. Your caption preference applies on this browser." : "Account settings saved, but this browser blocked saving your caption preference." });
+            await refreshProfile();
+        } catch (cause) { setMessage({ tone: "error", text: cause instanceof Error ? cause.message : "Couldn’t save settings. Please try again." }); }
+        finally { setSaving(false); }
     }
 
-    // Expired paid plans display — and gate — as Free everywhere.
+    async function resetPassword() {
+        if (!account?.email || resetPending || resetSent) return;
+        setResetPending(true);
+        setMessage(null);
+        try {
+            const { error } = await supabase.auth.resetPasswordForEmail(account.email, { redirectTo: `${window.location.origin}/auth/callback` });
+            if (error) throw error;
+            setResetSent(true);
+            setMessage({ tone: "success", text: "Password reset email sent. Check your inbox to continue." });
+        } catch { setMessage({ tone: "error", text: "The reset email couldn’t be sent. Please try again." }); }
+        finally { setResetPending(false); }
+    }
+
     const planKey = effectivePlanKey(profile);
-    const planInfo = PLAN_LIMITS[planKey];
-    const initial = (profile?.full_name || "U").charAt(0).toUpperCase();
-    // One-time payments only — there is no subscription to cancel. The plan is
-    // "active" until its expiry date, then reverts to Free.
-    const periodEndDate = profile?.current_period_end ? new Date(profile.current_period_end) : null;
-    const isExpired =
-        !!periodEndDate && profile?.plan !== "free" && periodEndDate.getTime() < nowMs;
+    const plan = PLAN_LIMITS[planKey];
+    const expired = isPlanExpired(profile);
+    const editable = tab === "profile" || tab === "notifications";
+    const initial = (profile?.full_name || account?.email || "You").charAt(0).toUpperCase();
 
-    // Effective limits (expired paid plans show the FREE limits they are
-    // actually gated at — not the stored Pro numbers).
-    const clipsLimit = planInfo.clips;
-    const videosLimit = planInfo.videos;
-    const clipsUsed = profile?.clips_used ?? 0;
-    const videosUsed = profile?.videos_used ?? 0;
-    const usagePercent = Math.min(100, Math.round((clipsUsed / clipsLimit) * 100));
-
-    return (
-        <div className="max-w-2xl mx-auto">
-            {/* ─── Toast Notification ─── */}
-            {toast && (
-                <div className={`toast toast-${toast.type} fixed top-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-2xl border ${
-                    toast.type === "success" 
-                        ? "bg-[#10b981]/10 border-[#10b981]/25 text-[#10b981]" 
-                        : "bg-[#ef4444]/10 border-[#ef4444]/25 text-[#ef4444]"
-                }`} key={toast.message}>
-                    {toast.type === "success" ? <Check size={16} /> : <AlertTriangle size={16} />}
-                    <span className="text-sm font-semibold">{toast.message}</span>
-                </div>
-            )}
-
-            {/* ─── Header ─── */}
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-ink-50 mb-1">Settings</h1>
-                <p className="text-sm text-ink-400">
-                    Manage your account, preferences, and plan
-                </p>
+    return <div className="studio-page">
+        <PageHeader eyebrow="Make it yours" title="Settings" description="Your account, notification preferences, and plan—without the clutter." />
+        <div className="studio-settings-layout">
+            <div className="studio-settings-tabs" role="tablist" aria-label="Settings sections" ref={tabsRef} onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const index = TABS.findIndex((item) => item.key === tab);
+                const next = event.key === "Home" ? 0 : event.key === "End" ? TABS.length - 1 : (index + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + TABS.length) % TABS.length;
+                changeTab(TABS[next].key);
+                tabsRef.current?.querySelector<HTMLButtonElement>(`#settings-tab-${TABS[next].key}`)?.focus();
+            }}>{TABS.map((item) => <button key={item.key} id={`settings-tab-${item.key}`} type="button" role="tab" aria-selected={tab === item.key} aria-controls={`settings-panel-${item.key}`} tabIndex={tab === item.key ? 0 : -1} onClick={() => changeTab(item.key)}><item.icon size={18} aria-hidden="true" />{item.label}</button>)}</div>
+            <div className="studio-settings-content" id={`settings-panel-${tab}`} role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>
+                {message && <Notice tone={message.tone}>{message.text}</Notice>}
+                {loading || (profile && initialized !== profile.id) ? <div className="studio-panel"><LoadingState label="Loading account settings" /></div> : !profile || accountError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Try again</Button>}>Account settings are temporarily unavailable.</Notice> : <>
+                    {editable && <form onSubmit={save} className="studio-stack">
+                        <fieldset disabled={saving} className="studio-settings-fields">
+                            {tab === "profile" ? <>
+                                <section className="studio-panel"><SectionHeading title="Your profile" description="The name shown in your ClipMint workspace." icon={UserRound} />
+                                    <div className="studio-profile-intro"><span className="studio-avatar studio-avatar--large" aria-hidden="true">{initial}</span><div><strong>{profile.full_name || "Your account"}</strong><p>{account?.email}</p></div><span className="studio-plan-pill">{plan.label} plan</span></div>
+                                    <div className="studio-grid-two"><div className="studio-field"><label htmlFor="full-name">Full name</label><input id="full-name" className="studio-input" value={fullName} maxLength={100} autoComplete="name" onChange={(event) => { setFullName(event.target.value); setDirty(true); }} /></div><div className="studio-field"><label htmlFor="account-email">Email address</label><input id="account-email" className="studio-input" value={account?.email || ""} disabled type="email" /><p className="studio-field-hint">Linked to your sign-in account.</p></div></div>
+                                </section>
+                                <section className="studio-panel"><SectionHeading title="Default caption style" description="Used for new videos on this browser. You can choose another style for any project." />
+                                    <div className="studio-choice-grid studio-settings-style-grid" role="group" aria-label="Default caption style">{CAPTION_STYLES.map((item) => <Choice key={item.value} selected={style === item.value} title={item.label} onClick={() => { setStyle(item.value); setDirty(true); }} />)}</div>
+                                </section>
+                            </> : <>
+                                <section className="studio-panel"><SectionHeading title="Notification channels" description="Choose where you want to receive updates." icon={Bell} /><div className="studio-settings-rows">{NOTIFICATIONS.slice(0, 2).map((item) => <div key={item.key}><Toggle label={item.label} description={item.description} checked={preferences[item.key]} onChange={(value) => { setPreferences((old) => ({ ...old, [item.key]: value })); setDirty(true); }} />{item.key === "notify_discord" && preferences.notify_discord && <div className="studio-field studio-webhook-field"><label htmlFor="discord-webhook">Discord webhook URL</label><input id="discord-webhook" className="studio-input" type="url" value={webhook} placeholder="https://discord.com/api/webhooks/…" onChange={(event) => { setWebhook(event.target.value); setDirty(true); }} /><a className="studio-text-link studio-inline" href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks" target="_blank" rel="noopener noreferrer">How to create a webhook<ExternalLink size={14} aria-hidden="true" /></a></div>}</div>)}</div></section>
+                                <section className="studio-panel"><SectionHeading title="Events & updates" description="Select the job events you want to hear about." /><div className="studio-settings-rows">{NOTIFICATIONS.slice(2).map((item) => <Toggle key={item.key} label={item.label} description={item.description} checked={preferences[item.key]} disabled={item.key === "notify_weekly_report"} onChange={(value) => { setPreferences((old) => ({ ...old, [item.key]: value })); setDirty(true); }} />)}</div></section>
+                            </>}
+                        </fieldset>
+                        <div className="studio-save-bar"><p>{dirty ? "You have unsaved changes." : "Your preferences are up to date."}</p><Button type="submit" busy={saving} disabled={!dirty}><Save size={17} aria-hidden="true" />{saving ? "Saving…" : "Save changes"}</Button></div>
+                    </form>}
+                    {tab === "billing" && <div className="studio-stack">
+                        <section className="studio-panel"><SectionHeading title="Your current plan" description="Usage resets in 30-day windows. Saved videos and clips remain in your library." icon={CreditCard} action={<Link href="/pricing" className="studio-button studio-button--secondary">{planKey === "free" ? "View plans" : "Change plan"}<ArrowUpRight size={16} aria-hidden="true" /></Link>} />
+                            <div className="studio-billing-plan"><strong>{plan.label}</strong><span className={`studio-badge studio-badge--${planKey === "free" ? "neutral" : "success"}`}>{planKey === "free" ? "Free account" : "Active pass"}</span></div>
+                            {expired && <Notice tone="warning">Your paid pass expired on {formatDate(profile.current_period_end)}. Free limits now apply; your existing clips are still available.</Notice>}
+                            <div className="studio-grid-two studio-billing-usage"><UsageMeter label="Clips this period" used={profile.clips_used || 0} limit={plan.clips} /><UsageMeter label="Videos this period" used={profile.videos_used || 0} limit={plan.videos} /></div>
+                            <dl className="studio-billing-details"><div><dt>Billing</dt><dd>{planKey === "free" ? "No payment required" : "One-time payment · no auto-renewal"}</dd></div>{planKey !== "free" && <><div><dt>Access period</dt><dd>{profile.plan_period === "annual" ? "Annual" : "30 days"}</dd></div><div><dt>Active until</dt><dd>{formatDate(profile.current_period_end)}</dd></div></>}</dl>
+                        </section>
+                        {planKey === "free" && <section className="studio-plan-upgrade"><div><h2>More room to create</h2><p>Creator includes 150 clips and 30 videos per period, with all caption styles.</p></div><Link href="/pricing" className="studio-button studio-button--primary">Explore Creator<ArrowUpRight size={16} aria-hidden="true" /></Link></section>}
+                        <section className="studio-panel"><SectionHeading title="Payment history" description="Your 20 most recent payment records." icon={ReceiptText} />
+                            {paymentLoading ? <LoadingState label="Loading payment history" rows={2} /> : paymentError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => setPaymentRetry((value) => value + 1)}>Try again</Button>}>Payment history couldn’t be loaded.</Notice> : !payments.length ? <EmptyState icon={ReceiptText} title="No payments yet" description="When you purchase a plan, the record will appear here." /> : <ul className="studio-payment-list">{payments.map((payment) => <li key={payment.id}><span><strong>{PLAN_LIMITS[payment.plan]?.label || payment.plan} plan</strong><small>{formatDate(payment.created_at)} · {payment.plan_period === "annual" ? "Annual" : "One-time"}</small></span><span className={`studio-badge studio-badge--${payment.status === "captured" ? "success" : payment.status === "failed" ? "error" : "neutral"}`}>{payment.status === "captured" ? "Paid" : payment.status}</span><strong>{new Intl.NumberFormat("en-IN", { style: "currency", currency: payment.currency || "INR", maximumFractionDigits: 0 }).format(payment.amount / 100)}</strong></li>)}</ul>}
+                        </section>
+                    </div>}
+                    {tab === "security" && <div className="studio-stack">
+                        <section className="studio-panel"><SectionHeading title="Password & sign-in" description="Change your password, or set one if you normally sign in with Google." icon={LockKeyhole} /><div className="studio-security-action"><div><strong>Password reset email</strong><p>We’ll send a secure reset link to {account?.email}.</p></div><Button variant="secondary" onClick={resetPassword} busy={resetPending} disabled={resetSent}><Mail size={17} aria-hidden="true" />{resetSent ? "Email sent" : "Send reset email"}</Button></div></section>
+                        <section className="studio-panel"><SectionHeading title="Account & data" description="Account removal is handled through support, not by signing out." icon={ShieldCheck} /><p className="studio-small studio-muted">To request deletion of your account and associated data, contact support from your account email. We’ll confirm ownership before removing anything.</p><Link className="studio-button studio-button--secondary studio-support-action" href="/contact">Contact support<ArrowUpRight size={16} aria-hidden="true" /></Link></section>
+                    </div>}
+                </>}
             </div>
-
-            {/* ─── Tab Navigation ─── */}
-            <div className="tab-nav mb-8">
-                {TABS.map((tab) => {
-                    const Icon = tab.icon;
-                    return (
-                        <button
-                            key={tab.key}
-                            className={`tab-item ${activeTab === tab.key ? "active" : ""}`}
-                            onClick={() => setActiveTab(tab.key)}
-                        >
-                            <Icon size={15} /> <span>{tab.label}</span>
-                        </button>
-                    );
-                })}
-            </div>
-
-            {/* ═══════════ Profile Tab ═══════════ */}
-            {activeTab === "profile" && (
-                <div className="glass-card p-6 sm:p-8">
-                    <div className="flex items-center gap-5 mb-8">
-                        <div className="w-16 h-16 rounded-full bg-gradient-to-br from-mint-500 to-mint-700 flex items-center justify-center text-2xl font-black text-ink-50 shadow-lg shadow-mint-500/10 flex-shrink-0">
-                            {initial}
-                        </div>
-                        <div>
-                            <h2 className="text-xl font-bold text-ink-50">{fullName || "User"}</h2>
-                            <p className="text-sm text-ink-400 mt-0.5">{email}</p>
-                            <div className="mt-2.5">
-                                <span className={`plan-badge ${planKey}`}>
-                                    {planKey} plan
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mb-8">
-                        <div>
-                            <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">Full Name</label>
-                            <input
-                                type="text"
-                                value={fullName}
-                                onChange={(e) => setFullName(e.target.value)}
-                                className="input-field"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">Email Address</label>
-                            <input
-                                type="email"
-                                value={email}
-                                disabled
-                                className="input-field opacity-50 cursor-not-allowed"
-                            />
-                        </div>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-bold text-ink-100 mb-4">Default Caption Style</label>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                            {CAPTION_STYLES.map((style) => (
-                                <button
-                                    key={style.value}
-                                    onClick={() => setDefaultStyle(style.value)}
-                                    className={`p-3.5 rounded-xl text-left transition-all duration-200 flex items-center justify-between border ${
-                                        defaultStyle === style.value
-                                            ? "border-mint-500 bg-mint-500/10 text-ink-50"
-                                            : "border-[var(--border-subtle)] bg-[var(--bg-inset)]/30 hover:border-[var(--border-subtle)] text-ink-300 hover:text-ink-100"
-                                    }`}
-                                >
-                                    <span className="text-sm font-semibold">
-                                        {style.label}
-                                    </span>
-                                    {defaultStyle === style.value && <Check size={14} className="text-mint-400" />}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* ═══════════ Notifications Tab ═══════════ */}
-            {activeTab === "notifications" && (
-                <div className="glass-card p-6 sm:p-8">
-                    <h3 className="text-lg font-bold text-ink-50 mb-6 flex items-center gap-2">
-                        <Bell size={18} className="text-mint-400" />
-                        Notification Preferences
-                    </h3>
-                    <div className="flex flex-col gap-6">
-                        {[
-                            { key: "discord" as const, label: "Discord Notifications", desc: "Get notified via Discord webhook when jobs are processed" },
-                            { key: "email" as const, label: "Email Notifications", desc: "Receive email updates for completed jobs" },
-                            { key: "jobComplete" as const, label: "Job Completed", desc: "Notify when video processing finishes successfully" },
-                            { key: "jobFailed" as const, label: "Job Failed", desc: "Alert when processing encounters errors" },
-                            { key: "weeklyReport" as const, label: "Weekly Report", desc: "Summary of clips, performance, and usage" },
-                        ].map((item) => (
-                            <div key={item.key} className="border-b border-[var(--border-subtle)] last:border-0 pb-6 last:pb-0">
-                                <div className="flex justify-between items-center">
-                                    <div>
-                                        <div className="text-sm font-semibold text-ink-100">{item.label}</div>
-                                        <div className="text-xs text-ink-400 mt-1">{item.desc}</div>
-                                    </div>
-                                    <button
-                                        className={`toggle-switch ${notifications[item.key] ? "active" : ""}`}
-                                        onClick={() => setNotifications((n) => ({ ...n, [item.key]: !n[item.key] }))}
-                                    />
-                                </div>
-
-                                {item.key === "discord" && notifications.discord && (
-                                    <div className="mt-4 pt-4 border-t border-[var(--border-subtle)]">
-                                        <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">
-                                            Discord Webhook URL
-                                        </label>
-                                        <input
-                                            type="url"
-                                            value={discordWebhookUrl}
-                                            onChange={(e) => setDiscordWebhookUrl(e.target.value)}
-                                            placeholder="https://discord.com/api/webhooks/..."
-                                            className="input-field text-sm"
-                                        />
-                                        <a
-                                            href="https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            className="inline-flex items-center gap-1.5 mt-2.5 text-xs text-mint-400 hover:text-mint-700 transition-colors no-underline font-medium"
-                                        >
-                                            <ExternalLink size={12} />
-                                            <span>How to create a Discord webhook</span>
-                                        </a>
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* ═══════════ Billing Tab ═══════════ */}
-            {activeTab === "billing" && (
-                <div className="flex flex-col gap-6">
-                    {/* ─── Current Plan Card ─── */}
-                    <div className="glass-card p-6 sm:p-8 relative overflow-hidden">
-                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-6">
-                            <div>
-                                <div className="flex items-center gap-2 mb-2">
-                                    <Crown size={20} className={planKey === "free" ? "text-ink-400" : "text-mint-400"} />
-                                    <span className="gradient-text text-xl font-extrabold">
-                                        {planInfo.label} Plan
-                                    </span>
-                                </div>
-                                <div className="text-sm text-ink-400 leading-relaxed">
-                                    {clipsUsed} / {clipsLimit} clips used
-                                    <br />
-                                    {videosUsed} / {videosLimit} videos used
-                                </div>
-                            </div>
-                            <Link href="/pricing" className="btn-primary py-2.5 px-5 text-sm font-semibold flex items-center gap-2 shadow-lg no-underline">
-                                <Sparkles size={14} /> <span>{planKey === "free" ? "Upgrade Plan" : "Change Plan"}</span> <ArrowUpRight size={14} />
-                            </Link>
-                        </div>
-
-                        {/* Usage progress */}
-                        <div className="mt-6 pt-6 border-t border-[var(--border-subtle)]">
-                            <div className="flex justify-between text-xs text-ink-400 font-semibold mb-2">
-                                <span>CLIPS USAGE</span>
-                                <span>{usagePercent}%</span>
-                            </div>
-                            <div className="h-2 w-full rounded-full bg-[var(--bg-inset)] overflow-hidden">
-                                <div className="h-full rounded-full bg-mint-500 transition-[width] duration-500" style={{ width: `${usagePercent}%` }} />
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* ─── Plan Details Card (for paid users) ─── */}
-                    {planKey !== "free" && (
-                        <div className="glass-card p-6 sm:p-8">
-                            <h3 className="text-base font-bold text-ink-50 mb-6 flex items-center gap-2.5">
-                                <CreditCard size={16} className="text-mint-400" />
-                                Subscription Details
-                            </h3>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-                                {/* Status */}
-                                <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
-                                    <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
-                                        Status
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className={`w-2 h-2 rounded-full ${
-                                            isExpired ? "bg-[#f59e0b]" : "bg-[#10b981]"
-                                        }`} />
-                                        <span className={`text-sm font-bold ${
-                                            isExpired ? "text-[#f59e0b]" : "text-ink-200"
-                                        }`}>
-                                            {isExpired ? "Expired — revert to Free" : "Active"}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                {/* Billing Period */}
-                                <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
-                                    <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
-                                        Billing Period
-                                    </div>
-                                    <div className="flex items-center gap-2 text-sm font-bold text-ink-100">
-                                        {profile?.plan_period === "annual" ? (
-                                            <><Calendar size={14} className="text-mint-400" /> <span>Annual (one-time)</span></>
-                                        ) : (
-                                            <><Zap size={14} className="text-mint-400" /> <span>Monthly (one-time)</span></>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Amount */}
-                                <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
-                                    <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
-                                        Amount
-                                    </div>
-                                    <div className="text-sm font-bold text-ink-100">
-                                        ₹{((profile?.plan_period === "annual" ? planInfo.annualPrice * 12 : planInfo.monthlyPrice) / 100).toLocaleString("en-IN")}
-                                        <span className="text-xs text-ink-400 font-medium ml-1">paid once</span>
-                                    </div>
-                                </div>
-
-                                {/* Next Billing / Expiry */}
-                                {periodEndDate && (
-                                    <div className="p-4 rounded-xl bg-[var(--bg-inset)]/50 border border-[var(--border-subtle)]">
-                                        <div className="text-[10px] font-bold text-ink-400 uppercase tracking-wider mb-1.5">
-                                            {isExpired ? "Expired On" : "Active Until"}
-                                        </div>
-                                        <div className="flex items-center gap-2 text-sm font-bold text-ink-100">
-                                            <Calendar size={14} className="text-ink-400" />
-                                            <span>{periodEndDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Expiry notice */}
-                            {isExpired && (
-                                <div className="p-4 rounded-xl bg-[#f59e0b]/5 border border-[#f59e0b]/15 mb-6 flex items-start gap-3">
-                                    <AlertTriangle size={16} className="text-[#f59e0b] flex-shrink-0 mt-0.5" />
-                                    <span className="text-xs text-ink-200 leading-relaxed">
-                                        Your plan expired on{" "}
-                                        <strong className="text-ink-50">{periodEndDate?.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong>{" "}
-                                        and has reverted to Free limits. Buy a plan again anytime to restore them — your clips stay in your dashboard.
-                                    </span>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* ─── Upgrade CTA (for free users) ─── */}
-                    {planKey === "free" && (
-                        <div className="glass-card p-6 sm:p-8">
-                            <h3 className="text-base font-bold text-ink-50 mb-5 flex items-center gap-2">
-                                <Sparkles size={16} className="text-mint-400" />
-                                What you get with Creator Plan
-                            </h3>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
-                                {[
-                                    "30 videos per month",
-                                    "150 clips per month",
-                                    "Priority processing",
-                                    "All caption styles",
-                                    "API access",
-                                    "Email support",
-                                ].map((feature) => (
-                                    <div key={feature} className="flex items-center gap-2.5 text-sm text-ink-300">
-                                        <Check size={16} className="text-[#10b981] flex-shrink-0" />
-                                        <span>{feature}</span>
-                                    </div>
-                                ))}
-                            </div>
-                            <Link
-                                href="/pricing"
-                                className="btn-primary py-3 px-6 text-sm font-bold flex items-center justify-center gap-2 shadow-lg no-underline"
-                            >
-                                <Sparkles size={16} /> Upgrade to Creator — ₹499/mo
-                            </Link>
-                        </div>
-                    )}
-
-                    {/* ─── Payment History ─── */}
-                    {payments.length > 0 && (
-                        <div className="glass-card p-6 sm:p-8">
-                            <h3 className="text-base font-bold text-ink-50 mb-6 flex items-center gap-2.5">
-                                <Receipt size={16} className="text-mint-400" />
-                                Payment History
-                            </h3>
-                            <div className="flex flex-col">
-                                {payments.map((payment, i) => (
-                                    <div
-                                        key={payment.id}
-                                        className={`flex justify-between items-center py-4 ${
-                                            i < payments.length - 1 ? "border-b border-[var(--border-subtle)]" : ""
-                                        }`}
-                                    >
-                                        <div>
-                                            <div className="text-sm font-semibold text-ink-100">
-                                                {payment.plan.charAt(0).toUpperCase() + payment.plan.slice(1)} Plan
-                                                <span className={`text-[10px] font-bold ml-2.5 px-2 py-0.5 rounded-md ${
-                                                    payment.status === "captured"
-                                                        ? "bg-[#10b981]/15 text-[#10b981]"
-                                                        : "bg-[#ef4444]/15 text-[#ef4444]"
-                                                }`}>
-                                                    {payment.status === "captured" ? "Paid" : payment.status}
-                                                </span>
-                                            </div>
-                                            <div className="text-xs text-ink-400 mt-1">
-                                                {new Date(payment.created_at).toLocaleDateString("en-IN", {
-                                                    day: "numeric", month: "short", year: "numeric",
-                                                })}
-                                                {" · "}
-                                                {payment.plan_period === "one_time" ? "One-time" : payment.plan_period === "annual" ? "Annual" : "Monthly"}
-                                            </div>
-                                        </div>
-                                        <div className="text-base font-bold text-ink-100">
-                                            ₹{(payment.amount / 100).toLocaleString("en-IN")}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            )}
-
-            {/* ═══════════ Security Tab ═══════════ */}
-            {activeTab === "security" && (
-                <div className="flex flex-col gap-6">
-                    <div className="glass-card p-6 sm:p-8">
-                        <h3 className="text-base font-bold text-ink-50 mb-2 flex items-center gap-2">
-                            <Lock size={16} className="text-mint-400" /> Password
-                        </h3>
-                        <p className="text-sm text-ink-400 mb-6">
-                            Change your password or set one if you signed up with Google OAuth
-                        </p>
-                        <button
-                            className="btn-secondary text-sm py-2.5 px-4 font-semibold"
-                            onClick={async () => {
-                                // Redirect to /auth/callback so the recovery code
-                                // is exchanged there and the user lands on the
-                                // update-password page (not the site root).
-                                const { error } = await supabase.auth.resetPasswordForEmail(
-                                    email,
-                                    { redirectTo: `${window.location.origin}/auth/callback` }
-                                );
-                                if (error) {
-                                    showToast("error", "Could not send the reset email. Please try again.");
-                                } else {
-                                    showToast("success", "Password reset email sent");
-                                }
-                            }}
-                        >
-                            Send Password Reset Email
-                        </button>
-                    </div>
-
-                    <div className="danger-zone p-6 sm:p-8">
-                        <h3 className="text-base font-bold text-[#ef4444] mb-2 flex items-center gap-2">
-                            <AlertTriangle size={16} /> Danger Zone
-                        </h3>
-                        <p className="text-sm text-ink-400 mb-6 leading-relaxed">
-                            Permanently delete your account and all associated data. This action is irreversible — all your jobs, clips, API keys, and settings will be permanently removed.
-                        </p>
-                        <button
-                            className="btn-secondary border-red-500/20 hover:border-red-500/35 text-[#ef4444] hover:bg-[#ef4444]/5 py-2.5 px-4 text-sm font-semibold flex items-center gap-2"
-                            onClick={() => setShowDeleteConfirm(true)}
-                        >
-                            <Trash2 size={14} /> Delete Account
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {/* ─── Save Button (visible on profile + notifications tabs) ─── */}
-            {(activeTab === "profile" || activeTab === "notifications") && (
-                <button
-                    className="btn-primary w-full py-3.5 px-6 text-sm font-bold flex items-center justify-center gap-2 shadow-lg mt-6"
-                    onClick={handleSave}
-                    disabled={saving}
-                >
-                    {saving ? <Loader2 size={18} className="animate-spin" /> : <><Save size={18} /> Save Changes</>}
-                </button>
-            )}
-
-            {/* ─── Delete Account Confirmation Modal ─── */}
-            {showDeleteConfirm && (
-                <div
-                    className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm"
-                    onClick={() => { setShowDeleteConfirm(false); setDeleteInput(""); }}
-                >
-                    <div
-                        className="glass-card p-6 sm:p-8 w-full max-w-md animate-scale-in"
-                        onClick={(e) => e.stopPropagation()}
-                    >
-                        <div className="flex items-start gap-4 mb-6">
-                            <div className="w-10 h-10 rounded-xl bg-[#ef4444]/10 flex items-center justify-center flex-shrink-0">
-                                <AlertTriangle size={20} className="text-[#ef4444]" />
-                            </div>
-                            <div>
-                                <h3 className="text-lg font-bold text-[#ef4444]">Delete Account</h3>
-                                <p className="text-xs text-ink-400 mt-1">This cannot be undone</p>
-                            </div>
-                        </div>
-
-                        <div className="p-4 rounded-xl bg-[#ef4444]/5 border border-[#ef4444]/15 mb-5">
-                            <p className="text-sm text-ink-200 leading-relaxed">
-                                All your data will be permanently deleted including jobs, clips, API keys, and settings.
-                            </p>
-                        </div>
-
-                        <label className="block text-xs font-semibold text-ink-400 uppercase tracking-wider mb-2">
-                            Type <strong className="text-[#ef4444]">DELETE</strong> to confirm
-                        </label>
-                        <input
-                            type="text"
-                            value={deleteInput}
-                            onChange={(e) => setDeleteInput(e.target.value)}
-                            placeholder="DELETE"
-                            className="input-field mb-6"
-                        />
-
-                        <div className="flex gap-3">
-                            <button
-                                className="btn-secondary flex-1 justify-center py-2.5 font-semibold text-sm"
-                                onClick={() => { setShowDeleteConfirm(false); setDeleteInput(""); }}
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                className="btn-primary bg-[#ef4444] hover:bg-[#dc2626] border-[#ef4444] hover:border-[#dc2626] flex-1 justify-center py-2.5 font-semibold text-sm flex items-center gap-2"
-                                disabled={deleteInput !== "DELETE" || deleting}
-                                onClick={handleDeleteAccount}
-                                style={{ opacity: deleteInput === "DELETE" ? 1 : 0.4 }}
-                            >
-                                {deleting ? <Loader2 size={14} className="animate-spin" /> : <><Trash2 size={14} /> Delete Account</>}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
-    );
+    </div>;
 }
