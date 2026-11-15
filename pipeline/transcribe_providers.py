@@ -168,7 +168,7 @@ def _transcribe_groq(path: str, offset_s: float, language: str | None) -> tuple[
             # noticeably fewer misspelled names/brand terms than a bare call,
             # and temperature=0 keeps chunk-to-chunk vocabulary consistent.
             form["temperature"] = "0"
-            form["initial_prompt"] = (
+            form["prompt"] = (
                 "Podcast, vlog or lecture speech. Keep person names, brand names "
                 "and technical terms exactly as spoken. Romanised Hindi words are "
                 "written the way they are typed on social media."

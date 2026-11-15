@@ -34,13 +34,15 @@ def test_context_block_is_empty_without_data_and_carries_the_brief():
 
 
 # ── llm provider chain ───────────────────────────────────────────────────
-def test_nim_is_first_and_groq_override_is_deduplicated(monkeypatch):
+def test_groq_is_first_and_groq_override_is_deduplicated(monkeypatch):
+    # Post-mortem: Groq answered every transliteration batch while the NIM head
+    # model 404'd and glm-5.3-flash timed out — Groq-first is the default now.
     monkeypatch.setenv("NVIDIA_NIM_API_KEY", "nim-key")
     monkeypatch.setenv("GROQ_API_KEY", "groq-key")
     monkeypatch.setenv("CLIPMINT_LLM_MODEL", llm.GROQ_MODELS[1])
     chain = llm._providers()
-    assert [c[0] for c in chain] == ["nim", "groq"]
-    groq_models = chain[1][3]
+    assert [c[0] for c in chain] == ["groq", "nim"]
+    groq_models = chain[0][3]
     assert groq_models[0] == llm.GROQ_MODELS[1]
     assert len(groq_models) == len(set(groq_models))
 

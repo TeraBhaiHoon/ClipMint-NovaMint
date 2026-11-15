@@ -163,7 +163,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg imagemagick rclone fonts-dejavu-core
-          pip install -q -U yt-dlp requests
+          pip install -q -U "yt-dlp[default]" requests
           # Deno is required by yt-dlp to solve YouTube's n-signature challenge.
           curl -fsSL https://deno.land/install.sh | sh
           echo "$HOME/.deno/bin" >> "$GITHUB_PATH"
@@ -245,6 +245,7 @@ jobs:
       # checkpoint (too large), so a resumed run re-fetches it here; everything
       # from audio extraction through viral detection is then skipped.
       - name: Resolve checkpoint
+        timeout-minutes: 50
         id: resolve
         env:
           JOB_ID: ${{ inputs.job_id }}
@@ -289,47 +290,11 @@ jobs:
                   workspace/clips/viral_moments.json
             exit 0
           fi
+          touch workspace/audio/silences.txt
           echo "resume: captions restored ($(wc -c < workspace/audio/full_captions.json) bytes), viral_ready=$VIRAL_READY"
 
           if [ ! -s workspace/source/source.mp4 ]; then
-            # WARP egress is the PRIMARY download path for the whole pipeline:
-            # YouTube bot-checks GitHub's datacenter IPs outright, cookies or
-            # not — Cloudflare WARP passes (probe run 38435053338). There is
-            # no cookies path any more.
-            if bash scripts/warp-egress.sh up; then
-              trap 'bash scripts/warp-egress.sh down || true' EXIT
-            else
-              echo "warp: unavailable — continuing on the runner's own IP"
-            fi
-            FETCHED=0
-            ATTEMPTS=(
-              "--extractor-args youtube:player_client=default,tv,web_safari"
-              ""
-            )
-            for i in "${!ATTEMPTS[@]}"; do
-              EXTRA="${ATTEMPTS[$i]}"
-              echo "── resume source fetch attempt $((i + 1))/${#ATTEMPTS[@]} ──"
-              # shellcheck disable=SC2086
-              if yt-dlp \
-                  --js-runtimes deno \
-                  --remote-components ejs:github \
-                  --retries 5 --fragment-retries 5 --retry-sleep 3 \
-                  --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
-                  --merge-output-format mp4 \
-                  --output "workspace/source/source.%(ext)s" \
-                  --no-playlist --socket-timeout 60 \
-                  --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-                  --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
-                  $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp_resume.log; then
-                if [ -s workspace/source/source.mp4 ]; then FETCHED=1; break; fi
-              fi
-              rm -f workspace/source/source.*
-            done
-            if [ "$FETCHED" -ne 1 ]; then
-              echo "RESUME_SOURCE_FAILED: the source video could not be re-downloaded for the resumed run"
-              tail -15 /tmp/ytdlp_resume.log || true
-              exit 1
-            fi
+            python3 pipeline/download_source.py --url "$VIDEO_URL"
           fi
 
           SIZE=$(stat --printf='%s' workspace/source/source.mp4)
@@ -352,6 +317,7 @@ jobs:
         run: python3 pipeline/db.py set-status --job-id "${{ inputs.job_id }}" --status downloading --progress 5
 
       - name: Download source video
+        timeout-minutes: 50
         id: download
         if: steps.resolve.outputs.resumed != 'true'
         env:
@@ -365,107 +331,9 @@ jobs:
 
           echo "host: $(echo "$VIDEO_URL" | cut -d/ -f3)"
 
-          # YouTube's datacenter-IP bot checks are an IP problem, not a client
-          # or session problem (probe 38435053338: every player client and
-          # every cookie state fails from a GitHub runner). WARP egress is the
-          # fix and it is the PRIMARY download path — cookies are no longer
-          # used anywhere. Client variants below stay as cheap resilience
-          # against client-specific playback issues.
-          ATTEMPTS=(
-            "--extractor-args youtube:player_client=default,tv,web_safari"
-            "--extractor-args youtube:player_client=web_safari,tv_embedded"
-            "--extractor-args youtube:player_client=android_vr"
-            ""
-          )
-
-          DOWNLOADED=0
-
-          # Direct media URLs (Supabase signed upload links, plain MP4 links)
-          # are fetched with curl: yt-dlp's generic extractor adds nothing,
-          # plain HTTP is faster, and these hosts do not bot-check.
-          URL_PATH="${VIDEO_URL%%?*}"
-          case "${URL_PATH,,}" in
-            *.mp4|*.mov|*.m4v|*.webm|*.mkv|*.avi|*.flv|*.3gp|*.mpg|*.mpeg)
-              echo "direct media URL -- fetching with curl"
-              if curl -fsSL --retry 3 --retry-delay 2 --max-time 1800 \
-                   -o workspace/source/source.mp4 "$VIDEO_URL"; then
-                # A direct link can "download successfully" and still not be
-                # video (an error page, an HTML redirect target). Detect that
-                # here and fall through to yt-dlp instead of hard-failing the
-                # job at the duration check below.
-                CURL_GOOD=0
-                CURL_DUR=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 \
-                  workspace/source/source.mp4 2>/dev/null || true)
-                if python3 -c "import sys; sys.exit(0 if float('${CURL_DUR:-0}' or 0) >= 5 else 1)" 2>/dev/null; then
-                  CURL_GOOD=1
-                fi
-                if [ "$CURL_GOOD" = 1 ]; then
-                  DOWNLOADED=1
-                  echo "direct download ok: $(stat --printf='%s' workspace/source/source.mp4) bytes, ${CURL_DUR}s"
-                else
-                  rm -f workspace/source/source.mp4
-                  echo "direct download produced no valid video -- falling back to yt-dlp"
-                fi
-              else
-                rm -f workspace/source/source.mp4
-                echo "direct download failed -- falling back to yt-dlp"
-              fi
-              ;;
-          esac
-
-          WARP_UP=0
-          if [ "$DOWNLOADED" -ne 1 ]; then
-          # PRIMARY egress: every yt-dlp download runs through Cloudflare
-          # WARP before the first attempt. There is no cookies path and no
-          # fallback ordering — raw GitHub IPs are bot-checked outright.
-          if bash scripts/warp-egress.sh up; then
-            WARP_UP=1
-            trap 'bash scripts/warp-egress.sh down || true' EXIT
-          else
-            echo "warp: unavailable — continuing on the runner's own IP"
-          fi
-          for i in "${!ATTEMPTS[@]}"; do
-            EXTRA="${ATTEMPTS[$i]}"
-            echo "── download attempt $((i + 1))/${#ATTEMPTS[@]} ${EXTRA:-generic} ──"
-            # shellcheck disable=SC2086
-            if yt-dlp \
-                --js-runtimes deno \
-                --remote-components ejs:github \
-                --retries 5 --fragment-retries 5 --retry-sleep 3 \
-                --format "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best" \
-                --merge-output-format mp4 \
-                --output "workspace/source/source.%(ext)s" \
-                --no-playlist --socket-timeout 60 \
-                --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
-                --sleep-requests 1 --min-sleep-interval 1 --max-sleep-interval 3 \
-                $EXTRA "$VIDEO_URL" 2>&1 | tee /tmp/ytdlp.log; then
-              if [ -s workspace/source/source.mp4 ]; then DOWNLOADED=1; break; fi
-            fi
-            echo "attempt $((i + 1)) failed"
-            rm -f workspace/source/source.*
-          done
-          fi
-
-          if [ "$DOWNLOADED" -ne 1 ]; then
-            echo "════════ DOWNLOAD DIAGNOSIS ════════"
-            if [ "$WARP_UP" -ne 1 ]; then
-              echo "WARP_UNAVAILABLE — Cloudflare WARP egress did not come up, and the"
-              echo "  download failed on the runner's own IP. Retry the job; if it keeps"
-              echo "  failing run .github/workflows/probe-yt-egress.yml to check egress health."
-            fi
-            if grep -qi "sign in to confirm\|not a bot" /tmp/ytdlp.log; then
-              echo "YOUTUBE_BOT_CHECK — YouTube rejected the request as automated."
-              echo "  WARP egress did not clear it — YouTube may now be checking WARP IPs."
-              echo "  Re-run probe-yt-egress.yml to confirm, then retry or use direct upload."
-            elif grep -qi "Unsupported URL" /tmp/ytdlp.log; then
-              echo "UNSUPPORTED_URL — this host is not supported."
-              echo "  Supported: YouTube, Instagram, Facebook, Vimeo, Google Drive, direct video file."
-            elif grep -qi "Private video\|members-only\|age" /tmp/ytdlp.log; then
-              echo "ACCESS_DENIED — the video is private, members-only or age-restricted."
-            fi
-            tail -25 /tmp/ytdlp.log
-            exit 1
-          fi
+          # Normal processing and checkpoint retries share one tested path.
+          # YouTube requires WARP; direct-media/Drive links do not use cookies.
+          python3 pipeline/download_source.py --url "$VIDEO_URL"
 
           SIZE=$(stat --printf='%s' workspace/source/source.mp4)
           DURATION=$(ffprobe -v quiet -show_entries format=duration -of csv=p=0 workspace/source/source.mp4 || echo 0)
@@ -499,11 +367,10 @@ jobs:
           else:
               raw = {}
               try:
-                  dump = subprocess.run(
-                      ["yt-dlp", "--dump-json", "--no-playlist", url],
-                      capture_output=True, text=True, timeout=180)
-                  if dump.returncode == 0 and dump.stdout.strip():
-                      raw = json.loads(dump.stdout.strip().splitlines()[0])
+                  from pathlib import Path
+                  info = Path("workspace/source/source.info.json")
+                  if info.is_file():
+                      raw = json.loads(info.read_text(encoding="utf-8"))
               except Exception as exc:  # noqa: BLE001 — best effort only
                   print(f"metadata: dump failed ({exc}) — continuing without it")
               if raw:
@@ -561,6 +428,7 @@ jobs:
       # 5. Transcription — provider chain Groq → Deepgram → NIM (BUILD 1)
       # ─────────────────────────────────────────────────────────────────────
       - name: Transcribe audio
+        timeout-minutes: 45
         if: steps.resolve.outputs.resumed != 'true'
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -725,84 +593,59 @@ jobs:
           print(f"TRANSCRIBE_OK words={len(cleaned)} language={detected}")
           PY
 
+      - name: Save raw transcription checkpoint
+        timeout-minutes: 3
+        if: steps.resolve.outputs.resumed != 'true'
+        continue-on-error: true
+        env:
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          JOB_ID: ${{ inputs.job_id }}
+        run: |
+          set -euo pipefail
+          REMOTE=$(rclone listremotes | head -1 | tr -d ':')
+          BASE="ClipMint/${JOB_ID}/_checkpoints"
+          for f in full_captions.json detected_language.txt; do
+            rclone copy "workspace/audio/$f" "${REMOTE}:${BASE}/" \
+              --drive-root-folder-id="$GDRIVE_FOLDER_ID" --stats-one-line
+          done
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          sys.path.insert(0, "pipeline")
+          from db import Supabase
+
+          job_id = os.environ["JOB_ID"]
+          folder_id = os.environ["GDRIVE_FOLDER_ID"]
+          remote = subprocess.run(["rclone", "listremotes"], capture_output=True,
+                                  text=True).stdout.split(":")[0].strip()
+          listing = subprocess.run(
+              ["rclone", "lsjson", f"{remote}:ClipMint/{job_id}/_checkpoints/full_captions.json",
+               f"--drive-root-folder-id={folder_id}"],
+              capture_output=True, text=True)
+          fid = ""
+          try:
+              rows = json.loads(listing.stdout or "[]")
+              fid = rows[0].get("ID", "") if rows else ""
+          except (ValueError, IndexError, AttributeError):
+              pass
+          if fid:
+              Supabase().set_checkpoint_url(job_id, f"https://drive.google.com/file/d/{fid}/view")
+              print("CHECKPOINT_OK raw captions checkpoint recorded in jobs.checkpoint_url")
+          else:
+              print("WARNING: checkpoint uploaded but file id not resolved — resume stays unavailable")
+          PY
+
       # ─────────────────────────────────────────────────────────────────────
-      # 6. Hinglish transliteration — via pipeline/llm.py (BUILD 2)
+      # 6. Hinglish transliteration — bounded optional language cleanup
       # ─────────────────────────────────────────────────────────────────────
       - name: Transliterate Devanagari to Hinglish
-        if: steps.resolve.outputs.resumed != 'true'
+        timeout-minutes: 5
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
           echo "transliterate" > workspace/.current_step
-          python3 - <<'PY'
-          import json, os, re, sys
-
-          sys.path.insert(0, "pipeline")
-          from llm import ask
-
-          captions = json.load(open("workspace/audio/full_captions.json"))
-          devanagari = re.compile(r"[\u0900-\u097F]")
-          targets = [i for i, c in enumerate(captions) if devanagari.search(c["text"])]
-
-          if not targets:
-              print("no Devanagari text — nothing to transliterate")
-              sys.exit(0)
-
-          print(f"{len(targets)} of {len(captions)} words are Devanagari")
-          BATCH = 60
-          failed_batches = 0
-
-          for start in range(0, len(targets), BATCH):
-              group = targets[start:start + BATCH]
-              enriched = "\n".join(
-                  f'{n + 1}. "{captions[i]["text"]}" (context: '
-                  f'{" ".join(c["text"] for c in captions[max(0, i - 2):i + 3])})'
-                  for n, i in enumerate(group)
-              )
-              prompt = (
-                  "Convert these Hindi (Devanagari) words to natural Hinglish "
-                  "(romanised Hindi as Indians actually type it).\n"
-                  "Rules: do not translate to English; keep Latin-script words exactly "
-                  "as they are; use the context to pick the right romanisation; "
-                  'return ONLY JSON {"words": [...]} in the same order.\n\n'
-                  f"Words:\n{enriched}"
-              )
-              values = None
-              # ask() already retries transient failures across both providers;
-              # this loop only re-rolls malformed/short responses.
-              for attempt in range(3):
-                  try:
-                      content = ask(
-                          prompt,
-                          system="You romanise Hindi to natural Hinglish. Return only JSON.",
-                          is_json=True, max_tokens=3000,
-                      )
-                      parsed = json.loads(content)
-                      out = parsed.get("words") if isinstance(parsed, dict) else parsed
-                      if isinstance(out, list) and len(out) == len(group):
-                          values = [str(v).strip() for v in out]
-                          break
-                      print(f"  length mismatch ({len(out) if isinstance(out, list) else 'non-list'} vs {len(group)}); retrying")
-                  except RuntimeError as exc:
-                      # Every provider failed for this batch: keep the job alive
-                      # and ship the un-romanised words rather than failing.
-                      print(f"  batch failed ({exc}); continuing with original text")
-                      break
-                  except Exception as exc:  # noqa: BLE001
-                      print(f"  error: {exc}")
-              if values is None:
-                  failed_batches += 1
-                  continue
-              for idx, value in zip(group, values):
-                  if value:
-                      captions[idx]["text"] = value
-
-          json.dump(captions, open("workspace/audio/full_captions.json", "w"))
-          remaining = sum(1 for c in captions if devanagari.search(c["text"]))
-          print(f"TRANSLITERATE_OK remaining_devanagari={remaining} failed_batches={failed_batches}")
-          PY
+          python3 pipeline/transliterate.py workspace/audio/full_captions.json --budget-seconds 180
 
       # ─────────────────────────────────────────────────────────────────────
       # 7. Audio analysis
@@ -850,6 +693,7 @@ jobs:
       # 8. Checkpoints (backlog 4.2) — best-effort uploads, never gates
       # ─────────────────────────────────────────────────────────────────────
       - name: Upload transcription checkpoint
+        timeout-minutes: 3
         if: steps.resolve.outputs.resumed != 'true'
         continue-on-error: true
         env:
@@ -1376,6 +1220,18 @@ jobs:
           echo "shard_count=$SHARD_COUNT" >> "$GITHUB_OUTPUT"
           echo "shards=$(python3 -c "import json; print(json.dumps(list(range(max(1, min(15, len(json.load(open('workspace/clips/clips_manifest.json')))))))))")" >> "$GITHUB_OUTPUT"
 
+      - name: Upload processing diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: process-diagnostics
+          path: |
+            workspace/.current_step
+            workspace/source/download.log
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: ignore
+
       - name: Upload render inputs
         uses: actions/upload-artifact@v4
         with:
@@ -1524,11 +1380,19 @@ jobs:
           rclone listremotes
 
       - name: Download render inputs
-        if: always()
+        if: needs.process.result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: render-inputs
           path: workspace-downloaded
+
+      - name: Download processing diagnostics
+        if: always() && needs.process.result != 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: process-diagnostics
+          path: process-diagnostics
 
       - name: Determine outcome
         if: always()
@@ -1547,7 +1411,8 @@ jobs:
             echo "CURRENT_STEP=finalize" >> "$GITHUB_ENV"
           elif [ "$PROCESS_RESULT" != "success" ]; then
             echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
-            echo "CURRENT_STEP=process" >> "$GITHUB_ENV"
+            STEP="$(cat process-diagnostics/.current_step 2>/dev/null || echo process)"
+            echo "CURRENT_STEP=$STEP" >> "$GITHUB_ENV"
           else
             echo "OVERALL_STATUS=failed" >> "$GITHUB_ENV"
             echo "CURRENT_STEP=render_captions" >> "$GITHUB_ENV"
@@ -2121,7 +1986,7 @@ jobs:
         if: always()
         env:
           JOB_ID: ${{ inputs.job_id }}
-          JOB_STATUS: ${{ env.OVERALL_STATUS }}
+          JOB_STATUS: ${{ failure() && 'failed' || env.OVERALL_STATUS }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -2132,7 +1997,7 @@ jobs:
             cancelled) export EMAIL_STATUS="cancelled"; export ERROR_MSG="Processing was cancelled." ;;
             *)         export EMAIL_STATUS="failed";    export ERROR_MSG="Video processing failed. Please try again." ;;
           esac
-          export CURRENT_STEP="$(cat workspace/.current_step 2>/dev/null || echo unknown)"
+          export CURRENT_STEP="$(cat workspace/.current_step 2>/dev/null || echo "${CURRENT_STEP:-unknown}")"
 
           if [ -n "${DASHBOARD_URL:-}" ] && [ -n "${WEBHOOK_SECRET:-}" ]; then
             python3 - <<'PY'
@@ -2183,14 +2048,14 @@ jobs:
         # always() is REQUIRED: a step if without a status function gets an
         # implicit success() &&, which is false after any failed step — the
         # exact situation this step exists for.
-        if: always() && env.OVERALL_STATUS == 'failed'
+        if: always() && (env.OVERALL_STATUS == 'failed' || failure())
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           JOB_ID: ${{ inputs.job_id }}
         run: |
           set -uo pipefail
-          STEP="${CURRENT_STEP:-render_captions}"
+          STEP="$(cat workspace/.current_step 2>/dev/null || echo "${CURRENT_STEP:-render_captions}")"
           export STEP
 
           # Translate the internal stage name into something the customer can act on.
