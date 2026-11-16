@@ -93,16 +93,27 @@ Remaining findings need careful classification:
 - Draft choices reset on navigation by implementation. They are stored on project creation, not autosaved during configuration. The wording was misleading; the local follow-up clarifies it.
 - Read-only live SQL confirms both referenced jobs belong to the QA account. Failed job `bf21a0ba-3f9d-4b30-80a0-47997acc294c` has **no checkpoint**, so its resume/fresh selector is intentionally absent. A separate checkpoint-bearing fixture is needed to verify that selector without modifying production data or submitting a retry.
 
-Source-backed repairs now exist locally (not yet published): complete logical load deadlines, independent optional thumbnail loading, effect-scoped cancellation/late-response isolation, auth-event invalidation outside the SDK callback, bounded optional rollover with unavailable-usage guards, scoped retry response handling without automatic POST replay, visible saved reading pace, and honest draft-save wording. Design: `specs/bounded_dashboard_loading_design.md`.
+The bounded-loading follow-up is now published and deployed (release evidence below): complete logical load deadlines, independent optional thumbnail loading, effect-scoped cancellation/late-response isolation, auth-event invalidation outside the SDK callback, bounded optional rollover with unavailable-usage guards, scoped retry response handling without automatic POST replay, visible saved reading pace, and honest draft-save wording. Design: `specs/bounded_dashboard_loading_design.md`.
 
 New component tests execute the actual TSX loaders with mocked hooks/Supabase/fetch and fake clocks. They cover stalled auth/query/rollover/payments, retry recovery, thumbnails not hiding detail, late account/job results, obsolete realtime callbacks, retry/save/password A not changing B, uncertain mutation acceptance without replay, and creation disabled while usage is unavailable. They do **not** use a real browser or substitute for live deployment/interaction proof.
 
 Final integrated local gates after the settings continuation repair: **43 loading/helper/component tests**, **14 dashboard tests**, **8 homepage tests** and **37 API/gateway quota tests passed**; full dashboard ESLint passed with **0 errors and 10 existing warnings**; production build passed. All ten workflows passed the workflow checker. The earlier lint attempt failed on a new harness variable named `module`; it was corrected to `compiledModule` before this final passing run. These results concern local follow-up code, not a new production deployment.
 
-## Current blockers — 2026-11-16
+## Approved loading follow-up publication — 2026-11-16
+
+The user explicitly approved publication after pausing the broader goal. Commit `34d00ff2323d258bf8e818613ee236feddf913f7` was pushed to processing `main`. Website sync `43795329920` succeeded and produced mirror commit `4add79a82981e3dfad073f6c4d4d8a3e35e087f7`, whose commit message identifies `34d00ff`.
+
+- Remote Quality checks `43795329906`: **all three jobs passed**, including dashboard loading regressions, TypeScript, ESLint, quota SQL transaction tests and production build.
+- Vercel production deployment `dpl_BdTzaLnN6SvDZZvBfgc27qwwRCGA`: **READY**, source mirror SHA `4add79a82981e3dfad073f6c4d4d8a3e35e087f7`, alias `clipmint.novamintnetworks.in` assigned without alias error; domain ownership verified.
+- Live HTTP checks: homepage **200**; Hindi Hormozi preview **200 image/webp**; unauthenticated `POST /api/jobs` **401 Unauthorized**; unauthenticated reconciliation **401**. `GET /api/jobs` is **405 Method Not Allowed**, not the job-creation auth test.
+- Final local pre-publication checks repeated: **43 loading + 14 dashboard + 8 homepage + 37 quota API/gateway tests passed**, production build passed, **0 lint errors / 10 existing warnings**.
+
+This completes the authorized publication and deployment verification. It does not establish a post-release authenticated browser pass: the separate browser permission remains unresolved. No new database migration, quota correction, processing run, password email or payment action was performed. The broader goal stays paused; independent-reference speech accuracy remains unmeasured.
+
+## Remaining verification — broader goal paused
 
 - A bounded browser follow-up was sent to the existing alternate session. Its exact operation returned `needs_attention` with `attention.kind=approval`, revision 18928. The original operation is completed, but the new follow-up requires the user's permission decision. No assistant approval or bypass occurred; the way the original pending request resolved was not observed, so no human approval is invented.
-- The user explicitly approved publication of the tested loading/account-isolation follow-up on 2026-11-16 after pausing the broader goal. This authorizes committing/pushing the reviewed fixes and verifying the deployment only; it does not resume the paused goal, approve the separate browser permission, or authorize another processing run. Deployment verification is still pending at the time of this pre-release note.
+- Publication approval covered only committing/pushing the reviewed loading/account-isolation fixes and verifying the deployment. It did not resume the paused goal, approve the separate browser permission, or authorize another processing run.
 - No verified independent transcript of the exact 18-second QA sample is available. Provider confidence, its own ASR output and script/timing validity cannot substitute for human/creator ground truth. No numerical speech accuracy score is claimed.
 
 ## Release constraints / honesty
