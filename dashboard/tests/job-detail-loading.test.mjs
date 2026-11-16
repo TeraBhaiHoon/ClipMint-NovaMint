@@ -4,7 +4,8 @@ import { createComponentHarness, createSupabaseMock, deferred } from "./helpers/
 
 const job = (id = "job-a", extra = {}) => ({ id, user_id: "a", status: "failed", progress: 65, created_at: "2026-11-15T10:00:00Z", updated_at: "2026-11-15T10:00:00Z", caption_style: "hormozi", caption_pace: "balanced", source_language: "hi", caption_language: "original", job_mode: "clips", max_clips: 5, checkpoint_url: null, ...extra });
 const context = () => ({ account: { id: "a", email: "a@example.test" }, profile: null, loading: false, usageReady: true, refreshProfile: async () => {} });
-const detail = (supabase, dashboard, id = "job-a") => createComponentHarness("src/app/dashboard/[jobId]/page.tsx", {
+const detail = (supabase, dashboard, id = "job-a", freezeAnimationFrames = false) => createComponentHarness("src/app/dashboard/[jobId]/page.tsx", {
+    freezeAnimationFrames,
     props: { params: { jobId: id } },
     mocks: { "@/lib/supabase": { createClient: () => supabase.client }, "../_components/dashboard-provider": { useDashboard: () => dashboard } },
 });
@@ -13,6 +14,30 @@ const button = (harness, text) => {
     return direct || harness.nodes((node) => node.props?.action?.type === "Button" && JSON.stringify(node.props.action.props.children).includes(text))[0]?.props.action;
 };
 const loading = (harness) => harness.nodes((node) => node.type === "LoadingState").length;
+
+for (const status of ["failed", "done"]) {
+    test(`detail: ${status} starts and settles with animation frames suspended`, async () => {
+        const db = createSupabaseMock({ query: ({ name }) => ({ data: name === "jobs" ? job("job-a", { status }) : [], error: null }) });
+        const harness = detail(db, context(), "job-a", true);
+        try {
+            await harness.advance(0);
+            assert.equal(db.calls.filter((call) => call.kind === "query").length, 2);
+            assert.equal(loading(harness), 0);
+            if (status === "failed") assert.equal(button(harness, "Retry processing").props.disabled, false);
+        } finally { harness.restore(); }
+    });
+}
+
+test("detail: suspended frames cannot prevent the first request timeout", async () => {
+    const db = createSupabaseMock({ query: () => new Promise(() => {}) });
+    const harness = detail(db, context(), "job-a", true);
+    try {
+        await harness.advance(15_000);
+        assert.equal(loading(harness), 0);
+        assert.match(harness.text(), /took too long/);
+        assert.ok(db.calls.filter((call) => call.kind === "query").every((call) => call.signal.aborted));
+    } finally { harness.restore(); }
+});
 
 for (const status of ["failed", "done"]) {
     test(`detail: ${status} data renders without waiting on optional thumbnails`, async () => {

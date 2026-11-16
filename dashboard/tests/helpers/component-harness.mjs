@@ -10,7 +10,7 @@ export function deferred() {
 
 // Executes the component's real hooks/loaders without a DOM or another dependency.
 // JSX is an inspectable tree; child component rendering is intentionally out of scope.
-export function createComponentHarness(path, { mocks = {}, props = {} } = {}) {
+export function createComponentHarness(path, { mocks = {}, props = {}, freezeAnimationFrames = false } = {}) {
     const slots = [];
     let cursor = 0, dirty = true, tree, now = 0, nextTimer = 0, unmounted = false;
     let currentProps = props;
@@ -37,7 +37,7 @@ export function createComponentHarness(path, { mocks = {}, props = {} } = {}) {
     patch("clearTimeout", (id) => timers.delete(id));
     patch("setInterval", (fn, delay) => addTimer(fn, delay, delay));
     patch("clearInterval", (id) => timers.delete(id));
-    patch("requestAnimationFrame", (fn) => addTimer(fn, 16));
+    patch("requestAnimationFrame", (fn) => freezeAnimationFrames ? ++nextTimer : addTimer(fn, 16));
     patch("cancelAnimationFrame", (id) => timers.delete(id));
     const same = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
     const react = {

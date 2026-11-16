@@ -9,8 +9,8 @@ const job = (id, accountId) => ({ id, user_id: accountId, source_title: id, capt
 function provider(db, router = { replace() {} }) {
     return createComponentHarness("src/app/dashboard/_components/dashboard-provider.tsx", { mocks: { "@/lib/supabase": { createClient: () => db.client }, "next/navigation": { useRouter: () => router } }, props: { children: null } });
 }
-function page(path, db, context) {
-    return createComponentHarness(`src/app/dashboard/${path}`, { mocks: {
+function page(path, db, context, freezeAnimationFrames = false) {
+    return createComponentHarness(`src/app/dashboard/${path}`, { freezeAnimationFrames, mocks: {
         "@/lib/supabase": { createClient: () => db.client },
         "./_components/dashboard-provider": { useDashboard: () => context.value },
         "../_components/dashboard-provider": { useDashboard: () => context.value },
@@ -44,6 +44,34 @@ const saveButton = (h) => h.nodes((node) => node.type === "Button" && node.props
 const resetButton = (h) => h.nodes((node) => node.type === "Button" && (node.props.children === "Email sent" || Array.isArray(node.props.children) && node.props.children.some((child) => child === "Send reset email" || child === "Email sent")))[0];
 const submit = (h) => h.nodes((node) => node.type === "form")[0].props.onSubmit({ preventDefault() {} });
 const editName = (h, value) => h.nodes((node) => node.props?.id === "full-name")[0].props.onChange({ target: { value } });
+
+test("settings initialize without an animation frame and do not mask account errors", async () => {
+    const db = mutationDb();
+    const context = settingsContext("a");
+    const h = page("settings/page.tsx", db, context, true);
+    try {
+        await h.advance(0);
+        assert.equal(h.nodes((node) => node.type === "LoadingState").length, 0);
+        assert.equal(h.nodes((node) => node.props?.id === "full-name")[0].props.value, "a");
+        context.value = { ...context.value, account: user("b"), profile: profile("b"), error: "unavailable" };
+        h.rerender();
+        assert.equal(h.nodes((node) => node.type === "LoadingState").length, 0);
+        assert.match(h.text(), /Account settings are temporarily unavailable/);
+    } finally { h.restore(); }
+});
+
+test("settings suspended-frame initialization cannot publish old account fields", async () => {
+    const db = mutationDb();
+    const context = settingsContext("a");
+    const h = page("settings/page.tsx", db, context, true);
+    try {
+        context.value = { ...context.value, account: user("b"), profile: profile("b") };
+        h.rerender();
+        await h.advance(0);
+        assert.equal(h.nodes((node) => node.props?.id === "full-name")[0].props.value, "b");
+        assert.equal(h.nodes((node) => node.type === "LoadingState").length, 0);
+    } finally { h.restore(); }
+});
 
 test("settings save A cannot publish success, local preference or refresh on B", async () => {
     const pending = deferred();

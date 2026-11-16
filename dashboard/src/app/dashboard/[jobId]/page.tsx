@@ -109,10 +109,10 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
         thumbnailScope.current = thumbnails;
         currentStatus.current = null;
         lastLinks.current = 0;
-        const frame = requestAnimationFrame(() => {
+        const initialLoad = setTimeout(() => {
             setLoading(true); setError(null); setJob(null); setClips([]); setMediaLinks({}); setPreview(null); setActionError(null); setRetrying(false); setResumeRetry(true);
             void load();
-        });
+        }, 0);
         const refreshWhenVisible = () => { if (document.visibilityState === "visible") void load(); };
         const timer = setInterval(() => { if (currentStatus.current && isJobRunning(currentStatus.current)) refreshWhenVisible(); }, 4000);
         window.addEventListener("focus", refreshWhenVisible);
@@ -123,7 +123,7 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             if (retryScope.current === retry) retryScope.current = null;
             if (scope.current === request) { scope.current = null; loadIdentity.current = null; }
             if (thumbnailScope.current === thumbnails) thumbnailScope.current = null;
-            cancelAnimationFrame(frame); clearInterval(timer);
+            clearTimeout(initialLoad); clearInterval(timer);
             window.removeEventListener("focus", refreshWhenVisible);
             document.removeEventListener("visibilitychange", refreshWhenVisible);
             void supabase.removeChannel(channel);

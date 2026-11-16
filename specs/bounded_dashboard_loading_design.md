@@ -23,6 +23,14 @@ Source-backed gaps: core dashboard loads have no logical deadline; job detail aw
 - Generic customer-facing errors only; no provider keys or raw database error leakage.
 - No processing submissions, customer clip overwrite, payment, email or permission approval in browser checks.
 
+## Frame-gate follow-up — 2026-11-16
+
+Post-release browser acceptance showed detail/settings skeletons persisting beyond the logical request deadline. Independent QA HTTP requests returned in under one second; this does not diagnose browser transport. A read-only actual React/ReactDOM reproduction, with synthetic host nodes and animation frames withheld, proved detail's initial query never starts and settings never marks profile initialization complete. Routine same-account refreshes did not reset the deadline in that reproduction.
+
+The follow-up replaces data-initialization frame callbacks with cancellable zero-delay timers, preserving account/job ownership and scope cleanup. Account errors take precedence over the settings initialization skeleton. Five regression checks with withheld frames cover failed/done initial loads, stalled-request timeout, settings initialization/error visibility and cancellation of old-account initialization. The tracked tests use the existing mocked-hook harness; they are not browser/React-hydration acceptance. The independent actual React reproduction was diagnostic, not a saved integration suite.
+
+No deployed frame-suspension cause is asserted. Native library activation and any pre-client middleware/RSC delay remain separate unverified paths. Publication and authenticated browser acceptance must be recorded independently from local passing tests.
+
 ## Acceptance and limits
 
 A stalled logical load must exit its initial skeleton within the chosen deadline and expose retry. Job details must render when thumbnail fetch stalls. Account/job A responses must not update B. Authenticated library link activation remains unverified until actual browser follow-up, not declared fixed from JSX. An independent transcript is still needed for numerical speech accuracy. Local code changes are not proof of a deployed fix; report publication and browser checks separately.

@@ -80,7 +80,7 @@ export default function SettingsPage() {
     useEffect(() => {
         const accountId = account?.id;
         if (!accountId || !profile || profile.id !== accountId || initialized === profile.id) return;
-        const frame = requestAnimationFrame(() => {
+        const initialize = setTimeout(() => {
             setFullName(profile.full_name || "");
             setStyle(readCaptionPreference(profile.id));
             setWebhook(profile.discord_webhook_url || "");
@@ -92,8 +92,8 @@ export default function SettingsPage() {
                 notify_weekly_report: profile.notify_weekly_report ?? false,
             });
             setInitialized(profile.id);
-        });
-        return () => cancelAnimationFrame(frame);
+        }, 0);
+        return () => clearTimeout(initialize);
     }, [account?.id, initialized, profile]);
 
     useEffect(() => {
@@ -190,7 +190,7 @@ export default function SettingsPage() {
             }}>{TABS.map((item) => <button key={item.key} id={`settings-tab-${item.key}`} type="button" role="tab" aria-selected={tab === item.key} aria-controls={`settings-panel-${item.key}`} tabIndex={tab === item.key ? 0 : -1} onClick={() => changeTab(item.key)}><item.icon size={18} aria-hidden="true" />{item.label}</button>)}</div>
             <div className="studio-settings-content" id={`settings-panel-${tab}`} role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>
                 {message && <Notice tone={message.tone}>{message.text}</Notice>}
-                {loading || (account && profile?.id === account.id && initialized !== profile.id) ? <div className="studio-panel"><LoadingState label="Loading account settings" /></div> : !account || !profile || profile.id !== account.id || accountError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Try again</Button>}>Account settings are temporarily unavailable.</Notice> : <>
+                {!accountError && (loading || (account && profile?.id === account.id && initialized !== profile.id)) ? <div className="studio-panel"><LoadingState label="Loading account settings" /></div> : !account || !profile || profile.id !== account.id || accountError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Try again</Button>}>Account settings are temporarily unavailable.</Notice> : <>
                     {editable && <form onSubmit={save} className="studio-stack">
                         <fieldset disabled={saving} className="studio-settings-fields">
                             {tab === "profile" ? <>

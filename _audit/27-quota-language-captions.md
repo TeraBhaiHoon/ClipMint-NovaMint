@@ -116,6 +116,28 @@ This completes the authorized publication and deployment verification. It does n
 - Publication approval covered only committing/pushing the reviewed loading/account-isolation fixes and verifying the deployment. It did not resume the paused goal, approve the separate browser permission, or authorize another processing run.
 - No verified independent transcript of the exact 18-second QA sample is available. Provider confidence, its own ASR output and script/timing validity cannot substitute for human/creator ground truth. No numerical speech accuracy score is claimed.
 
+## Post-release failure and frame-gate correction — 2026-11-16
+
+The new browser report `.testrun/browser-verification-deployed-loading.md` confirms the new save-copy marker was served, but failed/completed detail pages and settings still showed skeletons beyond the requested deadlines. Library activation also did not produce the expected content change. These observations **fail post-release acceptance**; the READY deployment and passing local tests do not erase that result. The report's backend-slowness attribution is not established.
+
+A separate normal authenticated QA HTTP probe returned auth 200 in 0.8s, completed-job read 200 in 0.94s, failed-job read 200 in 0.23s and profile read 200 in 0.31s. Profile usage remained 1 clip / 1 video / 0 holds. These were reads with a normal QA login, not browser cookie injection, and do not prove browser transport health.
+
+Read-only actual React 19.2.3/ReactDOM diagnostic reproduction used in-memory transpiled production components, synthetic host nodes, controlled timers and withheld animation frames. It demonstrated a source defect: detail's first request starts only inside `requestAnimationFrame`, and settings marks initialization only inside a frame. If frames do not run, no detail deadline starts and both pages can remain on skeletons. Routine same-account auth/focus refreshes did not reset a started deadline. **Frame suppression was not measured in the deployed browser**, so it is not asserted as the live root cause.
+
+A minimal further correction now exists **locally, not published**: replace detail/settings data-initialization frame callbacks with cancellable zero-delay timers, and prevent account errors from being hidden by the settings-initialization skeleton. Five withheld-frame regression checks were added. Final local checks: **48 loading + 14 dashboard + 8 homepage + 37 API/gateway tests passed (107 total)**, production build passed, **0 lint errors / 10 existing warnings**. The tracked component harness still mocks hooks, navigation and SDK; the actual React diagnostic is not a persisted browser/integration suite.
+
+The browser diagnostic operation failed, and no diagnostic report was produced; its exact failure category is unavailable. No browser-timer/hydration evidence is invented. Independent reference text for WER/CER is still absent. Publication of the further frame-gate correction and post-correction browser acceptance remain open; no processing retry, production record edit, payment or email was performed.
+
+## Direct browser verification after goal resume — 2026-11-16
+
+The user resumed the goal. The main session regained the supported browser driver and tested the locally built, unpublished frame-independent correction through normal QA login. Actual library-link activation reached the completed Hindi detail: hi/original/balanced, one created/charged clip, Completed100%. The failed-job page rendered its error, attention message and Retry button; no retry was submitted. Keyboard navigation reached billing and displayed1/5 clips and1/2 videos. Both failed QA jobs currently have no checkpoints, so resume/fresh selector absence is intentional. One pointer billing activation remained inconclusive; keyboard navigation passed.
+
+Direct comparison on production provided the missing frame evidence: a harmless timer/animation-frame probe recorded elapsed57497.4ms, timer=true,frame=false,visibility=visible, while detail remained on its skeleton and the sidebar/account had loaded. The temporary marker was removed. This supports the animation-frame dependency defect in that in-app browser observation; it does not establish one cause for every navigation or latency problem.
+
+Evidence/method notes: `.testrun/direct-browser-resumed.md`. Only the official browser driver was used, with no cookie injection, permission approval, processing submission, account save, payment or email. A screenshot was emitted but omitted from this model's image input, so no visual acceptance is claimed. **The correction remains local and unpublished**; resuming the goal did not approve another publication. Post-publication acceptance and independently referenced WER/CER remain open.
+
+The user subsequently explicitly approved publication of this frame-independent correction. This approval covers committing/deploying the reviewed correction and checking live pages only; no processing run, database mutation or browser-permission approval is included. Deployment verification is pending at this pre-release point.
+
 ## Release constraints / honesty
 
 Production balances and migration were changed only after explicit approval, as documented above. Existing rendered user clips were not overwritten. Quantitative recognition accuracy remains unmeasured: offline tests prove policy and timing behavior, and one live Hindi sample proves actual native-script delivery—not zero transcription errors. Authenticated HTTP behavior and supported-browser QA sign-in/New video navigation passed; comprehensive browser interaction/layout acceptance remains incomplete.
