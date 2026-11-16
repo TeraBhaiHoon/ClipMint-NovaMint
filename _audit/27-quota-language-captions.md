@@ -136,7 +136,16 @@ Direct comparison on production provided the missing frame evidence: a harmless 
 
 Evidence/method notes: `.testrun/direct-browser-resumed.md`. Only the official browser driver was used, with no cookie injection, permission approval, processing submission, account save, payment or email. A screenshot was emitted but omitted from this model's image input, so no visual acceptance is claimed. **The correction remains local and unpublished**; resuming the goal did not approve another publication. Post-publication acceptance and independently referenced WER/CER remain open.
 
-The user subsequently explicitly approved publication of this frame-independent correction. This approval covers committing/deploying the reviewed correction and checking live pages only; no processing run, database mutation or browser-permission approval is included. Deployment verification is pending at this pre-release point.
+## Approved frame-independent publication and live acceptance — 2026-11-16
+
+The user explicitly approved publication. Source `d84877193e8f75c95c2ffaa2aecd4c1a111a6b3f` was pushed to processing/main. Quality checks `43822512402` passed all three jobs; website sync `43822512385` produced mirror `02a15f192b2d4c3bd46206a2f3b7388d5598c2cc`. Vercel deployment `dpl_9QdUfQi78cEgBVSY7m5Bgbot8rNK` is **READY**, matches that mirror SHA and carries the production alias without alias error.
+
+Direct main-session supported-browser observations on the new production deployment:
+- Failed-job detail renders its error, attention message, saved pace/output and **Retry processing** button. No retry submitted.
+- Completed Hindi job renders **hi / original / balanced**, Completed100%, one created clip and **one clip charged**.
+- Settings/billing leaves its initialization skeleton and displays payment history. Usage initially showed the explicit unavailable state during refresh; a subsequent panel read showed **1/5 clips and 1/2 videos used**.
+
+Evidence: `.testrun/frame-independent-production-acceptance.md`. The frame-independent correction is now published and its direct live loading/rendering checks passed. Earlier failure reports are preserved as history, not current acceptance results. Back-link keyboard activation still failed to navigate in one browser attempt; internal navigation remains unresolved. Both failed QA jobs lack checkpoints, so a checkpoint-bearing resume/fresh GUI check remains uncovered. Independent-reference WER/CER remains unmeasured. No new processing run, database migration, account save, payment, password email or assistant permission approval occurred.
 
 ## Release constraints / honesty
 
