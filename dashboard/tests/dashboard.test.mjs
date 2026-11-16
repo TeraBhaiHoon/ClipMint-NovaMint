@@ -124,7 +124,7 @@ test("retry delegates admission and status changes to the server", () => {
     const page = file("src/app/dashboard/[jobId]/page.tsx");
     assert.match(page, /resume: resumeRetry && !!job.checkpoint_url/);
     assert.doesNotMatch(page, /from\("jobs"\)\.update/);
-    assert.match(page, /disabled=\{running\}/);
+    assert.match(page, /disabled=\{!usageReady \|\| running\}/);
 });
 
 test("account deletion is honest and does not pretend sign-out deletes data", () => {

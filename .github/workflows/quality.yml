@@ -102,6 +102,7 @@ jobs:
         working-directory: dashboard
         run: |
           npm run test:dashboard
+          npm run test:loading
           npm run test:homepage
           npm run test:quota
 

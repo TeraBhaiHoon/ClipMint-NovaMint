@@ -31,7 +31,7 @@ function Workspace({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const router = useRouter();
     const supabase = useMemo(() => createClient(), []);
-    const { account, profile, loading, error, refreshProfile } = useDashboard();
+    const { account, profile, loading, usageReady, error, refreshProfile } = useDashboard();
     const [collapsed, setCollapsed] = useState(false);
     const [signingOut, setSigningOut] = useState(false);
     const [signOutError, setSignOutError] = useState<string | null>(null);
@@ -74,7 +74,7 @@ function Workspace({ children }: { children: React.ReactNode }) {
                 <div className="studio-sidebar-bottom">
                     {!collapsed && <div className="studio-account-usage">
                         <div className="studio-account-usage-title"><span>Plan & usage</span>{profile && !error && <span className="studio-plan-pill">{limits.label}</span>}</div>
-                        {loading ? <p>Loading your plan…</p> : error ? <p>Usage temporarily unavailable</p> : profile && <>
+                        {loading ? <p>Loading your plan…</p> : error || !usageReady ? <p>Usage temporarily unavailable</p> : profile && <>
                             <UsageMeter label="Clips" used={profile.clips_used || 0} limit={limits.clips} suffix="" />
                             {!!profile.clips_reserved && <p>{profile.clips_reserved} clips reserved for processing</p>}
                             <Link href="/dashboard/settings?tab=billing">Manage plan <ArrowUpRight size={14} aria-hidden="true" /></Link>

@@ -4,6 +4,7 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, Copy, Download, ExternalLink, Film, Gauge, Image as ImageIcon, Play, RefreshCw, Search, Star } from "lucide-react";
 import { createClient } from "@/lib/supabase";
+import { createLoadScope, LoadTimeoutError, type LoadScope } from "@/lib/load-scope";
 import { CAPTION_LANGUAGES, SOURCE_LANGUAGES, type Clip, type Job } from "@/lib/types";
 import { boundedPercent, captionText, clipSeconds, formatDate, formatDuration, isJobRunning, sourceLabel, videoTitle } from "@/lib/dashboard";
 import { useDashboard } from "../_components/dashboard-provider";
@@ -31,38 +32,58 @@ function ClipPreview({ clip, thumbnail, onPreview }: { clip: Clip; thumbnail?: s
 export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
     const { jobId } = use(params);
     const supabase = useMemo(() => createClient(), []);
-    const { account, loading: accountLoading, refreshProfile } = useDashboard();
-    const [job, setJob] = useState<Job | null>(null);
-    const [clips, setClips] = useState<Clip[]>([]);
+    const { account, usageReady, loading: accountLoading, refreshProfile } = useDashboard();
+    const [storedJob, setJob] = useState<Job | null>(null);
+    const [storedClips, setClips] = useState<Clip[]>([]);
+    const job = storedJob?.id === jobId && storedJob.user_id === account?.id ? storedJob : null;
+    const clips = job ? storedClips : [];
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [actionError, setActionError] = useState<string | null>(null);
     const [retrying, setRetrying] = useState(false);
     const [resumeRetry, setResumeRetry] = useState(true);
     const [copied, setCopied] = useState<string | null>(null);
-    const [preview, setPreview] = useState<Clip | null>(null);
+    const [storedPreview, setPreview] = useState<Clip | null>(null);
+    const preview = job ? storedPreview : null;
     const [previewFailed, setPreviewFailed] = useState(false);
     const [search, setSearch] = useState("");
     const [sort, setSort] = useState("order");
     const [downloadingAll, setDownloadingAll] = useState(false);
     const [mediaLinks, setMediaLinks] = useState<Record<string, { thumbnailUrl: string | null }>>({});
     const [now, setNow] = useState(() => Date.now());
-    const mounted = useRef(false);
-    const inFlight = useRef(false);
+    const scope = useRef<LoadScope | null>(null);
+    const loadIdentity = useRef<string | null>(null);
+    const retryScope = useRef<LoadScope | null>(null);
+    const thumbnailScope = useRef<LoadScope | null>(null);
     const lastLinks = useRef(0);
     const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
     const currentStatus = useRef<Job["status"] | null>(null);
+    const identity = `${account?.id || ""}:${jobId}`;
+
+    const loadThumbnails = useCallback(async (nextClips: Clip[]) => {
+        const request = thumbnailScope.current;
+        if (loadIdentity.current !== identity || !request?.active || request.busy || !nextClips.some((clip) => clip.storage_path) || Date.now() - lastLinks.current <= 30 * 60 * 1000) return;
+        lastLinks.current = Date.now();
+        try {
+            const payload = await request.run(async (signal) => {
+                const response = await fetch(`/api/clips/${jobId}/links`, { signal });
+                if (!response.ok) throw new Error("Thumbnails unavailable");
+                return await response.json();
+            });
+            if (request.active && thumbnailScope.current === request && payload?.links) setMediaLinks(payload.links);
+        } catch { /* Optional thumbnails must not block video details or retry controls. */ }
+    }, [identity, jobId]);
 
     const load = useCallback(async () => {
-        if (!account || inFlight.current) return;
-        inFlight.current = true;
+        const request = scope.current;
+        if (!account || loadIdentity.current !== identity || !request?.active || request.busy) return;
         try {
-            const [jobResponse, clipResponse] = await Promise.all([
-                supabase.from("jobs").select("*").eq("id", jobId).eq("user_id", account.id).maybeSingle(),
-                supabase.from("clips").select("*").eq("job_id", jobId).eq("user_id", account.id).order("clip_index", { ascending: true }),
-            ]);
+            const [jobResponse, clipResponse] = await request.run((signal) => Promise.all([
+                supabase.from("jobs").select("*").eq("id", jobId).eq("user_id", account.id).abortSignal(signal).maybeSingle(),
+                supabase.from("clips").select("*").eq("job_id", jobId).eq("user_id", account.id).order("clip_index", { ascending: true }).abortSignal(signal),
+            ]));
             if (jobResponse.error || clipResponse.error) throw jobResponse.error || clipResponse.error;
-            if (!mounted.current) return;
+            if (!request.active || scope.current !== request) return;
             const next = jobResponse.data as Job | null;
             const nextClips = (clipResponse.data || []) as Clip[];
             setJob(next);
@@ -70,41 +91,71 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             currentStatus.current = next?.status || null;
             setError(null);
             setNow(Date.now());
-            if (nextClips.some((clip) => clip.storage_path) && Date.now() - lastLinks.current > 30 * 60 * 1000) {
-                try {
-                    const response = await fetch(`/api/clips/${jobId}/links`);
-                    const payload = await response.json();
-                    if (response.ok && payload?.links && mounted.current) { setMediaLinks(payload.links); lastLinks.current = Date.now(); }
-                } catch { /* Missing thumbnails must not hide the video itself. */ }
-            }
-        } catch { if (mounted.current) setError("This video couldn’t be loaded. Please try again."); }
-        finally { inFlight.current = false; if (mounted.current) setLoading(false); }
-    }, [account, jobId, supabase]);
+            void loadThumbnails(nextClips);
+        } catch (cause) {
+            if (request.active && scope.current === request) setError(cause instanceof LoadTimeoutError ? "Loading this video took too long. Please try again." : "This video couldn’t be loaded. Please try again.");
+        } finally {
+            if (request.active && scope.current === request) setLoading(false);
+        }
+    }, [account, identity, jobId, loadThumbnails, supabase]);
 
     useEffect(() => {
-        mounted.current = true;
+        const request = createLoadScope();
+        const retry = createLoadScope(30_000);
+        const thumbnails = createLoadScope(10_000);
+        retryScope.current = retry;
+        scope.current = request;
+        loadIdentity.current = identity;
+        thumbnailScope.current = thumbnails;
         currentStatus.current = null;
         lastLinks.current = 0;
-        const frame = requestAnimationFrame(() => { setLoading(true); setJob(null); setClips([]); void load(); });
-        const timer = setInterval(() => { if (currentStatus.current && isJobRunning(currentStatus.current) && document.visibilityState === "visible") void load(); }, 4000);
+        const frame = requestAnimationFrame(() => {
+            setLoading(true); setError(null); setJob(null); setClips([]); setMediaLinks({}); setPreview(null); setActionError(null); setRetrying(false); setResumeRetry(true);
+            void load();
+        });
+        const refreshWhenVisible = () => { if (document.visibilityState === "visible") void load(); };
+        const timer = setInterval(() => { if (currentStatus.current && isJobRunning(currentStatus.current)) refreshWhenVisible(); }, 4000);
+        window.addEventListener("focus", refreshWhenVisible);
+        document.addEventListener("visibilitychange", refreshWhenVisible);
         const channel = supabase.channel(`workspace-job-${jobId}`).on("postgres_changes", { event: "*", schema: "public", table: "jobs", filter: `id=eq.${jobId}` }, () => { void load(); void refreshProfile(); }).on("postgres_changes", { event: "*", schema: "public", table: "clips", filter: `job_id=eq.${jobId}` }, () => void load()).subscribe();
-        return () => { mounted.current = false; cancelAnimationFrame(frame); clearInterval(timer); void supabase.removeChannel(channel); timers.current.forEach(clearTimeout); timers.current = []; };
-    }, [jobId, load, refreshProfile, supabase]);
+        return () => {
+            request.dispose(); retry.dispose(); thumbnails.dispose();
+            if (retryScope.current === retry) retryScope.current = null;
+            if (scope.current === request) { scope.current = null; loadIdentity.current = null; }
+            if (thumbnailScope.current === thumbnails) thumbnailScope.current = null;
+            cancelAnimationFrame(frame); clearInterval(timer);
+            window.removeEventListener("focus", refreshWhenVisible);
+            document.removeEventListener("visibilitychange", refreshWhenVisible);
+            void supabase.removeChannel(channel);
+            timers.current.forEach(clearTimeout); timers.current = [];
+        };
+    }, [identity, jobId, load, refreshProfile, supabase]);
 
     useEffect(() => { if (!copied) return; const timer = setTimeout(() => setCopied(null), 2200); return () => clearTimeout(timer); }, [copied]);
 
     async function retryJob() {
-        if (!job || !account || retrying) return;
+        const request = retryScope.current;
+        if (!job || !account || !usageReady || retrying || isJobRunning(job.status) || !request?.active || request.busy || loadIdentity.current !== identity) return;
+        const current = () => request.active && retryScope.current === request && loadIdentity.current === identity;
         setRetrying(true);
         setActionError(null);
         try {
-            const response = await fetch("/api/trigger-pipeline", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job_id: job.id, resume: resumeRetry && !!job.checkpoint_url }) });
-            if (!response.ok) { const payload = await response.json().catch(() => null); throw new Error(payload?.error || "Processing couldn’t restart. Please try again."); }
+            await request.run(async (signal) => {
+                const response = await fetch("/api/trigger-pipeline", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job_id: job.id, resume: resumeRetry && !!job.checkpoint_url }) });
+                if (!response.ok) { const payload = await response.json().catch(() => null); throw new Error(payload?.error || "Processing couldn’t restart. Please try again."); }
+            });
+            if (!current()) return;
             currentStatus.current = "queued";
             await load();
-            void refreshProfile();
-        } catch (cause) { setActionError(cause instanceof Error ? cause.message : "Couldn’t restart processing. Please try again."); }
-        finally { setRetrying(false); }
+            if (current()) void refreshProfile();
+        } catch (cause) {
+            if (current()) {
+                setActionError(cause instanceof LoadTimeoutError ? "The restart response took too long. Processing may have started—refresh this video before trying again." : cause instanceof Error ? cause.message : "Couldn’t restart processing. Please try again.");
+                void load();
+            }
+        } finally {
+            if (current()) setRetrying(false);
+        }
     }
 
     function download(clip: Clip, kind: "video" | "thumb" = "video") {
@@ -145,12 +196,13 @@ export default function JobDetailPage({ params }: { params: Promise<{ jobId: str
             <PageHeader eyebrow={sourceLabel(job)} title={videoTitle(job)} description={`Created ${formatDate(job.created_at, true)} · Project ${job.id.slice(0, 8)}`} actions={<Button variant="secondary" busy={downloadingAll} disabled={!availableClips.length} onClick={downloadAll}><Download size={17} aria-hidden="true" />{downloadingAll ? "Starting downloads…" : `Download all (${availableClips.length})`}</Button>}><div className="studio-detail-status"><StatusBadge status={job.status} /><span>{job.caption_style} captions</span><span>{job.job_mode === "captions" ? "Full video" : "Short clips"}</span></div></PageHeader>
             {job.transcription_report && <details className="studio-panel studio-quality-report"><summary>Subtitle processing details</summary><dl className="studio-summary-list"><div><dt>Detected language</dt><dd>{job.detected_language || "Not recorded"}</dd></div><div><dt>Output</dt><dd>{CAPTION_LANGUAGES.find((language) => language.value === job.caption_language)?.label || "Legacy output"}</dd></div><div><dt>Word count</dt><dd>{typeof job.transcription_report.words === "number" ? job.transcription_report.words : "Not recorded"}</dd></div></dl><p className="studio-field-hint">AI transcription may need review for names, noise, or overlapping speech. English translations use estimated phrase timing rather than measured English word timing.</p></details>}
             {actionError && <Notice tone="error">{actionError}</Notice>}
-            <section className="studio-panel studio-project-overview"><dl><div><dt>Caption style</dt><dd>{job.caption_style}</dd></div><div><dt>Requested output</dt><dd>{job.job_mode === "captions" ? "1 full video" : `Up to ${job.max_clips} clips`}</dd></div><div><dt>Created clips</dt><dd>{clips.length}</dd></div><div><dt>Spoken language</dt><dd>{SOURCE_LANGUAGES.find((language) => language.value === job.source_language)?.label || "Auto-detect"}</dd></div><div><dt>Subtitles</dt><dd>{CAPTION_LANGUAGES.find((language) => language.value === job.caption_language)?.label || "Legacy output"}</dd></div><div><dt>Clips charged</dt><dd>{job.quota_clips_charged ?? "—"}</dd></div><div><dt>Source duration</dt><dd>{formatDuration(job.video_duration_seconds)}</dd></div></dl></section>
+            <section className="studio-panel studio-project-overview"><dl><div><dt>Caption style</dt><dd>{job.caption_style}</dd></div><div><dt>Reading pace</dt><dd>{job.caption_pace || "balanced"}</dd></div><div><dt>Requested output</dt><dd>{job.job_mode === "captions" ? "1 full video" : `Up to ${job.max_clips} clips`}</dd></div><div><dt>Created clips</dt><dd>{clips.length}</dd></div><div><dt>Spoken language</dt><dd>{SOURCE_LANGUAGES.find((language) => language.value === job.source_language)?.label || "Auto-detect"}</dd></div><div><dt>Subtitles</dt><dd>{CAPTION_LANGUAGES.find((language) => language.value === job.caption_language)?.label || "Legacy output"}</dd></div><div><dt>Clips charged</dt><dd>{job.quota_clips_charged ?? "—"}</dd></div><div><dt>Source duration</dt><dd>{formatDuration(job.video_duration_seconds)}</dd></div></dl></section>
             {(running || job.status === "done") && <section className="studio-panel"><SectionHeading title={job.status === "done" ? "Your video is ready" : "Processing your video"} description={job.status === "queued" ? "Waiting for a processing slot. This page updates automatically." : job.status === "done" ? "All processing stages are complete." : "You can leave this page. Your progress is saved."} action={<span className="studio-project-progress">{boundedPercent(job.progress)}%</span>} />
                 <ol className="studio-pipeline">{STAGES.map((stage, index) => { const done = job.status === "done" || index < stageIndex; const active = stageIndex === index; return <li key={stage} data-state={done ? "done" : active ? "active" : "pending"} aria-current={active ? "step" : undefined}><span>{done ? <Check size={16} aria-hidden="true" /> : index + 1}</span><strong>{STAGE_LABELS[index]}</strong></li>; })}</ol>
             </section>}
-            {(job.status === "failed" || job.status === "cancelled" || stuck) && <Notice tone={job.status === "failed" ? "error" : "warning"} title={job.status === "failed" ? "Processing needs attention" : job.status === "cancelled" ? "This video was cancelled" : "This video is taking longer than expected"} action={<Button variant="secondary" busy={retrying} disabled={running} onClick={() => void retryJob()}><RefreshCw size={16} aria-hidden="true" />{retrying ? "Retrying…" : "Retry processing"}</Button>}>
+            {(job.status === "failed" || job.status === "cancelled" || stuck) && <Notice tone={job.status === "failed" ? "error" : "warning"} title={job.status === "failed" ? "Processing needs attention" : job.status === "cancelled" ? "This video was cancelled" : "This video is taking longer than expected"} action={<Button variant="secondary" busy={retrying} disabled={!usageReady || running} onClick={() => void retryJob()}><RefreshCw size={16} aria-hidden="true" />{retrying ? "Retrying…" : "Retry processing"}</Button>}>
                 {job.error_message || (stuck ? "No progress update has arrived for 45 minutes. An active job cannot be started twice." : "You can retry using the saved video source.")}
+                {!usageReady && <p className="studio-field-hint">Usage is temporarily unavailable. Refresh your account before retrying.</p>}
                 {!running && job.checkpoint_url && <div className="studio-field"><label htmlFor="retry-mode">Retry mode</label><select id="retry-mode" className="studio-select" value={resumeRetry ? "resume" : "fresh"} onChange={(event) => setResumeRetry(event.target.value === "resume")}><option value="resume">Resume saved progress</option><option value="fresh">Start fresh · transcribe again</option></select><p className="studio-field-hint">Start fresh if the saved transcription was inaccurate. Your language and caption settings are retained.</p></div>}
             </Notice>}
             <section aria-labelledby="clip-library-title"><div className="studio-clips-heading"><div><h2 id="clip-library-title">Your clips <span>{clips.length}</span></h2><p>Preview, download, and copy the caption for each moment.</p></div>{!!clips.length && <div className="studio-clips-tools"><label className="studio-search"><Search size={17} aria-hidden="true" /><span className="studio-sr-only">Search clips</span><input type="search" className="studio-input" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search clips…" /></label><label><span className="studio-sr-only">Sort clips</span><select className="studio-select" value={sort} onChange={(event) => setSort(event.target.value)}><option value="order">Clip order</option><option value="score">Highest AI score</option></select></label></div>}</div>

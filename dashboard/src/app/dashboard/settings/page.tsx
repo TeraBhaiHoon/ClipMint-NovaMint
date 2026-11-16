@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Bell, CreditCard, ExternalLink, LockKeyhole, Mail, ReceiptText, Save, ShieldCheck, UserRound } from "lucide-react";
 import { createClient } from "@/lib/supabase";
+import { createLoadScope, type LoadScope } from "@/lib/load-scope";
 import { CAPTION_STYLES, PLAN_LIMITS, effectivePlanKey, isPlanExpired, type CaptionStyle, type Payment } from "@/lib/types";
 import { captionPreferenceKey, formatDate, readCaptionPreference } from "@/lib/dashboard";
 import { useDashboard } from "../_components/dashboard-provider";
@@ -28,7 +29,7 @@ const INITIAL: Preferences = { notify_discord: true, notify_email: false, notify
 
 export default function SettingsPage() {
     const supabase = useMemo(() => createClient(), []);
-    const { account, profile, loading, error: accountError, refreshProfile } = useDashboard();
+    const { account, profile, loading, usageReady, error: accountError, refreshProfile } = useDashboard();
     const [tab, setTab] = useState<Tab>("profile");
     const [fullName, setFullName] = useState("");
     const [style, setStyle] = useState<CaptionStyle>("hormozi");
@@ -37,14 +38,34 @@ export default function SettingsPage() {
     const [initialized, setInitialized] = useState<string | null>(null);
     const [dirty, setDirty] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [message, setMessage] = useState<{ tone: "error" | "success"; text: string } | null>(null);
+    const [message, setMessage] = useState<{ tone: "error" | "success" | "warning"; text: string } | null>(null);
     const [payments, setPayments] = useState<Payment[]>([]);
     const [paymentLoading, setPaymentLoading] = useState(true);
     const [paymentError, setPaymentError] = useState(false);
     const [paymentRetry, setPaymentRetry] = useState(0);
+    const [paymentAccountId, setPaymentAccountId] = useState<string | null>(null);
     const [resetPending, setResetPending] = useState(false);
     const [resetSent, setResetSent] = useState(false);
     const tabsRef = useRef<HTMLDivElement>(null);
+    const actionsRef = useRef<{ accountId: string; email: string; save: LoadScope; password: LoadScope } | null>(null);
+
+    useEffect(() => {
+        const accountId = account?.id;
+        const email = account?.email;
+        const actions = accountId && email !== undefined ? { accountId, email, save: createLoadScope(), password: createLoadScope() } : null;
+        actionsRef.current = actions;
+        setSaving(false);
+        setResetPending(false);
+        setResetSent(false);
+        setMessage(null);
+        setDirty(false);
+        setInitialized(null);
+        return () => {
+            actions?.save.dispose();
+            actions?.password.dispose();
+            if (actionsRef.current === actions) actionsRef.current = null;
+        };
+    }, [account?.id, account?.email]);
 
     useEffect(() => {
         const readTab = () => {
@@ -57,7 +78,8 @@ export default function SettingsPage() {
     }, []);
 
     useEffect(() => {
-        if (!profile || initialized === profile.id) return;
+        const accountId = account?.id;
+        if (!accountId || !profile || profile.id !== accountId || initialized === profile.id) return;
         const frame = requestAnimationFrame(() => {
             setFullName(profile.full_name || "");
             setStyle(readCaptionPreference(profile.id));
@@ -72,24 +94,28 @@ export default function SettingsPage() {
             setInitialized(profile.id);
         });
         return () => cancelAnimationFrame(frame);
-    }, [initialized, profile]);
+    }, [account?.id, initialized, profile]);
 
     useEffect(() => {
-        if (!account || tab !== "billing") return;
-        let disposed = false;
+        const scope = createLoadScope();
+        const accountId = account?.id;
+        setPayments([]);
+        setPaymentAccountId(null);
+        setPaymentLoading(true);
+        setPaymentError(false);
+        if (!accountId || tab !== "billing") return () => scope.dispose();
         async function load() {
-            setPaymentLoading(true);
-            setPaymentError(false);
             try {
-                const { data, error } = await supabase.from("payments").select("*").eq("user_id", account!.id).order("created_at", { ascending: false }).limit(20);
+                const { data, error } = await scope.run((signal) =>
+                    supabase.from("payments").select("*").eq("user_id", accountId).order("created_at", { ascending: false }).limit(20).abortSignal(signal));
                 if (error) throw error;
-                if (!disposed) setPayments((data || []) as Payment[]);
-            } catch { if (!disposed) setPaymentError(true); }
-            finally { if (!disposed) setPaymentLoading(false); }
+                if (scope.active) { setPayments((data || []) as Payment[]); setPaymentAccountId(accountId!); }
+            } catch { if (scope.active) setPaymentError(true); }
+            finally { if (scope.active) setPaymentLoading(false); }
         }
         void load();
-        return () => { disposed = true; };
-    }, [account, paymentRetry, supabase, tab]);
+        return () => scope.dispose();
+    }, [account?.id, paymentRetry, supabase, tab]);
 
     function changeTab(next: Tab) {
         setTab(next);
@@ -101,35 +127,47 @@ export default function SettingsPage() {
 
     async function save(event: React.FormEvent) {
         event.preventDefault();
-        if (!profile || saving) return;
+        const actions = actionsRef.current;
+        if (!account || !profile || profile.id !== account.id || initialized !== profile.id || !actions || actions.accountId !== account.id || actions.save.busy || saving) return;
+        const current = () => actionsRef.current === actions && actions.save.active;
         setSaving(true);
         setMessage(null);
         try {
-            if (preferences.notify_discord && webhook.trim() && !/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(webhook.trim())) throw new Error("Enter a valid Discord webhook URL before saving.");
-            const { error } = await supabase.from("profiles").update({
+            if (preferences.notify_discord && webhook.trim() && !/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//.test(webhook.trim())) {
+                setMessage({ tone: "error", text: "Enter a valid Discord webhook URL before saving." });
+                return;
+            }
+            const { error } = await actions.save.run((signal) => supabase.from("profiles").update({
                 full_name: fullName.trim(), ...preferences, discord_webhook_url: webhook.trim() || null,
-            }).eq("id", profile.id);
-            if (error) throw new Error("Your settings couldn’t be saved. Please try again.");
+            }).eq("id", actions.accountId).abortSignal(signal));
+            if (!current()) return;
+            if (error) throw new Error("Save response unavailable");
             let localSaved = true;
-            try { localStorage.setItem(captionPreferenceKey(profile.id), style); } catch { localSaved = false; }
+            try { localStorage.setItem(captionPreferenceKey(actions.accountId), style); } catch { localSaved = false; }
             setDirty(false);
             setMessage({ tone: localSaved ? "success" : "error", text: localSaved ? "Settings saved. Your caption preference applies on this browser." : "Account settings saved, but this browser blocked saving your caption preference." });
-            await refreshProfile();
-        } catch (cause) { setMessage({ tone: "error", text: cause instanceof Error ? cause.message : "Couldn’t save settings. Please try again." }); }
-        finally { setSaving(false); }
+            // Refresh is a separate bounded read, never a replay of this update.
+            void refreshProfile();
+        } catch {
+            if (current()) setMessage({ tone: "warning", text: "The save result couldn’t be confirmed. Your settings may have been saved. Refresh your account before saving again." });
+        } finally { if (current()) setSaving(false); }
     }
 
     async function resetPassword() {
-        if (!account?.email || resetPending || resetSent) return;
+        const actions = actionsRef.current;
+        if (!account?.email || !actions || actions.accountId !== account.id || actions.email !== account.email || actions.password.busy || resetPending || resetSent) return;
+        const current = () => actionsRef.current === actions && actions.password.active;
         setResetPending(true);
         setMessage(null);
         try {
-            const { error } = await supabase.auth.resetPasswordForEmail(account.email, { redirectTo: `${window.location.origin}/auth/callback` });
+            const { error } = await actions.password.run(() => supabase.auth.resetPasswordForEmail(actions.email, { redirectTo: `${window.location.origin}/auth/callback` }));
+            if (!current()) return;
             if (error) throw error;
             setResetSent(true);
             setMessage({ tone: "success", text: "Password reset email sent. Check your inbox to continue." });
-        } catch { setMessage({ tone: "error", text: "The reset email couldn’t be sent. Please try again." }); }
-        finally { setResetPending(false); }
+        } catch {
+            if (current()) setMessage({ tone: "warning", text: "The reset email result couldn’t be confirmed. Check your inbox before requesting another email." });
+        } finally { if (current()) setResetPending(false); }
     }
 
     const planKey = effectivePlanKey(profile);
@@ -137,6 +175,7 @@ export default function SettingsPage() {
     const expired = isPlanExpired(profile);
     const editable = tab === "profile" || tab === "notifications";
     const initial = (profile?.full_name || account?.email || "You").charAt(0).toUpperCase();
+    const currentPayments = paymentAccountId === account?.id ? payments : [];
 
     return <div className="studio-page">
         <PageHeader eyebrow="Make it yours" title="Settings" description="Your account, notification preferences, and plan—without the clutter." />
@@ -151,7 +190,7 @@ export default function SettingsPage() {
             }}>{TABS.map((item) => <button key={item.key} id={`settings-tab-${item.key}`} type="button" role="tab" aria-selected={tab === item.key} aria-controls={`settings-panel-${item.key}`} tabIndex={tab === item.key ? 0 : -1} onClick={() => changeTab(item.key)}><item.icon size={18} aria-hidden="true" />{item.label}</button>)}</div>
             <div className="studio-settings-content" id={`settings-panel-${tab}`} role="tabpanel" aria-labelledby={`settings-tab-${tab}`}>
                 {message && <Notice tone={message.tone}>{message.text}</Notice>}
-                {loading || (profile && initialized !== profile.id) ? <div className="studio-panel"><LoadingState label="Loading account settings" /></div> : !profile || accountError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Try again</Button>}>Account settings are temporarily unavailable.</Notice> : <>
+                {loading || (account && profile?.id === account.id && initialized !== profile.id) ? <div className="studio-panel"><LoadingState label="Loading account settings" /></div> : !account || !profile || profile.id !== account.id || accountError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Try again</Button>}>Account settings are temporarily unavailable.</Notice> : <>
                     {editable && <form onSubmit={save} className="studio-stack">
                         <fieldset disabled={saving} className="studio-settings-fields">
                             {tab === "profile" ? <>
@@ -173,13 +212,15 @@ export default function SettingsPage() {
                         <section className="studio-panel"><SectionHeading title="Your current plan" description="Usage resets in 30-day windows. Saved videos and clips remain in your library." icon={CreditCard} action={<Link href="/pricing" className="studio-button studio-button--secondary">{planKey === "free" ? "View plans" : "Change plan"}<ArrowUpRight size={16} aria-hidden="true" /></Link>} />
                             <div className="studio-billing-plan"><strong>{plan.label}</strong><span className={`studio-badge studio-badge--${planKey === "free" ? "neutral" : "success"}`}>{planKey === "free" ? "Free account" : "Active pass"}</span></div>
                             {expired && <Notice tone="warning">Your paid pass expired on {formatDate(profile.current_period_end)}. Free limits now apply; your existing clips are still available.</Notice>}
-                            <div className="studio-grid-two studio-billing-usage"><UsageMeter label="Clips this period" used={profile.clips_used || 0} limit={plan.clips} /><UsageMeter label="Videos this period" used={profile.videos_used || 0} limit={plan.videos} /></div>
-                            {!!profile.clips_reserved && <p className="studio-field-hint">{profile.clips_reserved} clips are reserved for active processing. Only successfully delivered clips become used quota; unused reservations are released.</p>}
+                            {usageReady ? <>
+                                <div className="studio-grid-two studio-billing-usage"><UsageMeter label="Clips this period" used={profile.clips_used || 0} limit={plan.clips} /><UsageMeter label="Videos this period" used={profile.videos_used || 0} limit={plan.videos} /></div>
+                                {!!profile.clips_reserved && <p className="studio-field-hint">{profile.clips_reserved} clips are reserved for active processing. Only successfully delivered clips become used quota; unused reservations are released.</p>}
+                            </> : <Notice tone="warning" action={<Button variant="secondary" onClick={() => void refreshProfile()}>Refresh usage</Button>}>Usage temporarily unavailable. Preferences and payment history remain available; creating videos is disabled until usage is verified.</Notice>}
                             <dl className="studio-billing-details"><div><dt>Billing</dt><dd>{planKey === "free" ? "No payment required" : "One-time payment · no auto-renewal"}</dd></div>{planKey !== "free" && <><div><dt>Access period</dt><dd>{profile.plan_period === "annual" ? "Annual" : "30 days"}</dd></div><div><dt>Active until</dt><dd>{formatDate(profile.current_period_end)}</dd></div></>}</dl>
                         </section>
                         {planKey === "free" && <section className="studio-plan-upgrade"><div><h2>More room to create</h2><p>Creator includes 150 clips and 30 videos per period, with all caption styles.</p></div><Link href="/pricing" className="studio-button studio-button--primary">Explore Creator<ArrowUpRight size={16} aria-hidden="true" /></Link></section>}
                         <section className="studio-panel"><SectionHeading title="Payment history" description="Your 20 most recent payment records." icon={ReceiptText} />
-                            {paymentLoading ? <LoadingState label="Loading payment history" rows={2} /> : paymentError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => setPaymentRetry((value) => value + 1)}>Try again</Button>}>Payment history couldn’t be loaded.</Notice> : !payments.length ? <EmptyState icon={ReceiptText} title="No payments yet" description="When you purchase a plan, the record will appear here." /> : <ul className="studio-payment-list">{payments.map((payment) => <li key={payment.id}><span><strong>{PLAN_LIMITS[payment.plan]?.label || payment.plan} plan</strong><small>{formatDate(payment.created_at)} · {payment.plan_period === "annual" ? "Annual" : "One-time"}</small></span><span className={`studio-badge studio-badge--${payment.status === "captured" ? "success" : payment.status === "failed" ? "error" : "neutral"}`}>{payment.status === "captured" ? "Paid" : payment.status}</span><strong>{new Intl.NumberFormat("en-IN", { style: "currency", currency: payment.currency || "INR", maximumFractionDigits: 0 }).format(payment.amount / 100)}</strong></li>)}</ul>}
+                            {paymentLoading ? <LoadingState label="Loading payment history" rows={2} /> : paymentError ? <Notice tone="error" action={<Button variant="secondary" onClick={() => setPaymentRetry((value) => value + 1)}>Try again</Button>}>Payment history couldn’t be loaded.</Notice> : !currentPayments.length ? <EmptyState icon={ReceiptText} title="No payments yet" description="When you purchase a plan, the record will appear here." /> : <ul className="studio-payment-list">{currentPayments.map((payment) => <li key={payment.id}><span><strong>{PLAN_LIMITS[payment.plan]?.label || payment.plan} plan</strong><small>{formatDate(payment.created_at)} · {payment.plan_period === "annual" ? "Annual" : "One-time"}</small></span><span className={`studio-badge studio-badge--${payment.status === "captured" ? "success" : payment.status === "failed" ? "error" : "neutral"}`}>{payment.status === "captured" ? "Paid" : payment.status}</span><strong>{new Intl.NumberFormat("en-IN", { style: "currency", currency: payment.currency || "INR", maximumFractionDigits: 0 }).format(payment.amount / 100)}</strong></li>)}</ul>}
                         </section>
                     </div>}
                     {tab === "security" && <div className="studio-stack">

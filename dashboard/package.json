@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:dashboard": "node --test tests/dashboard.test.mjs",
+    "test:loading": "node --test tests/load-scope.test.mjs tests/scoped-dashboard-loading.test.mjs tests/job-detail-loading.test.mjs tests/new-video-usage.test.mjs",
     "test:homepage": "node --test tests/homepage.test.mjs",
     "test:quota": "node --test tests/quota-routes.test.mjs tests/gateway-quota.test.mjs"
   },

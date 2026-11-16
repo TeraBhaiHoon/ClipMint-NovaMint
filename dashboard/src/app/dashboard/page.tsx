@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowDownUp, ArrowRight, CheckCircle2, Clapperboard, Clock3, Film, FolderOpen, Plus, RefreshCw, Search, X } from "lucide-react";
 import { createClient } from "@/lib/supabase";
+import { createLoadScope } from "@/lib/load-scope";
 import type { Job, JobStatus } from "@/lib/types";
 import { boundedPercent, formatDate, isJobRunning, sourceLabel, videoTitle } from "@/lib/dashboard";
 import { useDashboard } from "./_components/dashboard-provider";
@@ -26,52 +27,68 @@ export default function JobsPage() {
     const [search, setSearch] = useState("");
     const [filter, setFilter] = useState<Filter>("all");
     const [sort, setSort] = useState("newest");
-    const jobsRef = useRef<Job[]>([]);
-    const inFlight = useRef(false);
-    const mounted = useRef(false);
-
+    const [dataAccountId, setDataAccountId] = useState<string | null>(null);
+    const reloadRef = useRef<{ accountId: string; load: () => Promise<void> } | null>(null);
     const loadJobs = useCallback(async () => {
-        if (!account || inFlight.current) return;
-        inFlight.current = true;
-        try {
-            const { data, error: queryError } = await supabase.from("jobs").select("*").eq("user_id", account.id).order("created_at", { ascending: false });
-            if (queryError) throw queryError;
-            if (!mounted.current) return;
-            const next = (data || []) as Job[];
-            jobsRef.current = next;
-            setJobs(next);
-            setError(null);
-        } catch {
-            if (mounted.current) setError("Your videos couldn’t be loaded. Your work is safe—please try again.");
-        } finally {
-            inFlight.current = false;
-            if (mounted.current) { setLoading(false); setRefreshing(false); }
-        }
-    }, [account, supabase]);
+        const reload = reloadRef.current;
+        if (reload && reload.accountId === account?.id) await reload.load();
+    }, [account?.id]);
 
     useEffect(() => {
-        mounted.current = true;
-        if (!account) return () => { mounted.current = false; };
-        void loadJobs();
+        const scope = createLoadScope();
+        const accountId = account?.id;
+        let currentJobs: Job[] = [];
+        setJobs([]);
+        setDataAccountId(null);
+        setError(null);
+        setRefreshing(false);
+        setLoading(!!accountId);
+        if (!accountId) return () => scope.dispose();
+        async function load() {
+            if (!scope.active || scope.busy) return;
+            try {
+                const { data, error: queryError } = await scope.run((signal) =>
+                    supabase.from("jobs").select("*").eq("user_id", accountId).order("created_at", { ascending: false }).abortSignal(signal));
+                if (queryError) throw queryError;
+                if (!scope.active) return;
+                currentJobs = (data || []) as Job[];
+                setJobs(currentJobs);
+                setDataAccountId(accountId!);
+                setError(null);
+            } catch {
+                if (scope.active) setError("Your videos couldn’t be loaded. Your work is safe—please try again.");
+            } finally {
+                if (scope.active) { setLoading(false); setRefreshing(false); }
+            }
+        }
+        const reload = { accountId, load };
+        reloadRef.current = reload;
+        void load();
         const timer = setInterval(() => {
-            if (document.visibilityState === "visible" && jobsRef.current.some((job) => isJobRunning(job.status))) void loadJobs();
+            if (document.visibilityState === "visible" && currentJobs.some((job) => isJobRunning(job.status))) void load();
         }, 8000);
-        const channel = supabase.channel(`workspace-jobs-${account.id}`).on("postgres_changes", {
-            event: "*", schema: "public", table: "jobs", filter: `user_id=eq.${account.id}`,
-        }, () => { void loadJobs(); void refreshProfile(); }).subscribe();
-        return () => { mounted.current = false; clearInterval(timer); void supabase.removeChannel(channel); };
-    }, [account, loadJobs, refreshProfile, supabase]);
+        const channel = supabase.channel(`workspace-jobs-${accountId}`).on("postgres_changes", {
+            event: "*", schema: "public", table: "jobs", filter: `user_id=eq.${accountId}`,
+        }, () => { if (scope.active) { void load(); void refreshProfile(); } }).subscribe();
+        return () => {
+            scope.dispose();
+            clearInterval(timer);
+            void supabase.removeChannel(channel);
+            if (reloadRef.current === reload) reloadRef.current = null;
+        };
+    }, [account?.id, refreshProfile, supabase]);
+    const accountJobs = useMemo(() => dataAccountId === account?.id ? jobs : [], [account?.id, dataAccountId, jobs]);
 
-    const visibleJobs = useMemo(() => jobs.filter((job) => {
+    const visibleJobs = useMemo(() => accountJobs.filter((job) => {
         if (filter === "processing" ? !isJobRunning(job.status) : filter !== "all" && job.status !== filter) return false;
         const query = search.trim().toLowerCase();
         return !query || [videoTitle(job), job.video_url, job.caption_style].some((value) => value?.toLowerCase().includes(query));
-    }).sort((a, b) => sort === "oldest" ? Date.parse(a.created_at) - Date.parse(b.created_at) : sort === "clips" ? b.clips_count - a.clips_count : Date.parse(b.created_at) - Date.parse(a.created_at)), [jobs, filter, search, sort]);
+    }).sort((a, b) => sort === "oldest" ? Date.parse(a.created_at) - Date.parse(b.created_at) : sort === "clips" ? b.clips_count - a.clips_count : Date.parse(b.created_at) - Date.parse(a.created_at)), [accountJobs, filter, search, sort]);
 
     const pending = accountLoading || (loading && !!account);
-    const running = jobs.filter((job) => isJobRunning(job.status)).length;
-    const completed = jobs.filter((job) => job.status === "done").length;
-    const clips = jobs.reduce((count, job) => count + (job.clips_count || 0), 0);
+    const running = accountJobs.filter((job) => isJobRunning(job.status)).length;
+    const completed = accountJobs.filter((job) => job.status === "done").length;
+    const clips = accountJobs.reduce((count, job) => count + (job.clips_count || 0), 0);
     const name = profile?.full_name?.trim().split(/\s+/)[0];
     const clearFilters = () => { setSearch(""); setFilter("all"); };
 
@@ -79,13 +96,13 @@ export default function JobsPage() {
         <PageHeader eyebrow={name ? `Your workspace, ${name}` : "Your workspace"} title="My videos" description="From one long video to your next great clip. All your projects, in one place."
             actions={<Link href="/dashboard/new" className="studio-button studio-button--primary"><Plus size={18} aria-hidden="true" />New video</Link>} />
         <Metrics loading={pending} items={[
-            { label: "Total videos", value: jobs.length, icon: Film },
+            { label: "Total videos", value: accountJobs.length, icon: Film },
             { label: "In progress", value: running, icon: Clock3 },
             { label: "Completed", value: completed, icon: CheckCircle2 },
             { label: "Clips created", value: clips, icon: Clapperboard },
         ]} />
         <section className="studio-library" aria-labelledby="library-title">
-            <div className="studio-library-heading"><div><h2 id="library-title">Video library</h2><span>{pending ? "Loading your projects…" : `${jobs.length} project${jobs.length === 1 ? "" : "s"}`}</span></div>
+            <div className="studio-library-heading"><div><h2 id="library-title">Video library</h2><span>{pending ? "Loading your projects…" : `${accountJobs.length} project${accountJobs.length === 1 ? "" : "s"}`}</span></div>
                 <Button variant="ghost" className="studio-icon-button" aria-label="Refresh videos" title="Refresh videos" busy={refreshing} onClick={() => { setRefreshing(true); void loadJobs(); }} disabled={pending || !account}><RefreshCw size={17} aria-hidden="true" /></Button>
             </div>
             <div className="studio-library-toolbar">
@@ -109,7 +126,7 @@ export default function JobsPage() {
                         <ArrowRight size={17} className="studio-video-arrow" aria-hidden="true" />
                     </Link>
                 </li>)}</ul>
-                {visibleJobs.length > 0 && <div className="studio-library-footer">Showing {visibleJobs.length} of {jobs.length} videos<span>Updates automatically while processing</span></div>}
+                {visibleJobs.length > 0 && <div className="studio-library-footer">Showing {visibleJobs.length} of {accountJobs.length} videos<span>Updates automatically while processing</span></div>}
             </>}
         </section>
     </div>;
